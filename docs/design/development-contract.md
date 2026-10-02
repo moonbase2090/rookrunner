@@ -61,6 +61,9 @@ capability error. GitHub-hosted job execution time is 6 hours. Self-hosted
 job execution time is 5 days. A job matrix stays unsupported; GitHub's matrix
 limit is 256 jobs per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
+`run.logs` pages the executed steps' stdout and stderr with the same 1–65536
+byte pages as development fixtures. `end_of_stream` is true only after the
+run is terminal and those bytes are consumed.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,

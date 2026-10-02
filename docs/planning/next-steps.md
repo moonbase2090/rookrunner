@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-6 are
+roadmap step 1 and the first executable subset. NS-1 through NS-7 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -161,7 +161,7 @@ records are stored on the run. A workflow file larger than 500 KB is
 rejected before a run exists. The job time bound recorded on the plan is
 `timeout-minutes` (default 360 minutes). Stopping the container at that
 bound is NS-8. Stdout and stderr on those records are capped
-at 65536 characters, and `run.logs` does not page them yet. Closing the
+at 65536 characters. `run.logs` pages the captured step output. Closing the
 client does not stop the worker or the container. A cancel that commits
 while the job is still queued does not start a container. Stopping a running
 container early, and removing a container left by a killed worker, are later
@@ -179,6 +179,15 @@ Acceptance criteria:
   with their digests, image digest, terminal state, and exit code.
 
 **NS-7. Page step logs through `run.logs`.**
+
+Status: implemented.
+
+`run.logs` returns the captured output of the executed steps. Each step
+contributes its stdout bytes, then its stderr bytes, in order. Pages stay
+inside the existing protocol limit of 1–65536 bytes. `end_of_stream` is true
+only after the run is terminal and those bytes are consumed. An empty page
+while the run is active is not the end. This slice adds no separate log-size
+cap.
 
 Acceptance criteria:
 

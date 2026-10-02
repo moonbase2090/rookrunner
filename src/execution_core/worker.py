@@ -126,6 +126,22 @@ def _public_steps(steps):
     return stored
 
 
+def _workflow_log(steps):
+    """UTF-8 bytes of each executed step's stdout, then its stderr.
+
+    `run.logs` pages this blob with the existing protocol page size. The
+    captured output is not cut to a separate log-size cap.
+    """
+
+    chunks = []
+    for step in steps:
+        for key in ("stdout", "stderr"):
+            text = step.get(key) or ""
+            if isinstance(text, str) and text:
+                chunks.append(text.encode("utf-8"))
+    return b"".join(chunks)
+
+
 def _step_failure_message(outcome, image_ok):
     if not image_ok:
         return "image digest does not match the accepted pin"
@@ -441,6 +457,10 @@ class Worker:
                     steps=steps,
                 )
             current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
+            self.db.execute(
+                "UPDATE runs SET log=? WHERE id=?",
+                (_workflow_log(outcome["steps"]), run_id),
+            )
             self.save(current)
 
     def _remove_workspace(self, workspace):

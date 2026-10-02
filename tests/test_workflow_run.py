@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 import shutil
@@ -52,6 +53,18 @@ jobs:
       - run: sleep 1
       - id: done
         run: echo finished
+"""
+LOGS = """\
+name: demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sleep 2
+      - run: |
+          echo out-two
+          echo err-two >&2
 """
 
 
@@ -179,6 +192,27 @@ class WorkflowRunTests(unittest.TestCase):
             "fixture",
         )
 
+    def log_bytes(self, run_id, limit):
+        data = bytearray()
+        cursor = None
+        ended = False
+        for _ in range(10000):
+            params = {"run_id": run_id, "limit": limit}
+            if cursor is not None:
+                params["cursor"] = cursor
+            page = self.rpc("run.logs", params)
+            chunk = base64.b64decode(page["data_base64"])
+            self.assertLessEqual(len(chunk), limit)
+            if not page["end_of_stream"]:
+                self.assertEqual(len(chunk), limit)
+            data.extend(chunk)
+            cursor = page["next_cursor"]
+            if page["end_of_stream"]:
+                ended = True
+                break
+        self.assertTrue(ended)
+        return bytes(data)
+
     def params(self, **overrides):
         body = {
             "version": 1,
@@ -237,6 +271,7 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertEqual([step["id"] for step in done["steps"]], ["one", "fail"])
         self.assertEqual(done["steps"][1]["name"], "fail step")
         self.assertEqual(done["steps"][1]["exit_code"], 3)
+        self.assertEqual(self.log_bytes(done["run_id"], 3), b"before\n")
 
     def test_setup_failure_has_null_exit_and_structured_error(self):
         self.write_workflow(SUCCESS)
@@ -247,6 +282,9 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertEqual(done["error"]["kind"], "SETUP_FAILED")
         self.assertIsNotNone(done["attempt_id"])
         self.assertNotIn("steps", done)
+        page = self.rpc("run.logs", {"run_id": done["run_id"]})
+        self.assertEqual(base64.b64decode(page["data_base64"]), b"")
+        self.assertTrue(page["end_of_stream"])
         self.assertEqual(done["input"]["image_digest"], image)
         self.assertEqual(done["input"]["digest"], submitted["input"]["digest"])
 
@@ -269,3 +307,29 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertEqual(done["exit_code"], 0)
         self.assertEqual(done["steps"][1]["stdout"], "finished\n")
         self.assertEqual(done["input"]["image_digest"], self.image)
+
+    def test_logs_page_stdout_and_stderr_without_the_whole_output(self):
+        self.write_workflow(LOGS)
+        submitted = self.rpc("run.submit", self.params(submission_key="logs-1"))
+        deadline = time.monotonic() + 30
+        saw_active = False
+        while time.monotonic() < deadline:
+            record = self.rpc("run.get", {"run_id": submitted["run_id"]})
+            if record["state"] == "running":
+                active = self.rpc("run.logs", {"run_id": submitted["run_id"], "limit": 1})
+                still = self.rpc("run.get", {"run_id": submitted["run_id"]})
+                if still["state"] == "running":
+                    self.assertFalse(active["end_of_stream"])
+                    self.assertEqual(base64.b64decode(active["data_base64"]), b"")
+                    saw_active = True
+                    break
+            elif record["state"] in {"succeeded", "failed"}:
+                break
+            time.sleep(0.05)
+        self.assertTrue(saw_active)
+        done = self.await_state(submitted["run_id"], {"succeeded"})
+        expected = b"out-two\nerr-two\n"
+        self.assertEqual(done["steps"][1]["stdout"], "out-two\n")
+        self.assertEqual(done["steps"][1]["stderr"], "err-two\n")
+        for limit in (1, 4, 65536):
+            self.assertEqual(self.log_bytes(done["run_id"], limit), expected)
