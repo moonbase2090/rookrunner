@@ -1,11 +1,12 @@
 # M2 next steps
 
-Status: proposed build order, 2026-10-02. Derived from the
+Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. This file is not Waypoint
-status, not an acceptance of open PRD questions, and not a claim that any
-item below is implemented.
+roadmap step 1 and the first executable subset. NS-1, NS-2, and NS-3 are
+implemented. Later items are not. Continuous integration runs ruff and the
+unit test suite on push and pull request. This file is not Waypoint status
+and not an acceptance of open PRD questions.
 
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. The PRD leaves
@@ -21,7 +22,9 @@ environments. No item publishes a GitHub Actions compatibility claim.
 
 **NS-1. Parse a workflow into a versioned plan, and do not run it.**
 
-This is the slice to build first. It is roadmap step 1. It needs no Docker,
+Status: implemented.
+
+This was the first slice. It is roadmap step 1. It needs no Docker,
 no protocol change, and no run record.
 
 The PR adds one maintained YAML parser after its license and source are
@@ -52,6 +55,8 @@ Acceptance criteria:
 
 **NS-2. Verify a snapshot before anything reads it as an attempt.**
 
+Status: implemented.
+
 Acceptance criteria:
 
 - Verification recomputes each entry digest and the manifest digest. A
@@ -62,6 +67,8 @@ Acceptance criteria:
 - Tests mutate a disposable snapshot and assert rejection.
 
 **NS-3. Materialize an attempt workspace from a verified snapshot.**
+
+Status: implemented.
 
 Acceptance criteria:
 
