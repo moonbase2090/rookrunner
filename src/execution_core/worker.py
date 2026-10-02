@@ -461,56 +461,75 @@ class Worker:
         with self.guard:
             return self.get(run_id)["state"] in TERMINAL
 
+    def _caller_cancel_pending(self, run_id):
+        lease = self.live.get(run_id)
+        return lease is not None and lease.cancelled()
+
     def _finish_setup_failure(self, run_id, message):
-        with self.guard, self.db:
-            current = self.get(run_id)
-            if current["state"] in TERMINAL:
+        while True:
+            with self.guard, self.db:
+                current = self.get(run_id)
+                if current["state"] in TERMINAL:
+                    return
+                if not self._caller_cancel_pending(run_id):
+                    current.update(
+                        state="failed",
+                        exit_code=None,
+                        finished_at=now(),
+                        error={"kind": "SETUP_FAILED", "message": message[:512]},
+                        cleanup="confirmed_no_external_resources",
+                    )
+                    self.save(current)
+                    return
+            # The cancel commit takes the lock after the stop. Wait without
+            # holding it so that commit can land before another job starts.
+            if self.stop.wait(0.01):
                 return
+
+    def _finish_workflow(self, run_id, outcome):
+        while True:
+            with self.guard, self.db:
+                current = self.get(run_id)
+                if current["state"] in TERMINAL:
+                    return
+                if not self._caller_cancel_pending(run_id):
+                    self._save_workflow_outcome(run_id, current, outcome)
+                    return
+            if self.stop.wait(0.01):
+                return
+
+    def _save_workflow_outcome(self, run_id, current, outcome):
+        steps = _public_steps(outcome["steps"])
+        exit_code = outcome["exit_code"]
+        image_ok = outcome["image_digest"] == current["input"]["image_digest"]
+        if outcome["status"] == "cancelled" and image_ok:
+            current.update(
+                state="cancelled",
+                exit_code=None,
+                error=None,
+                cancel_requested=False,
+                steps=steps,
+            )
+        elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
+            current.update(state="succeeded", exit_code=0, error=None, steps=steps)
+        elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
+            current.update(state="failed", exit_code=exit_code, error=None, steps=steps)
+        else:
             current.update(
                 state="failed",
                 exit_code=None,
-                finished_at=now(),
-                error={"kind": "SETUP_FAILED", "message": message[:512]},
-                cleanup="confirmed_no_external_resources",
+                error={
+                    "kind": "SETUP_FAILED" if not image_ok else "STEP_FAILED",
+                    "message": _step_failure_message(outcome, image_ok)[:512],
+                },
+                steps=steps,
             )
-            self.save(current)
-
-    def _finish_workflow(self, run_id, outcome):
-        with self.guard, self.db:
-            current = self.get(run_id)
-            if current["state"] in TERMINAL:
-                return
-            steps = _public_steps(outcome["steps"])
-            exit_code = outcome["exit_code"]
-            image_ok = outcome["image_digest"] == current["input"]["image_digest"]
-            if outcome["status"] == "cancelled" and image_ok:
-                current.update(
-                    state="cancelled",
-                    exit_code=None,
-                    error=None,
-                    cancel_requested=False,
-                    steps=steps,
-                )
-            elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
-                current.update(state="succeeded", exit_code=0, error=None, steps=steps)
-            elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
-                current.update(state="failed", exit_code=exit_code, error=None, steps=steps)
-            else:
-                current.update(
-                    state="failed",
-                    exit_code=None,
-                    error={
-                        "kind": "SETUP_FAILED" if not image_ok else "STEP_FAILED",
-                        "message": _step_failure_message(outcome, image_ok)[:512],
-                    },
-                    steps=steps,
-                )
-            current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
-            self.db.execute(
-                "UPDATE runs SET log=? WHERE id=?",
-                (_workflow_log(outcome["steps"]), run_id),
-            )
-            self.save(current)
+        current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
+        self.db.execute(
+            "UPDATE runs SET log=? WHERE id=?",
+            (_workflow_log(outcome["steps"]), run_id),
+        )
+        self.save(current)
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
@@ -524,21 +543,27 @@ class Worker:
     def _cancel_running_workflow(self, record):
         """Stop the owned container, then commit cancelled only if it is gone.
 
-        The worker lock is held across the stop, so completion cannot commit
-        first. The create call already times out at 60 seconds; waiting to
-        learn the container name uses that same bound. It is not a new limit.
-        The stop itself uses the grace in `_stop_container`.
+        The worker lock covers the commit, not the stop. The commit reads the
+        record again under that lock and leaves a terminal state that has
+        already been committed. A finish that arrives after caller cancel is
+        marked does not replace the still-running record. Waiting for the
+        container name uses the existing 60 second docker create timeout,
+        not a new limit. The stop uses the grace in `_stop_container`.
         """
 
-        lease = self.live.get(record["run_id"])
-        if lease is None:
-            return self._commit_lost(record, None)
-        phase, _name, _docker = lease.request_cancel()
-        if phase == "idle":
-            return self._commit_cancelled(record)
+        with self.guard:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                return current
+            lease = self.live.get(current["run_id"])
+            if lease is None:
+                return self._commit_lost(current, None)
+            phase, _name, _docker = lease.request_cancel()
+            if phase == "idle":
+                return self._commit_cancelled(current)
         if phase == "creating":
             lease.wait_until_published(60)
-        return self._stop_and_commit(record, lease)
+        return self._stop_and_commit(current, lease)
 
     def _stop_and_commit(self, record, lease):
         if not lease.removed():
@@ -549,44 +574,44 @@ class Worker:
         return self._commit_lost(record, name)
 
     def _commit_cancelled(self, record):
-        current = self.get(record["run_id"])
-        if current["state"] in TERMINAL:
+        with self.guard, self.db:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                self.live.pop(current["run_id"], None)
+                return current
+            current.update(
+                state="cancelled",
+                cancel_requested=True,
+                exit_code=None,
+                error=None,
+                finished_at=now(),
+                cleanup="confirmed_no_external_resources",
+            )
+            self.save(current)
             self.live.pop(current["run_id"], None)
             return current
-        current.update(
-            state="cancelled",
-            cancel_requested=True,
-            exit_code=None,
-            error=None,
-            finished_at=now(),
-            cleanup="confirmed_no_external_resources",
-        )
-        with self.db:
-            self.save(current)
-        self.live.pop(current["run_id"], None)
-        return current
 
     def _commit_lost(self, record, container_name):
-        current = self.get(record["run_id"])
-        if current["state"] in TERMINAL:
-            self.live.pop(current["run_id"], None)
-            return current
-        current.update(
-            state="lost",
-            cancel_requested=True,
-            exit_code=None,
-            finished_at=now(),
-            error={
-                "kind": "WORKER_INTERRUPTED",
-                "message": "owned container cleanup was not confirmed",
-            },
-            cleanup="unresolved",
-        )
-        with self.db:
+        with self.guard, self.db:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                self.live.pop(current["run_id"], None)
+                return current
+            current.update(
+                state="lost",
+                cancel_requested=True,
+                exit_code=None,
+                finished_at=now(),
+                error={
+                    "kind": "WORKER_INTERRUPTED",
+                    "message": "owned container cleanup was not confirmed",
+                },
+                cleanup="unresolved",
+            )
             self.save(current)
-        self.live.pop(current["run_id"], None)
-        self.unresolved[current.get("attempt_id") or current["run_id"]] = container_name
-        return current
+            self.live.pop(current["run_id"], None)
+            self.unresolved[current.get("attempt_id") or current["run_id"]] = container_name
+            return current
 
     def submit_workflow(self, p):
         fields(p, ("version", "submission_key", "workflow", "job_id", "event", "image"))
@@ -834,19 +859,12 @@ class Worker:
         if method == "run.cancel":
             fields(p, ("version", "run_id"))
             self.version(p)
-            record = self.get(p["run_id"])
-            if record["state"] in TERMINAL:
-                return record
-            if record["state"] == "queued" or record["input"]["kind"] != "workflow_job":
-                record.update(
-                    state="cancelled",
-                    cancel_requested=True,
-                    finished_at=now(),
-                    cleanup="confirmed_no_external_resources",
-                )
-                with self.db:
-                    self.save(record)
-                return record
+            with self.guard:
+                record = self.get(p["run_id"])
+                if record["state"] in TERMINAL:
+                    return record
+                if record["state"] == "queued" or record["input"]["kind"] != "workflow_job":
+                    return self._commit_cancelled(record)
             return self._cancel_running_workflow(record)
         if method == "run.list":
             fields(p, (), ("cursor", "limit", "state"))
@@ -921,8 +939,15 @@ class Worker:
                     "INVALID_REQUEST", "expected bounded JSON-RPC request with string or integer id"
                 )
             request_id = request["id"]
-            with self.guard:
-                result = self.dispatch(request["method"], request.get("params", {}))
+            method = request["method"]
+            params = request.get("params", {})
+            # run.cancel stops a container outside this lock. Its commit takes
+            # the lock again and keeps a terminal result that landed mid-stop.
+            if method == "run.cancel":
+                result = self.dispatch(method, params)
+            else:
+                with self.guard:
+                    result = self.dispatch(method, params)
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
         except Fault as error:
             return error_response(request_id, error)

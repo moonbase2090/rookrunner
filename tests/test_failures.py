@@ -6,10 +6,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
 from execution_core.cli import call
+from execution_core.protocol import canonical
 from execution_core.worker import Worker, conflicts_with_unresolved
 from schema_support import validate_response
 
@@ -28,6 +30,117 @@ class UnresolvedAttemptTests(unittest.TestCase):
 
 
 class FailureTests(unittest.TestCase):
+    def test_cancel_commit_keeps_a_completion_that_holds_the_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state")
+            worker.start()
+            try:
+                self._assert_commit_keeps_completion(worker, worker._commit_cancelled)
+                self._assert_commit_keeps_completion(worker, worker._commit_lost)
+                plain = self._insert_running(worker, "plain")
+                cancelled = worker._commit_cancelled(plain)
+                self.assertEqual(cancelled["state"], "cancelled")
+                self.assertTrue(cancelled["cancel_requested"])
+                self.assertEqual(cancelled["cleanup"], "confirmed_no_external_resources")
+                self.assertFalse(worker.unresolved)
+                lost_run = self._insert_running(worker, "lost-run")
+                lost = worker._commit_lost(lost_run, "rookrunner-left")
+                self.assertEqual(lost["state"], "lost")
+                self.assertEqual(lost["cleanup"], "unresolved")
+                self.assertEqual(lost["error"]["kind"], "WORKER_INTERRUPTED")
+                self.assertEqual(worker.unresolved.get(lost["attempt_id"]), "rookrunner-left")
+            finally:
+                worker.close()
+
+    def _insert_running(self, worker, key):
+        run_id = f"run-{key}"
+        record = {
+            "run_id": run_id,
+            "worker_id": worker.worker_id,
+            "submission_key": key,
+            "state": "running",
+            "exit_code": None,
+            "input": {"kind": "workflow_job"},
+            "backend": {"name": "workflow", "version": "0.0.1"},
+            "compatibility_notes": [],
+            "accepted_at": "2026-10-02T00:00:00.000000+00:00",
+            "started_at": "2026-10-02T00:00:00.000001+00:00",
+            "finished_at": None,
+            "attempt_id": f"attempt-{key}",
+            "cancel_requested": False,
+            "error": None,
+            "cleanup": "not_started",
+        }
+        with worker.db:
+            worker.db.execute(
+                "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+                (run_id, key, "{}", canonical(record), b""),
+            )
+        return record
+
+    def _assert_commit_keeps_completion(self, worker, commit):
+        record = self._insert_running(worker, "done-" + commit.__name__)
+        ready = threading.Event()
+        started = threading.Event()
+        write_now = threading.Event()
+        result = {}
+
+        def completion():
+            with worker.guard:
+                ready.set()
+                self.assertTrue(write_now.wait(5))
+                current = worker.get(record["run_id"])
+                current.update(
+                    state="succeeded",
+                    exit_code=0,
+                    error=None,
+                    finished_at="2026-10-02T00:00:01.000000+00:00",
+                    cleanup="confirmed_no_external_resources",
+                    steps=[
+                        {
+                            "index": 0,
+                            "id": "show",
+                            "name": None,
+                            "status": "succeeded",
+                            "exit_code": 0,
+                            "stdout": "ok\n",
+                            "stderr": "",
+                            "error": None,
+                        }
+                    ],
+                )
+                with worker.db:
+                    worker.db.execute(
+                        "UPDATE runs SET log=? WHERE id=?", (b"ok\n", record["run_id"])
+                    )
+                    worker.save(current)
+
+        def cancel():
+            started.set()
+            if commit.__func__ is Worker._commit_lost:
+                result["record"] = commit(record, None)
+            else:
+                result["record"] = commit(record)
+
+        holder = threading.Thread(target=completion)
+        holder.start()
+        self.assertTrue(ready.wait(5))
+        canceller = threading.Thread(target=cancel)
+        canceller.start()
+        self.assertTrue(started.wait(5))
+        time.sleep(0.05)
+        write_now.set()
+        self.assertTrue(holder.join(5) is None and not holder.is_alive())
+        self.assertTrue(canceller.join(5) is None and not canceller.is_alive())
+        kept = result["record"]
+        self.assertEqual(kept["state"], "succeeded")
+        self.assertEqual(kept["exit_code"], 0)
+        self.assertEqual(kept["steps"][0]["stdout"], "ok\n")
+        self.assertNotIn(record["attempt_id"], worker.unresolved)
+        stored = worker.get(record["run_id"])
+        self.assertEqual(stored["state"], "succeeded")
+        self.assertEqual(stored["steps"][0]["id"], "show")
+
     def test_corrupt_database_startup_returns_json_without_replacing_data(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state"
