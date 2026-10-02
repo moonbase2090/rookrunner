@@ -1,0 +1,20 @@
+{
+  "checked_at": "2026-09-24",
+  "project": "rookrunner",
+  "epics": 10,
+  "stories": 37,
+  "checks": [
+    "All 47 tickets exist",
+    "All stories have the expected parent and assignee",
+    "Planned dependencies exist on live tickets",
+    "Dependency graph has no cycles or missing targets",
+    "Every story has acceptance criteria",
+    "No planned story is incorrectly marked done"
+  ],
+  "active_stories": [
+    "RR-2",
+    "RR-9"
+  ],
+  "notification_limitation": "Crosstalk event delivery reported unavailable; direct PMUX assignments acknowledged in 4526",
+  "runtime_checks": "Not run: planning and documentation changes only"
+}

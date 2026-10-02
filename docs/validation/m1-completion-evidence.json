@@ -1,0 +1,52 @@
+{
+  "scope": "M1 development backend only; temporary worker and state removed after validation",
+  "python": "3.14.6",
+  "platform": "Linux-7.0.12-arch1-1-x86_64-with-glibc2.43",
+  "implementation_manifest_sha256": "e66d1e6438118e8ac298be3230b15812bec55697ebaf20cfd057284d0817e323",
+  "implementation_files": {
+    "pyproject.toml": "3b4626311ab29324c22db5a47cf5a9a05fe37de45e2bc6de43386e13bcb8b699",
+    "schemas/v0/contract.schema.json": "eb390a75593168304b59b73b765fe02322b89f5fee345c65d1184926949c92d2",
+    "schemas/v0/examples.json": "3985a93334c43a3b590863e5b5d32ca2148a166a197a2662e9aa54c49f552b27",
+    "src/execution_core/__init__.py": "df57581e3f621d1fe4a0873c557d4264f85f2426fdd485bb1eb26ed5803bcbdb",
+    "src/execution_core/__main__.py": "6d8b7d7846a845059d7a3107143f11131f63c5511d669b44085b15ec5e3d2279",
+    "src/execution_core/cli.py": "e6686acdfe525268070096844b3fedebfff917256152ba40fe0ce40a16c74daa",
+    "src/execution_core/protocol.py": "5e65a46d8cd3b154256a03b9ca9c02dcf183c8e617503d16f7edb69b4952f15d",
+    "src/execution_core/worker.py": "f3c81a099af783e6b9228c21d127b1c6f8428832f5b757cee9c269466f288066",
+    "tests/schema_support.py": "fb943ba6ff94c13595588b496ea3380291884e507a56961a97fa6ed75eba5dc6",
+    "tests/test_contract.py": "b42c000874a4b2bb3f8f015b2e690de08867259825ed5b062350ba35456a06da",
+    "tests/test_failures.py": "8acb96c56b8306d1cb35f10a6a7149a78beaa6a1a1a8f65dd09321c86c3e8ac9",
+    "tests/test_schema.py": "ebbb1f2462967ef897e1094da66015dc17517bb5c9207d2cc1b80d56d9ab7216",
+    "uv.lock": "c01daa2ac274b638f0839c276592fe9b40f8d1764760e6fe4f448f626ce2d86b"
+  },
+  "fixture": {
+    "delay_ms": 0,
+    "exit_code": 0,
+    "output": "M1 contract complete\n"
+  },
+  "run": {
+    "accepted_at": "2026-09-23T15:18:23.569230+00:00",
+    "attempt_id": "0e7f89e2-b6ed-46f8-b686-79e5cdf62120",
+    "backend": {
+      "name": "development",
+      "version": "0.0.1"
+    },
+    "cancel_requested": false,
+    "cleanup": "confirmed_no_external_resources",
+    "compatibility_notes": [
+      "Synthetic fixture only; no repository source or workflow execution."
+    ],
+    "error": null,
+    "exit_code": 0,
+    "finished_at": "2026-09-23T15:18:23.588368+00:00",
+    "input": {
+      "digest": "b19cd7d45720c8084faf5c2fcfa078d82017acdd5ec3503a2b7ea760364f1207",
+      "kind": "development_fixture",
+      "snapshot_id": "b19cd7d45720c8084faf5c2fcfa078d82017acdd5ec3503a2b7ea760364f1207"
+    },
+    "run_id": "6db1eab9-7bcb-4060-a416-26f3ac13c6c4",
+    "started_at": "2026-09-23T15:18:23.588240+00:00",
+    "state": "succeeded",
+    "submission_key": "m1-completion-2026-09-23",
+    "worker_id": "96bcb55d-97d3-45b8-96a6-205d6150bb9e"
+  }
+}

@@ -1,0 +1,22 @@
+# Local execution data and credentials
+.execution-state/
+.cache/
+.env
+.env.*
+!.env.example
+.secrets
+*.pem
+*.key
+
+# Editor and operating system files
+.DS_Store
+*.swp
+
+# Python development artifacts
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.ruff_cache/

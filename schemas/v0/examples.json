@@ -1,0 +1,344 @@
+[
+  {
+    "name": "worker.describe",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "worker.describe"
+    },
+    "valid": true
+  },
+  {
+    "name": "run.submit",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "submission_key": "example",
+        "backend": "development",
+        "fixture": {}
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "run.get",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "run.list",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.list",
+      "params": {
+        "limit": 20,
+        "state": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "run.logs",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "limit": 1024
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "run.cancel",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.cancel",
+      "params": {
+        "version": 0,
+        "run_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "wrong version",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 1,
+        "submission_key": "bad",
+        "backend": "development",
+        "fixture": {}
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "unsupported backend",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "submission_key": "bad",
+        "backend": "shell",
+        "fixture": {}
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "extra fixture field",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "submission_key": "bad",
+        "backend": "development",
+        "fixture": {
+          "command": "make test"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "boolean exit code",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "submission_key": "bad",
+        "backend": "development",
+        "fixture": {
+          "exit_code": true
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "negative delay",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "submission_key": "bad",
+        "backend": "development",
+        "fixture": {
+          "delay_ms": -1
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "missing key",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 0,
+        "backend": "development",
+        "fixture": {}
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "notification",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "method": "worker.describe"
+    },
+    "valid": false
+  },
+  {
+    "name": "null id",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": null,
+      "method": "worker.describe"
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid list size",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.list",
+      "params": {
+        "limit": 101
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "succeeded run",
+    "definition": "Run",
+    "value": {
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "worker_id": "00000000-0000-4000-8000-000000000002",
+      "submission_key": "example",
+      "state": "succeeded",
+      "exit_code": 0,
+      "input": {
+        "kind": "development_fixture",
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "snapshot_id": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "backend": {
+        "name": "development",
+        "version": "0.0.1"
+      },
+      "compatibility_notes": [
+        "Synthetic example; digest placeholder is not execution evidence."
+      ],
+      "accepted_at": "2026-09-23T00:00:00.000000+00:00",
+      "started_at": "2026-09-23T00:00:00.000001+00:00",
+      "finished_at": "2026-09-23T00:00:00.000002+00:00",
+      "attempt_id": "00000000-0000-4000-8000-000000000003",
+      "cancel_requested": false,
+      "error": null,
+      "cleanup": "confirmed_no_external_resources"
+    },
+    "valid": true
+  },
+  {
+    "name": "get response",
+    "definition": "run.get.response",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "worker_id": "00000000-0000-4000-8000-000000000002",
+        "submission_key": "example",
+        "state": "succeeded",
+        "exit_code": 0,
+        "input": {
+          "kind": "development_fixture",
+          "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+          "snapshot_id": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "backend": {
+          "name": "development",
+          "version": "0.0.1"
+        },
+        "compatibility_notes": [
+          "Synthetic example; digest placeholder is not execution evidence."
+        ],
+        "accepted_at": "2026-09-23T00:00:00.000000+00:00",
+        "started_at": "2026-09-23T00:00:00.000001+00:00",
+        "finished_at": "2026-09-23T00:00:00.000002+00:00",
+        "attempt_id": "00000000-0000-4000-8000-000000000003",
+        "cancel_requested": false,
+        "error": null,
+        "cleanup": "confirmed_no_external_resources"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "nonzero success is invalid",
+    "definition": "Run",
+    "value": {
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "worker_id": "00000000-0000-4000-8000-000000000002",
+      "submission_key": "example",
+      "state": "succeeded",
+      "exit_code": 1,
+      "input": {
+        "kind": "development_fixture",
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "snapshot_id": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "backend": {
+        "name": "development",
+        "version": "0.0.1"
+      },
+      "compatibility_notes": [
+        "Synthetic example; digest placeholder is not execution evidence."
+      ],
+      "accepted_at": "2026-09-23T00:00:00.000000+00:00",
+      "started_at": "2026-09-23T00:00:00.000001+00:00",
+      "finished_at": "2026-09-23T00:00:00.000002+00:00",
+      "attempt_id": "00000000-0000-4000-8000-000000000003",
+      "cancel_requested": false,
+      "error": null,
+      "cleanup": "confirmed_no_external_resources"
+    },
+    "valid": false
+  },
+  {
+    "name": "logs response",
+    "definition": "run.logs.response",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "data_base64": "aGVsbG8K",
+        "next_cursor": "opaque-example",
+        "end_of_stream": true
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "conflict error",
+    "definition": "Response",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32000,
+        "message": "submission key already identifies different inputs",
+        "data": {
+          "kind": "IDEMPOTENCY_CONFLICT",
+          "retryable": false
+        }
+      }
+    },
+    "valid": true
+  }
+]

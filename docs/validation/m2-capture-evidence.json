@@ -1,0 +1,71 @@
+{
+  "scope": "M2 source capture only; no workflow run",
+  "python": "3.14.6",
+  "platform": "Linux-7.0.12-arch1-1-x86_64-with-glibc2.43",
+  "captured": {
+    "snapshot_id": "7f7e2e7f-e72c-478b-ba23-f178079ee56e",
+    "digest": "855a72ad62241b2b679581d1ce75472d3822ff836f7bd0a5b7ab965e7c4361bb",
+    "workflow_digest": "4308436ba532c03595ba34976d792b7bb8df259d8c6c2e7d76de6a0db0c3ef88",
+    "base_commit": "2f7a1329186e1b6ea238baadb8edcece35c13321",
+    "dirty": false,
+    "file_count": 2,
+    "total_bytes": 41
+  },
+  "captured_manifest": {
+    "base_commit": "2f7a1329186e1b6ea238baadb8edcece35c13321",
+    "deleted": [],
+    "dirty": false,
+    "entries": [
+      {
+        "kind": "file",
+        "mode": "100644",
+        "path": ".github/workflows/test.yml",
+        "sha256": "4308436ba532c03595ba34976d792b7bb8df259d8c6c2e7d76de6a0db0c3ef88",
+        "size": 32
+      },
+      {
+        "kind": "file",
+        "mode": "100644",
+        "path": "source.txt",
+        "sha256": "25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+        "size": 9
+      }
+    ],
+    "excluded": [],
+    "format_version": 1,
+    "git_object_format": "sha1",
+    "included": [],
+    "workflow": ".github/workflows/test.yml",
+    "workflow_digest": "4308436ba532c03595ba34976d792b7bb8df259d8c6c2e7d76de6a0db0c3ef88"
+  },
+  "after_checkout_edit": {
+    "snapshot_id": "b2729f99-5663-410e-9949-7933a432545d",
+    "digest": "d574e264f0cefc30fd396ba6b8d00553a813b1a3ef651976715f3df0f59ca9fb",
+    "workflow_digest": "4308436ba532c03595ba34976d792b7bb8df259d8c6c2e7d76de6a0db0c3ef88",
+    "base_commit": "2f7a1329186e1b6ea238baadb8edcece35c13321",
+    "dirty": true,
+    "file_count": 2,
+    "total_bytes": 53
+  },
+  "original_snapshot_unchanged": true,
+  "implementation_files": {
+    "backends/act.lock.json": "a3b9c8b76451c7f6afd0465b17f42f8357fbf24dac08078607f792fbd3b8442f",
+    "pyproject.toml": "3b4626311ab29324c22db5a47cf5a9a05fe37de45e2bc6de43386e13bcb8b699",
+    "schemas/v0/contract.schema.json": "eb390a75593168304b59b73b765fe02322b89f5fee345c65d1184926949c92d2",
+    "schemas/v0/examples.json": "3985a93334c43a3b590863e5b5d32ca2148a166a197a2662e9aa54c49f552b27",
+    "src/execution_core/__init__.py": "df57581e3f621d1fe4a0873c557d4264f85f2426fdd485bb1eb26ed5803bcbdb",
+    "src/execution_core/__main__.py": "6d8b7d7846a845059d7a3107143f11131f63c5511d669b44085b15ec5e3d2279",
+    "src/execution_core/cli.py": "b221f16542f774e6bd0d97a9d5cf22dad5bc73ce9f878246399ef40e2b0a3380",
+    "src/execution_core/protocol.py": "5e65a46d8cd3b154256a03b9ca9c02dcf183c8e617503d16f7edb69b4952f15d",
+    "src/execution_core/snapshot.py": "1c27a9a7135e58c229d016a5fa4e60eeab8b29f5c2a3c926e9572940b676f096",
+    "src/execution_core/worker.py": "f3c81a099af783e6b9228c21d127b1c6f8428832f5b757cee9c269466f288066",
+    "tests/schema_support.py": "fb943ba6ff94c13595588b496ea3380291884e507a56961a97fa6ed75eba5dc6",
+    "tests/test_contract.py": "b42c000874a4b2bb3f8f015b2e690de08867259825ed5b062350ba35456a06da",
+    "tests/test_failures.py": "8acb96c56b8306d1cb35f10a6a7149a78beaa6a1a1a8f65dd09321c86c3e8ac9",
+    "tests/test_schema.py": "ebbb1f2462967ef897e1094da66015dc17517bb5c9207d2cc1b80d56d9ab7216",
+    "tests/test_snapshot.py": "68007e76e3493941d2fc7c85e071e4eef884bb5cdc5e80e7a91ae6d8a313e49b",
+    "uv.lock": "c01daa2ac274b638f0839c276592fe9b40f8d1764760e6fe4f448f626ce2d86b"
+  },
+  "implementation_manifest_sha256": "59d3eb5053632f4af7ba121053df5a3b10693bfcc66eb5231fd0398afacdef54",
+  "retention": "Disposable fixture repository and capture state removed after validation"
+}

@@ -1,0 +1,237 @@
+# Rookrunner — product requirements
+
+Status: draft product requirements, revised against the implemented M1 contract
+and the M2 capture slice. M1 is complete for the development backend. M2 has a
+preparatory source capture command and an accepted owned-engine direction. Real
+workflow execution is not implemented. See the
+[manifesto](manifesto.md) for why the project exists.
+
+Accepted direction:
+
+- Begin with a downloadable local tool, worker agent, and documented execution protocol.
+- Build a useful product before developing a paid service.
+- Develop in an independent repository, outside Local Actions.
+- Use Rookrunner as the working title.
+- Own the workflow execution engine and pursue broad GitHub Actions compatibility
+  through explicit, tested increments. Do not delegate execution to act.
+
+Implemented behavior is the M1
+[development contract](design/development-contract.md), the v0
+[schemas](../schemas/v0/README.md), and the M2
+[capture contract](design/source-capture.md). Decisions
+[0001](decisions/0001-executable-foundation.md),
+[0002](decisions/0002-m2-capture-and-backend.md) (capture only; the act pin is
+historical), and [0003](decisions/0003-owned-execution-engine.md) record what
+has been accepted. Other architecture below is still a proposal.
+
+## Problem
+
+Developers and coding agents need reliable build and test results while source
+files are changing. Commands launched inside a client session can lose their
+visible history or ownership when that session exits. Local and remote
+execution often expose different controls and result formats. An exit code
+alone does not identify which source, workflow, and environment produced the
+result.
+
+## Users
+
+| User | Need | Completion signal |
+| --- | --- | --- |
+| Developer | Run a repository's build or tests and inspect failures | Can install, submit, follow, and inspect a completed run |
+| Coding agent | Submit work without holding a tool connection open | Receives a run ID and can reconnect for structured results |
+| Machine owner | Control resource use and stop work | Can inspect the queue, set concurrency, and verify cancellation |
+
+The same run identifiers, states, logs, and errors serve the developer and the
+coding agent. A dashboard is a later view of that same contract, not a second
+source of truth.
+
+## Goals
+
+- Submit work, follow it, and inspect a result tied to identifiable inputs.
+- Use the same controls whether a human or a coding agent submits the work.
+- Preserve enough evidence to investigate failures and attempt reproduction.
+  Reproduction depends on external services, dependencies, and environment
+  differences. It is not a bit-for-bit guarantee.
+- Keep accepted work when the client disconnects. Retrying the same submission
+  does not create a second run.
+- Execute the source that was submitted, not a later edit of the checkout.
+- Report success only when the run reached `succeeded` and `exit_code` is 0 for
+  that identified input. Cancellation, failure, and interrupted execution stay
+  distinguishable.
+- Own workflow semantics and match documented GitHub Actions behavior in
+  tested increments, rejecting unsupported execution-affecting syntax before
+  acceptance.
+- Ship a local release that runs outside this checkout, with checksums,
+  dependency instructions, version information, and third-party notices.
+
+## Non-goals
+
+These are outside the first usable release. Some are later investigations, not
+rejected ideas.
+
+- Public managed workers, billing, customer accounts, and service availability guarantees.
+- A network listener, worker registration, or execution for unrelated customers.
+- Replacing GitHub's workflow service, or claiming Actions feature parity.
+- A new mandatory workflow language.
+- Using act, or any other engine, as the execution implementation or as a silent fallback.
+- Cross-machine scheduling, automatic capacity expansion, shared caches, and global fairness.
+- Native desktop packaging and broad operating-system support.
+- Universal secret detection, universal log redaction, and secret provisioning.
+  Secrets stay disabled until a reviewed design exists.
+- Importing Local Actions configuration, credentials, state, sockets, or command names.
+- Treating a local Docker run of a trusted repository as a sandbox for hostile code.
+
+## What the code does now
+
+`execution_core` 0.0.1 is a local prototype invoked as
+`PYTHONPATH=src python3 -m execution_core`. It is not an installed public CLI.
+The runtime uses the Python standard library. Linux is the implementation
+target. Recorded M1 and M2 evidence used Python 3.14.6. The declared minimum
+is 3.11. Other versions and operating systems are not release evidence.
+
+Implemented:
+
+- A user-owned Unix socket and SQLite state for one bound repository.
+- Protocol version 0 methods: `worker.describe`, `run.submit`, `run.get`,
+  `run.list`, `run.logs`, and `run.cancel`. Submit accepts only an explicit
+  `development` fixture. Fixture text is never executed.
+- Durable submission keys, bounded queue and log pages, cancellation races,
+  and restart behavior that keeps queued fixtures and marks an interrupted
+  active fixture `lost`.
+- A `snapshot` command that captures Git working files into the state
+  directory. It does not submit a run, parse YAML, or execute a workflow.
+  `run.artifacts` is rejected. There is no doctor command, MCP adapter,
+  dashboard, packaging, or container supervisor.
+
+Validation records live in [M1 completion](validation/m1-completion.md) and
+[M2 capture](validation/m2-capture.md). Those records are historical. They do
+not make the requirements below done.
+
+## Scope by milestone
+
+Milestones are outcome gates, not dates. Detail and exit evidence are in the
+[roadmap](roadmap.md). Live ticket status is outside this document.
+
+| Milestone | Scope | State |
+| --- | --- | --- |
+| M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
+| M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture is implemented. Parser, planner, and runtime are not. |
+| M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
+| M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
+
+M2's first executable subset is a starting point: an explicitly selected job,
+sequential steps, and a digest-pinned image, with unsupported syntax rejected.
+Expressions, job dependencies, action types, matrices, reusable workflows, and
+services are later increments of the same engine. They are not promised in the
+first slice, and they are not permanently excluded.
+
+## First usable release
+
+Proposed support target: Linux x86_64 with Docker available. Additional
+platforms require separate evidence.
+
+- A CLI and a worker that run independently of this checkout.
+- One worker bound to one explicitly selected repository. One running job by default.
+- GitHub Actions workflow input through Rookrunner's own engine, with a declared
+  supported subset and explicit rejection of unsupported execution behavior.
+- Versioned local communication over a user-owned Unix socket.
+- Durable run state, bounded log retrieval, explicit cancellation, and restart recovery.
+- Source capture so queued jobs execute their submitted inputs rather than later checkout edits.
+- Machine-readable results through the CLI and an MCP adapter.
+- A basic dashboard after the execution path is dependable.
+- A release archive with checksums, dependency instructions, version information, and third-party notices.
+
+Neither a hosted account nor an internal coordination service is required for
+local operation. Initial dependency downloads and workflow network activity can
+require internet access.
+
+## Requirements
+
+P01–P12 are release requirements. "Now" says what the current prototype
+demonstrates. It is not a waiver.
+
+| ID | Requirement | Required evidence | Now |
+| --- | --- | --- | --- |
+| P01 | Install outside the development checkout | Release archive works in a clean supported environment; uninstall instructions exist | Not started. Invocation is `PYTHONPATH=src python3 -m execution_core`. |
+| P02 | Diagnose readiness | Doctor reports versions, supported backend, repository root, Docker access, and actionable missing prerequisites | Development `worker.describe` reports synthetic-backend readiness only. No doctor command. |
+| P03 | Persist accepted submissions | Client disconnect after submission does not discard the run; retry does not create duplicate work | Met for development fixtures, including across restart. Not met for workflow submission. |
+| P04 | Execute captured source | Editing the original checkout after acceptance leaves the run's input digest unchanged | Capture stores an independent copy and digest. Nothing executes that copy. A development run's digest identifies fixture JSON, not repository source. |
+| P05 | Report truthful outcomes | Success requires backend exit zero; backend errors, cancellation, and interrupted execution remain distinguishable | Met for synthetic fixtures: `succeeded` requires exit 0; failed, cancelled, and lost stay distinct. No workflow backend exists. |
+| P06 | Bound output consumption | Clients page logs by cursor; large output does not require loading the entire log | Met for development logs. Pages are 1–65536 bytes. |
+| P07 | Cancel owned execution | Cancellation stops backend processes and owned containers, then records confirmed cleanup or an unresolved outcome | Development fixtures own no processes or containers. Their cancellation is recorded. Container cleanup is not implemented. |
+| P08 | Recover after restart | Accepted queued work remains discoverable; interrupted work cannot silently become successful or execute twice | Met for the development backend. Queued fixtures remain; an active fixture becomes `lost` and is not retried. |
+| P09 | Explain compatibility | Unsupported requested features produce explicit capability errors or recorded limitations before execution | Workflow, command, secret, and artifact requests are rejected. There is no workflow capability catalog because no workflow is accepted. |
+| P10 | Protect local access | Other OS users cannot submit through the socket; secrets are excluded from automatic source capture | State directory mode 0700 and socket mode 0600 are tested. Capture excludes known credential paths and ignores an explicit include of those paths. This is not universal secret detection. |
+| P11 | Serve agents and humans consistently | CLI and MCP observe the same run identifiers, states, logs, and errors | CLI JSON only. MCP is not implemented. |
+| P12 | Preserve execution evidence | Result identifies source/workflow digests, engine version, image identity, timing, and exit status | A development result identifies the fixture digest, backend name and version `0.0.1`, timestamps, and exit status. It has no workflow digest or image identity. |
+
+The initial release supports trusted repositories owned by the local user.
+Docker access and workflow execution are powerful capabilities. Local mode is
+not a sandbox for arbitrary hostile repositories.
+
+## Product flow
+
+The intended release flow. Install, doctor, workflow submission, and artifact
+retrieval are not available. Today a developer starts the worker, submits a
+development fixture or captures a snapshot, and reads JSON from the CLI.
+
+1. Install the release and run doctor against a selected repository.
+2. Start its worker and inspect supported execution capabilities.
+3. Submit a workflow or job selection and capture the intended source.
+4. Receive a durable run identifier after validation and source capture succeed.
+5. Follow output, or disconnect and return later.
+6. Inspect the final result, compatibility notes, and available artifacts.
+7. Cancel work, or explicitly submit another attempt when needed.
+
+CLI examples in older notes use `<cli>` until the executable name is selected.
+The prototype command is `python3 -m execution_core`.
+
+## Success metrics
+
+The release gate is evidence, not a performance target. Do not publish a
+speed or resource claim that was not measured.
+
+- P01–P12 pass on the supported platform, against the packaged artifact rather
+  than this checkout.
+- Cold startup, warm startup, job duration, peak memory, and disk use are
+  recorded for that run.
+- At least one person outside the development environment completes the
+  documented install-to-result flow.
+- M2 exit evidence, before that release gate: representative workflows return
+  correct success and failure; checkout edits do not change accepted inputs;
+  cancellation leaves no owned work running; restart does not silently repeat
+  an interrupted attempt.
+- A local workflow result is reported under the recorded capability set. It is
+  not reported as GitHub Actions equivalence unless a reference comparison
+  exists.
+
+No numeric service level is defined. The development worker retains runs and
+keys indefinitely and does not yet enforce a disk budget, so it is not an
+unattended production service.
+
+## Open questions
+
+| Question | Current position | Needed before |
+| --- | --- | --- |
+| Project license | Permissive open-source license proposed. Not selected. Notices for locked development tools are inventoried and are not a project license. | Public distribution |
+| Public name and executable | Rookrunner and `execution_core` / `execution-core` are working names. The executable is not registered. | Public package registration |
+| Supported release platform | Linux x86_64 with Docker is the proposed first artifact target. Recorded tests do not cover Python 3.11 or other operating systems. | Artifact packaging |
+| Runner image | Workflow execution needs an image pinned by digest. Selection and provenance are open. | First real workflow run |
+| Workflow parser | A maintained YAML parser is required after provenance and license review. None is a runtime dependency today. | Parser implementation |
+| Git metadata for checkout | Capture copies working files and excludes `.git`. Sanitized metadata is undesigned, so checkout actions are unsupported. | Claiming Git-dependent workflows |
+| Submission-key retention once pruning exists | M1 retains keys for the life of the state directory. The workflow draft requires tombstones across a documented retry window. That window is undefined. | Workflow submission |
+| Secret provisioning | Disabled. Filename exclusions are not a secret system. | Any secret feature |
+| Dashboard direction | Runnable visual options, then a selection. | Dashboard implementation |
+| Private remote workers and managed capacity | Discovery only. Each needs its own requirements. Neither blocks the local preview. | Any remote or hosted design |
+| Event payload and workflow wire version | The workflow methods in the protocol draft are not the implemented v0 submit body. They need a negotiated version. | Workflow acceptance |
+
+Source capture of tracked working files plus explicitly included untracked
+files is no longer an open product choice. It is the implemented capture
+slice. Binding that snapshot to durable run acceptance is still M2 work.
+
+## Release decision
+
+The release requires passing evidence for P01–P12 on the supported platform,
+the measurements in Success metrics, and one external install-to-result run.
+Public publishing is a separate step after the preview artifact is reviewable.

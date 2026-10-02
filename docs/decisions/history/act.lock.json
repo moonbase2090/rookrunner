@@ -1,0 +1,16 @@
+{
+  "format_version": 1,
+  "upstream": "https://github.com/nektos/act",
+  "version": "0.2.89",
+  "tag": "v0.2.89",
+  "commit": "4f411281417e88660bea1c1a1749aa71ae0bd60f",
+  "release_url": "https://github.com/nektos/act/releases/tag/v0.2.89",
+  "license": "MIT",
+  "license_url": "https://github.com/nektos/act/blob/v0.2.89/LICENSE",
+  "platform": "linux-x86_64",
+  "archive_url": "https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_x86_64.tar.gz",
+  "archive_sha256": "0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0",
+  "verification": "Release metadata and tagged license checked 2026-09-23; archive not downloaded or executed.",
+  "runner_image": null,
+  "execution_enabled": false
+}

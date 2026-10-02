@@ -1,0 +1,801 @@
+{
+  "as_of": "2026-09-24",
+  "project": "rookrunner",
+  "epics": [
+    {
+      "key": "m2",
+      "title": "M2: Execute captured workflows with the owned engine",
+      "milestone": "M2",
+      "horizon": "Now",
+      "outcome": "A developer can execute captured local workflow inputs and trust the reported terminal result.",
+      "exit_evidence": "RR-7 records end-to-end success, failure, captured-input isolation, cancellation and restart evidence; all M2 stories satisfy their acceptance criteria.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "parser",
+          "title": "Parse Actions YAML and produce deterministic capability-checked plans",
+          "role": "workflow author",
+          "value": "see whether a workflow is supported before any work launches",
+          "acceptance": [
+            "Given bounded valid first-subset YAML, planning preserves on/string keys and emits the same canonical plan digest for identical inputs.",
+            "Given duplicate keys, malformed/oversized input, unsupported fields or expressions, planning rejects with a useful source location and launches nothing.",
+            "Validate the entire workflow; document explicit event, single Linux job, Bash, static env/defaults and sequential run-step limits."
+          ],
+          "depends_on": [],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "enabler",
+          "id": "RR-2"
+        },
+        {
+          "key": "snapshot",
+          "title": "Bind plans to verified immutable snapshots",
+          "role": "developer",
+          "value": "run exactly the source I submitted",
+          "acceptance": [
+            "Given a valid captured workflow, plan identity binds source/workflow digests and engine/capability versions.",
+            "Editing the checkout after capture does not change planned bytes.",
+            "Tampering, missing files, unsafe paths or unsupported manifest versions reject before acceptance."
+          ],
+          "depends_on": [
+            "parser"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-3"
+        },
+        {
+          "key": "runtime",
+          "title": "Implement supervised container execution for sequential Bash steps",
+          "role": "developer",
+          "value": "run a simple build in an identified environment",
+          "acceptance": [
+            "Given a supported plan, ordered Bash steps execute in a separate attempt workspace using a digest-identified image.",
+            "Static environment precedence, shell/defaults and working directories have success and failure fixtures.",
+            "No ordinary job mounts host credentials or Docker socket; step events and bounded logs identify results and resources."
+          ],
+          "depends_on": [
+            "snapshot"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-4"
+        },
+        {
+          "key": "durable",
+          "title": "Persist workflow submissions and per-step results in worker protocol",
+          "role": "agent client",
+          "value": "disconnect and recover the same accepted run",
+          "acceptance": [
+            "Given a retried identical submission key, exactly one run binds the snapshot and plan; changed input conflicts.",
+            "Attempt ownership persists before launch; disconnect/reconnect retains step results and evidence.",
+            "Setup errors, workflow failure and succeeded+0 remain distinct; existing development protocol tests still pass."
+          ],
+          "depends_on": [
+            "snapshot",
+            "runtime"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-5"
+        },
+        {
+          "key": "recovery",
+          "title": "Reconcile cancellation, timeouts, restart and disk budgets",
+          "role": "machine owner",
+          "value": "stop execution and recover without hidden work",
+          "acceptance": [
+            "Cancellation and timeout escalation confirm owned-resource termination before a definitive terminal result.",
+            "Restart preserves queued work, never automatically repeats interrupted attempts, and blocks conflicts while cleanup is unresolved.",
+            "Disk-budget/full-disk fixtures reject unsafe new work and preserve active evidence."
+          ],
+          "depends_on": [
+            "runtime",
+            "durable"
+          ],
+          "owner": "codex-rr",
+          "size": "L",
+          "kind": "story",
+          "id": "RR-6"
+        },
+        {
+          "key": "m2proof",
+          "title": "Establish M2 end-to-end execution evidence",
+          "role": "developer",
+          "value": "judge the first executable release against recorded evidence",
+          "acceptance": [
+            "Public CLI fixtures cover success, nonzero failure, defaults, source isolation, cancellation and restart.",
+            "Evidence includes exact input/code digest, image, versions, terminal state, exit code and cleanup result.",
+            "Only succeeded+0 counts as success; local validation and GitHub reference comparison are labeled separately."
+          ],
+          "depends_on": [
+            "durable",
+            "recovery"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "verification",
+          "id": "RR-7"
+        },
+        {
+          "key": "research",
+          "title": "Pin runner research sources and design conformance fixtures",
+          "role": "engine implementer",
+          "value": "use traceable behavior references",
+          "acceptance": [
+            "Record runner commit SHAs and primary citations for each source-derived claim.",
+            "Fixture specifications cover contexts, outcomes, job continue-on-error, output masking, command chunks and matrix exclude ambiguity.",
+            "Each expected result identifies documented, observed, inferred or unverified evidence; no external dispatch or upstream source import."
+          ],
+          "depends_on": [],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-8"
+        },
+        {
+          "key": "parserreview",
+          "title": "Review parser subset and YAML dependency provenance",
+          "role": "maintainer",
+          "value": "choose a parser with understood semantics and obligations",
+          "acceptance": [
+            "Compare maintained parser options with version, provenance and license evidence.",
+            "List scalar, duplicate-key, alias and bounded-parsing cases with expected accept/reject behavior for the proposed subset.",
+            "Deliver contract review first; review implementation when available and report blocking findings directly with precise evidence."
+          ],
+          "depends_on": [],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-9"
+        }
+      ],
+      "id": "RR-1"
+    },
+    {
+      "key": "semantics",
+      "title": "Evaluate workflow conditions and exchange step data",
+      "milestone": "Compatibility-1",
+      "horizon": "Next",
+      "outcome": "Authors can use conditions, contexts, step outputs and dependent jobs with explainable outcomes.",
+      "exit_evidence": "A supported fixture suite proves each semantic feature and explicitly lists unsupported cases.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "expressions",
+          "title": "Evaluate expressions in the correct workflow context",
+          "role": "workflow author",
+          "value": "use conditions without phase-dependent surprises",
+          "acceptance": [
+            "Own parser/evaluator handles a documented type/coercion/function subset without eval.",
+            "Each workflow key has a context/function availability policy and evaluation phase.",
+            "Positive, invalid-context, missing-property and type/coercion fixtures pass."
+          ],
+          "depends_on": [
+            "parser",
+            "research"
+          ],
+          "owner": "codex-rr",
+          "size": "L",
+          "kind": "story",
+          "id": "RR-11"
+        },
+        {
+          "key": "files",
+          "title": "Pass environment and outputs between steps",
+          "role": "workflow author",
+          "value": "consume data produced by earlier steps",
+          "acceptance": [
+            "GITHUB_ENV, PATH and OUTPUT updates apply at the documented boundary; writing steps do not see later environment updates.",
+            "UTF-8, multiline, size limits and disallowed variable updates have tests.",
+            "Workflow command chunk boundaries and stop/resume behavior are validated; unsupported commands fail or are reported per documented policy."
+          ],
+          "depends_on": [
+            "runtime",
+            "research"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-12"
+        },
+        {
+          "key": "outcomes",
+          "title": "Report outcomes and evaluate failure conditions accurately",
+          "role": "workflow author",
+          "value": "handle failed steps without a false green run",
+          "acceptance": [
+            "Persist outcome and conclusion separately around continue-on-error.",
+            "Status functions and condition defaults have success, failure, skipped and cancellation fixtures.",
+            "Job-level aggregation is implemented only against resolved evidence; unresolved behavior remains unsupported."
+          ],
+          "depends_on": [
+            "expressions",
+            "files"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-13"
+        },
+        {
+          "key": "dag",
+          "title": "Run selected jobs with their dependency closure",
+          "role": "workflow author",
+          "value": "execute dependent jobs in the right order",
+          "acceptance": [
+            "needs graph validation rejects cycles and missing jobs.",
+            "Selecting a job includes required dependencies and immutable inputs.",
+            "Failure/skip propagation and job outputs match the declared contract with fixtures."
+          ],
+          "depends_on": [
+            "outcomes"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-14"
+        }
+      ],
+      "id": "RR-10"
+    },
+    {
+      "key": "actions",
+      "title": "Run checkout and reusable action steps",
+      "milestone": "Compatibility-2",
+      "horizon": "Next",
+      "outcome": "Authors can run a checkout/setup/build workflow with owned action resolution and runtimes.",
+      "exit_evidence": "A pinned checkout plus setup plus build fixture completes with action provenance, lifecycle and cleanup evidence.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "resolve",
+          "title": "Resolve actions to verified immutable content",
+          "role": "workflow author",
+          "value": "know which action code ran",
+          "acceptance": [
+            "Resolve supported action references to immutable identities and record provenance.",
+            "Bound downloads, validate paths and metadata; reject unsupported or unsafe references.",
+            "Cache reuse verifies content; no act fallback or upstream engine import."
+          ],
+          "depends_on": [
+            "parser",
+            "research"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-16"
+        },
+        {
+          "key": "checkout",
+          "title": "Preserve submitted inputs through checkout and Git commands",
+          "role": "developer",
+          "value": "use checkout without replacing submitted changes",
+          "acceptance": [
+            "Define and document checkout semantics for captured dirty/untracked inputs.",
+            "A pinned checkout fixture and Git-dependent build retain the identified snapshot contents.",
+            "No credential-bearing local Git configuration is copied; unsupported options reject explicitly."
+          ],
+          "depends_on": [
+            "resolve",
+            "snapshot"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-17"
+        },
+        {
+          "key": "javascript",
+          "title": "Execute JavaScript actions with setup and cleanup",
+          "role": "workflow author",
+          "value": "use supported setup actions",
+          "acceptance": [
+            "Inputs, outputs and environment follow the declared action contract in a pinned Node runtime.",
+            "Supported pre/main/post lifecycle, reverse cleanup and failure behavior have fixtures.",
+            "Unsupported legacy runtimes/local pre behavior reject explicitly; runtime version and licenses are recorded."
+          ],
+          "depends_on": [
+            "resolve",
+            "files"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-18"
+        },
+        {
+          "key": "composite",
+          "title": "Execute local composite actions",
+          "role": "workflow author",
+          "value": "reuse a sequence of supported steps",
+          "acceptance": [
+            "Composite inputs and nested supported steps evaluate in the proper context without invented INPUT variables.",
+            "Output mapping, working directories and shell requirements have fixtures.",
+            "Bound nesting and reject unsupported action types/features before execution."
+          ],
+          "depends_on": [
+            "resolve",
+            "expressions",
+            "files"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-19"
+        }
+      ],
+      "id": "RR-15"
+    },
+    {
+      "key": "advanced",
+      "title": "Expand workflow orchestration beyond sequential builds",
+      "milestone": "Compatibility-3",
+      "horizon": "Later",
+      "outcome": "Teams can incrementally adopt more complex workflows without silent omissions.",
+      "exit_evidence": "Every enabled capability has bounded-resource and failure/cleanup fixtures plus a compatibility entry.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "matrix",
+          "title": "Expand and schedule bounded job matrices",
+          "role": "workflow author",
+          "value": "test a declared set of configurations",
+          "acceptance": [
+            "Implement include/exclude semantics against documented or observed GitHub evidence.",
+            "Bound expansion and max-parallel; deterministic child identities are recorded.",
+            "Fail-fast, cancellation and invalid matrix cases have fixtures."
+          ],
+          "depends_on": [
+            "dag"
+          ],
+          "owner": "codex-rr",
+          "size": "L",
+          "kind": "story",
+          "id": "RR-21"
+        },
+        {
+          "key": "reuse",
+          "title": "Call reusable workflows with typed inputs and outputs",
+          "role": "workflow author",
+          "value": "share tested workflow definitions",
+          "acceptance": [
+            "Resolve supported workflow references immutably; validate typed inputs and outputs.",
+            "Detect recursion and bound nesting/dependency expansion.",
+            "Unsupported secret/permission propagation rejects; call-chain evidence is retained."
+          ],
+          "depends_on": [
+            "dag",
+            "resolve"
+          ],
+          "owner": "codex-rr",
+          "size": "L",
+          "kind": "story",
+          "id": "RR-22"
+        },
+        {
+          "key": "dockeractions",
+          "title": "Run Docker actions with owned cleanup",
+          "role": "workflow author",
+          "value": "use supported container actions",
+          "acceptance": [
+            "Validate metadata, args/env and image/build provenance for the declared subset.",
+            "Persist owned resources before launch and clean them after success, failure and cancellation.",
+            "Host socket/credential access stays excluded; lifecycle and resource-limit fixtures pass."
+          ],
+          "depends_on": [
+            "resolve",
+            "recovery"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-23"
+        },
+        {
+          "key": "services",
+          "title": "Run jobs with declared service containers",
+          "role": "workflow author",
+          "value": "test against a disposable dependency service",
+          "acceptance": [
+            "Explicit service network and port policy prevents unintended exposure.",
+            "Readiness/timeout failures are distinguishable from job failures.",
+            "Success, cancellation and restart leave no unaccounted owned services."
+          ],
+          "depends_on": [
+            "recovery",
+            "dag"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-24"
+        }
+      ],
+      "id": "RR-20"
+    },
+    {
+      "key": "conformance",
+      "title": "Make compatibility claims traceable and reproducible",
+      "milestone": "Quality",
+      "horizon": "Next",
+      "outcome": "Maintainers and users can see exactly which behavior is supported and how it was validated.",
+      "exit_evidence": "Each advertised capability links to fixtures, source versions, local evidence and reference status.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "catalog",
+          "title": "Catalog capability contracts and reference fixtures",
+          "role": "maintainer",
+          "value": "identify unsupported behavior before advertising it",
+          "acceptance": [
+            "Create a machine-readable capability/fixture manifest with version and input identities.",
+            "Separate documented expectations, local results and observed GitHub comparisons.",
+            "Cover initial subset and retain unresolved research cases as explicit gaps."
+          ],
+          "depends_on": [
+            "research"
+          ],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "enabler",
+          "id": "RR-26"
+        },
+        {
+          "key": "harness",
+          "title": "Compare local results with reference evidence",
+          "role": "maintainer",
+          "value": "detect semantic regressions",
+          "acceptance": [
+            "Harness compares outcomes, outputs and ordering while ignoring incidental timestamps/log formatting.",
+            "Mismatch fixtures prove the comparator detects false success and wrong outputs.",
+            "External dispatch remains a separate authorized operation; missing references cannot report conformance."
+          ],
+          "depends_on": [
+            "catalog",
+            "m2proof"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-27"
+        },
+        {
+          "key": "compatdocs",
+          "title": "Explain supported behavior and local differences",
+          "role": "workflow author",
+          "value": "decide whether a workflow can run here",
+          "acceptance": [
+            "Generate or verify compatibility documentation against the capability manifest.",
+            "Unsupported syntax has actionable diagnostics and fixture links.",
+            "Runner/image/action versions and intentional local differences accompany evidence."
+          ],
+          "depends_on": [
+            "catalog",
+            "parser"
+          ],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-28"
+        }
+      ],
+      "id": "RR-25"
+    },
+    {
+      "key": "agents",
+      "title": "Give coding agents reliable execution tools",
+      "milestone": "M3",
+      "horizon": "Next",
+      "outcome": "Agents can submit, reconnect, inspect and cancel through the same contract as CLI users.",
+      "exit_evidence": "CLI and MCP agree on identifiers, outcomes, bounded logs and errors in end-to-end fixtures.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "mcp",
+          "title": "Expose execution operations through MCP",
+          "role": "agent client",
+          "value": "control runs without owning worker lifetime",
+          "acceptance": [
+            "MCP maps describe/submit/get/list/logs/cancel to the existing protocol.",
+            "Disconnecting the adapter does not stop the worker or accepted work.",
+            "CLI and MCP observe identical run identities and final results."
+          ],
+          "depends_on": [
+            "durable"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-30"
+        },
+        {
+          "key": "mcperrors",
+          "title": "Recover from tool errors and reconnect safely",
+          "role": "agent client",
+          "value": "distinguish retryable failures from run outcomes",
+          "acceptance": [
+            "Malformed calls return structured tool errors without losing the connection.",
+            "Retry/reconnect preserves submission idempotency and cursor semantics.",
+            "Tests distinguish unavailable worker, unsupported capability, lost run and workflow failure."
+          ],
+          "depends_on": [
+            "mcp"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-31"
+        },
+        {
+          "key": "evidence",
+          "title": "Retrieve bounded logs and artifact manifests",
+          "role": "agent client",
+          "value": "inspect results without unbounded output or unsafe paths",
+          "acceptance": [
+            "Paginate logs and manifests with stable run-scoped cursors and byte limits.",
+            "Artifact lookup confines paths to owned storage and reports missing/expired evidence.",
+            "Large-output and path-traversal fixtures pass through CLI and MCP."
+          ],
+          "depends_on": [
+            "mcp",
+            "recovery"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-32"
+        }
+      ],
+      "id": "RR-29"
+    },
+    {
+      "key": "dashboard",
+      "title": "Let humans inspect and control local execution",
+      "milestone": "M3",
+      "horizon": "Later",
+      "outcome": "A developer can understand queue, results and recovery from a usable local dashboard.",
+      "exit_evidence": "Selected runnable design passes visible install-to-result, reconnect and cancellation scenarios.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "uidesign",
+          "title": "Compare runnable dashboard design options",
+          "role": "developer",
+          "value": "choose a usable execution view before implementation",
+          "acceptance": [
+            "Provide runnable alternatives for queue, run detail and log navigation.",
+            "Show failure, lost, disconnected and unsupported-workflow states.",
+            "Record the selected direction before production UI implementation."
+          ],
+          "depends_on": [],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-34"
+        },
+        {
+          "key": "uiview",
+          "title": "Inspect runs, steps and evidence in the dashboard",
+          "role": "developer",
+          "value": "understand what ran and why it failed",
+          "acceptance": [
+            "Implement the selected design using the public worker contract.",
+            "Show snapshot identity, status, steps and bounded log/evidence access.",
+            "Keyboard navigation, reconnect and large-output behavior have browser evidence."
+          ],
+          "depends_on": [
+            "uidesign",
+            "evidence"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-35"
+        },
+        {
+          "key": "uicancel",
+          "title": "Cancel work and understand recovery in the dashboard",
+          "role": "machine owner",
+          "value": "stop a run without confusing uncertain cleanup with success",
+          "acceptance": [
+            "Cancellation state reflects confirmed worker results.",
+            "Lost/cleanup-pending states explain what remains uncertain and allowed next actions.",
+            "Visible browser scenarios cover cancel races, disconnect and restart without optimistic success."
+          ],
+          "depends_on": [
+            "uiview",
+            "recovery"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-36"
+        }
+      ],
+      "id": "RR-33"
+    },
+    {
+      "key": "preview",
+      "title": "Deliver an installable local preview",
+      "milestone": "M4",
+      "horizon": "Later",
+      "outcome": "A new user can install independently and complete the documented first workflow run.",
+      "exit_evidence": "P01-P12 acceptance passes from the packaged artifact and an external user completes the flow.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "license",
+          "title": "Resolve distribution identity and third-party obligations",
+          "role": "project owner",
+          "value": "distribute an artifact with explicit naming and licensing decisions",
+          "acceptance": [
+            "Inventory runtime/bundled dependencies and their source/license/notice requirements.",
+            "Prepare owner decisions for project license and final public identifiers.",
+            "Record accepted decisions before distribution; ticket creation does not choose a license or authorize publication."
+          ],
+          "depends_on": [],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "enabler",
+          "id": "RR-38"
+        },
+        {
+          "key": "package",
+          "title": "Build a reproducible preview archive",
+          "role": "developer",
+          "value": "install outside the source checkout",
+          "acceptance": [
+            "Archive includes version, checksums, dependencies and required notices for the supported platform.",
+            "Install and uninstall work in a clean disposable environment without internal coordination services.",
+            "Artifact build and exact digest are recorded; public publishing is a separate action."
+          ],
+          "depends_on": [
+            "m2proof",
+            "license"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-39"
+        },
+        {
+          "key": "doctor",
+          "title": "Diagnose prerequisites and follow a documented first run",
+          "role": "new user",
+          "value": "resolve setup problems without inspecting implementation",
+          "acceptance": [
+            "Doctor reports versions, repository binding, Docker access and actionable missing prerequisites.",
+            "Document install, submit, follow, inspect, cancel, upgrade and removal.",
+            "Cold/warm startup, duration, peak memory and disk measurements are recorded without unsupported performance claims."
+          ],
+          "depends_on": [
+            "package"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "story",
+          "id": "RR-40"
+        },
+        {
+          "key": "acceptance",
+          "title": "Validate the packaged preview with an external user",
+          "role": "new user",
+          "value": "complete a real build using published instructions",
+          "acceptance": [
+            "P01-P12 evidence names the exact artifact, platform, workflow input and terminal result.",
+            "CLI, MCP and dashboard results agree; external user completes install-to-result.",
+            "Record known limits and release decision; no publication is implied by test success."
+          ],
+          "depends_on": [
+            "doctor",
+            "mcperrors",
+            "uicancel",
+            "compatdocs"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "verification",
+          "id": "RR-41"
+        }
+      ],
+      "id": "RR-37"
+    },
+    {
+      "key": "remote",
+      "title": "Discover private remote execution requirements",
+      "milestone": "Discovery-remote",
+      "horizon": "Discovery",
+      "outcome": "Decide whether and how to extend local execution to authenticated private machines.",
+      "exit_evidence": "A reviewed proposal identifies trust boundaries, protocol/lifecycle changes, success criteria and a go/no-go decision.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "remotecontract",
+          "title": "Specify remote identity, transport and attempt ownership",
+          "role": "machine owner",
+          "value": "understand the requirements for using a private remote worker",
+          "acceptance": [
+            "Document auth, TLS, leases, input transfer, cancellation and disconnected outcomes.",
+            "Identify protocol changes and compatibility risks against local behavior.",
+            "Deliver a proposal and bounded experiment plan; no remote service deployment."
+          ],
+          "depends_on": [],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-43"
+        },
+        {
+          "key": "remotegate",
+          "title": "Review the private remote execution proposal",
+          "role": "project owner",
+          "value": "choose a separately scoped remote milestone",
+          "acceptance": [
+            "Compare proposed design against lifecycle and threat-model requirements.",
+            "Record open risks, cost/operability questions and measurable experiment exits.",
+            "Record keep/defer/reject direction before creating implementation commitments."
+          ],
+          "depends_on": [
+            "remotecontract"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-44"
+        }
+      ],
+      "id": "RR-42"
+    },
+    {
+      "key": "hosted",
+      "title": "Discover isolation requirements for serving unrelated customers",
+      "milestone": "Discovery-hosted",
+      "horizon": "Discovery",
+      "outcome": "Decide whether a managed multi-customer service is viable as a separate product milestone.",
+      "exit_evidence": "A reviewed proposal separates tenant isolation, service operations and economics from local/remote worker scope.",
+      "owner": "codex-rr",
+      "stories": [
+        {
+          "key": "tenant",
+          "title": "Assess tenant isolation and abuse boundaries",
+          "role": "service owner",
+          "value": "understand requirements before hosting untrusted customer jobs",
+          "acceptance": [
+            "Compare candidate isolation boundaries and secret/network/artifact separation.",
+            "Identify abuse, quotas, audit and incident-response requirements.",
+            "Document risks and experiment criteria without claiming local Docker isolation is sufficient."
+          ],
+          "depends_on": [],
+          "owner": "grok-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-46"
+        },
+        {
+          "key": "hostedgate",
+          "title": "Evaluate managed service viability and decision gates",
+          "role": "project owner",
+          "value": "decide whether managed execution should proceed",
+          "acceptance": [
+            "Propose capacity, availability, billing and support responsibilities with assumptions.",
+            "Document experiments needed to validate cost and isolation claims.",
+            "Record a separate go/no-go decision; no customer serving or deployment is authorized by this backlog."
+          ],
+          "depends_on": [
+            "tenant"
+          ],
+          "owner": "codex-rr",
+          "size": "M",
+          "kind": "spike",
+          "id": "RR-47"
+        }
+      ],
+      "id": "RR-45"
+    }
+  ]
+}
