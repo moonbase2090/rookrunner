@@ -149,6 +149,13 @@ class WorkflowSubmitTests(unittest.TestCase):
         body.update(overrides)
         return body
 
+    def test_registry_pin_stores_sha256_prefix(self):
+        self.write_workflows()
+        reference = "example.com/runner/app@sha256:" + "ab" * 32
+        run = self.rpc("run.submit", self.params(submission_key="wf-ref", image=reference))
+        self.assertEqual(run["input"]["image_reference"], reference)
+        self.assertEqual(run["input"]["image_digest"], "sha256:" + "ab" * 32)
+
     def test_describe_advertises_workflow_job_only(self):
         described = self.rpc("worker.describe", {})
         self.assertEqual(described["protocol_versions"], [0, 1])
@@ -170,7 +177,7 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assertEqual(recorded["workflow"], ".github/workflows/test.yml")
         self.assertEqual(recorded["job_id"], "build")
         self.assertEqual(recorded["image_reference"], IMAGE)
-        self.assertEqual(recorded["image_digest"], "cd" * 32)
+        self.assertEqual(recorded["image_digest"], IMAGE)
         self.assertEqual(
             recorded["event_digest"],
             hashlib.sha256(canonical(EVENT).encode("ascii")).hexdigest(),

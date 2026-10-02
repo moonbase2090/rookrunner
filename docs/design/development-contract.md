@@ -49,7 +49,8 @@ secret, and source selection parameters are unsupported and rejected.
 
 Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, `event`,
 and an image pinned by digest. It captures and plans one sequential `run` job,
-then stores a queued run. It does not execute steps. Unsupported workflow
+then stores a queued run. The stored image digest keeps the `sha256:` prefix.
+It does not execute steps. Unsupported workflow
 fields and invalid YAML create no run. Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,

@@ -118,7 +118,8 @@ Status: implemented.
 
 Version 1 `run.submit` captures, verifies, and plans one job, then commits a
 queued run bound to the snapshot id and the manifest, workflow, plan, and
-image digests. The same key and normalized input return that run. A changed
+image digests. The image digest keeps the `sha256:` prefix recorded by
+`run_job`. The same key and normalized input return that run. A changed
 input conflicts. Invalid YAML, an unsupported field, and an unpinned image
 create no run. The queued job is not executed. Version 0 development
 submission is unchanged. `worker.describe` advertises `workflow.job` and does

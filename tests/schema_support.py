@@ -47,9 +47,10 @@ def validate_response(method, reply):
                 "workflow_digest",
                 "plan_digest",
                 "event_digest",
-                "image_digest",
             ):
                 assert len(run["input"][name]) == 64
+            image_digest = run["input"]["image_digest"]
+            assert image_digest.startswith("sha256:") and len(image_digest) == 71
         else:
             raise AssertionError(kind)
         times = [run[field] for field in ("accepted_at", "started_at", "finished_at") if run[field]]

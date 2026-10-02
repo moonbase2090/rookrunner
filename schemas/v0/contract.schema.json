@@ -31,6 +31,12 @@
       "minLength": 64,
       "maxLength": 64
     },
+    "ImageDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "minLength": 71,
+      "maxLength": 71
+    },
     "Timestamp": {
       "type": "string",
       "format": "date-time",
@@ -476,7 +482,7 @@
                   "$ref": "#/$defs/Digest"
                 },
                 "image_digest": {
-                  "$ref": "#/$defs/Digest"
+                  "$ref": "#/$defs/ImageDigest"
                 },
                 "image_reference": {
                   "type": "string",

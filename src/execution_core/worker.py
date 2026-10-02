@@ -313,7 +313,7 @@ class Worker:
         except (OSError, UnicodeError, ValueError) as exc:
             self._drop_snapshot(captured["snapshot_id"])
             raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
-        image_digest = p["image"].rsplit("sha256:", 1)[1]
+        image_digest = "sha256:" + p["image"].rsplit("sha256:", 1)[1]
         record = {
             "run_id": str(uuid.uuid4()),
             "worker_id": self.worker_id,

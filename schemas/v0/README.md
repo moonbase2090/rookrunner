@@ -36,9 +36,12 @@ also specifies wire and stateful rules:
   Accepted fixture numeric fields normalize to integer values before hashing.
 - Validate cursor ownership, offsets, current queue capacity, idempotency, and
   worker readiness against live state. These are not schema-only properties.
-- A run's `input.snapshot_id` equals its `input.digest`, and the digest must match
-  the captured normalized development input. The schema validates digest shape;
-  it cannot prove input correspondence. Timestamp ordering is checked separately.
+- For a development fixture, `input.snapshot_id` equals `input.digest`, and that
+  digest must match the captured normalized input. A workflow job stores the
+  snapshot UUID separately. Its content digests are 64 lowercase hex characters,
+  and its `image_digest` is `sha256:` plus 64 hex characters. The schema validates
+  those shapes; it cannot prove input correspondence. Timestamp ordering is
+  checked separately.
 
 The independent validation helper is `tests/schema_support.py`. Worker request
 validation uses standard-library code; tests compare its behavior and actual
