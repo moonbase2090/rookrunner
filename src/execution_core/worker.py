@@ -2,8 +2,9 @@
 
 Version 0 submits a synthetic development fixture. It never launches commands
 or reads a workflow. Version 1 captures the repository, verifies that
-snapshot, plans one selected job, and commits a queued run. It does not start
-a container.
+snapshot, plans one selected job, and commits a queued run. The scheduler
+then materializes an attempt, records it, and runs that plan in one
+caller-pinned container.
 """
 
 import base64
@@ -23,7 +24,9 @@ import uuid
 from datetime import datetime, timezone
 
 from . import __version__
+from .attempt import AttemptError, materialize_attempt
 from .plan import PlanError, plan_snapshot
+from .run import RunError, run_job
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -50,6 +53,12 @@ from .verify import VerifyError, verify_snapshot
 
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
+_STEP_TEXT = 65536
+_QUEUED = (
+    "SELECT record, request FROM runs "
+    "WHERE json_extract(record, '$.state')='queued' "
+    "ORDER BY sequence LIMIT 1"
+)
 
 
 def now():
@@ -76,6 +85,55 @@ def offset_from(value, kind, identity):
         return decoded[2]
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise Fault("CURSOR_EXPIRED", "invalid cursor or cursor belongs to another query") from None
+
+
+class _Abandoned(Exception):
+    pass
+
+
+def _error_text(exc):
+    if isinstance(exc, OSError):
+        return "workflow attempt could not be prepared"
+    text = "".join(ch for ch in " ".join(str(exc).split()) if not 0xD800 <= ord(ch) <= 0xDFFF)
+    return text[:512] or "workflow attempt could not be prepared"
+
+
+def _public_steps(steps):
+    stored = []
+    for step in steps:
+        item = {
+            "index": step["index"],
+            "id": step.get("id"),
+            "name": step.get("name"),
+            "status": step["status"],
+            "exit_code": step["exit_code"],
+            "stdout": step.get("stdout") or "",
+            "stderr": step.get("stderr") or "",
+            "error": step.get("error"),
+        }
+        for key in ("id", "name"):
+            if item[key] == "":
+                item[key] = None
+        for key in ("stdout", "stderr"):
+            if len(item[key]) > _STEP_TEXT:
+                item[key] = item[key][:_STEP_TEXT]
+        if isinstance(item["error"], str):
+            text = "".join(ch for ch in item["error"] if not 0xD800 <= ord(ch) <= 0xDFFF)[:512]
+            item["error"] = text or None
+        elif item["error"] is not None:
+            item["error"] = None
+        stored.append(item)
+    return stored
+
+
+def _step_failure_message(outcome, image_ok):
+    if not image_ok:
+        return "image digest does not match the accepted pin"
+    for step in outcome["steps"]:
+        if step.get("status") == "failed" and step.get("error"):
+            label = step.get("name") or step.get("id") or f"step {step.get('index')}"
+            return f"{label}: {step['error']}"
+    return "step failed without an exit code"
 
 
 class Worker:
@@ -214,39 +272,185 @@ class Worker:
     def execute_queue(self):
         while not self.stop.is_set():
             with self.guard:
-                row = self.db.execute(
-                    "SELECT record, request FROM runs WHERE json_extract(record, '$.state')='queued' AND json_extract(record, '$.input.kind')='development_fixture' ORDER BY sequence LIMIT 1"
-                ).fetchone()
+                row = self.db.execute(_QUEUED).fetchone()
                 if row:
                     record, request = json.loads(row[0]), json.loads(row[1])
-                    record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
-                    with self.db:
-                        self.save(record)
+                    kind = record["input"]["kind"]
+                    if kind in {"development_fixture", "workflow_job"}:
+                        record.update(
+                            state="running", started_at=now(), attempt_id=str(uuid.uuid4())
+                        )
+                        with self.db:
+                            self.save(record)
+                    else:
+                        self._fail_unclaimed(record)
+                        row = None
             if not row:
                 self.stop.wait(0.02)
                 continue
-            interrupted = self.stop.wait(request["fixture"]["delay_ms"] / 1000)
-            with self.guard, self.db:
-                record = self.get(record["run_id"])
-                if record["state"] in TERMINAL:
-                    continue
-                if interrupted:
-                    record.update(
-                        state="lost",
-                        error={
-                            "kind": "WORKER_INTERRUPTED",
-                            "message": "worker stopped during execution",
-                        },
-                    )
-                else:
-                    code = request["fixture"]["exit_code"]
-                    record.update(state="succeeded" if code == 0 else "failed", exit_code=code)
-                    self.db.execute(
-                        "UPDATE runs SET log=? WHERE id=?",
-                        (request["fixture"]["output"].encode(), record["run_id"]),
-                    )
-                record.update(finished_at=now(), cleanup="confirmed_no_external_resources")
-                self.save(record)
+            if kind == "development_fixture":
+                self._finish_fixture(record, request)
+            else:
+                self._execute_workflow(record, request)
+
+    def _finish_fixture(self, record, request):
+        interrupted = self.stop.wait(request["fixture"]["delay_ms"] / 1000)
+        with self.guard, self.db:
+            record = self.get(record["run_id"])
+            if record["state"] in TERMINAL:
+                return
+            if interrupted:
+                record.update(
+                    state="lost",
+                    error={
+                        "kind": "WORKER_INTERRUPTED",
+                        "message": "worker stopped during execution",
+                    },
+                )
+            else:
+                code = request["fixture"]["exit_code"]
+                record.update(state="succeeded" if code == 0 else "failed", exit_code=code)
+                self.db.execute(
+                    "UPDATE runs SET log=? WHERE id=?",
+                    (request["fixture"]["output"].encode(), record["run_id"]),
+                )
+            record.update(finished_at=now(), cleanup="confirmed_no_external_resources")
+            self.save(record)
+
+    def _fail_unclaimed(self, record):
+        record.update(
+            state="failed",
+            exit_code=None,
+            started_at=now(),
+            finished_at=now(),
+            attempt_id=str(uuid.uuid4()),
+            error={"kind": "SETUP_FAILED", "message": "queued run is not executable"},
+            cleanup="confirmed_no_external_resources",
+        )
+        with self.db:
+            self.save(record)
+
+    def _execute_workflow(self, record, request):
+        workspace = Path(self.state) / "attempts" / record["attempt_id"]
+        try:
+            outcome = self._run_accepted(record, request)
+        except _Abandoned:
+            self._remove_workspace(workspace)
+            return
+        except Exception as exc:
+            message = (
+                _error_text(exc)
+                if isinstance(
+                    exc,
+                    (
+                        RunError,
+                        AttemptError,
+                        VerifyError,
+                        PlanError,
+                        OSError,
+                        UnicodeError,
+                        ValueError,
+                    ),
+                )
+                else "workflow attempt could not be prepared"
+            )
+            self._finish_setup_failure(record["run_id"], message)
+            return
+        self._finish_workflow(record["run_id"], outcome)
+
+    def _run_accepted(self, record, request):
+        pinned = record["input"]
+        event = request["event"]
+        event_digest = hashlib.sha256(canonical(event).encode("ascii")).hexdigest()
+        if event_digest != pinned["event_digest"]:
+            raise RunError("SETUP_FAILED", "event digest does not match the accepted event")
+        image = pinned["image_reference"]
+        if not isinstance(image, str) or not (
+            _IMAGE_ID.fullmatch(image) or _IMAGE_REF.fullmatch(image)
+        ):
+            raise RunError("SETUP_FAILED", "image is not pinned by digest")
+        if "sha256:" + image.rsplit("sha256:", 1)[1] != pinned["image_digest"]:
+            raise RunError("SETUP_FAILED", "image digest does not match the accepted pin")
+        snapshot = Path(self.state) / "snapshots" / pinned["snapshot_id"]
+        manifest = verify_snapshot(snapshot, pinned["digest"])
+        if (
+            manifest.get("workflow") != pinned["workflow"]
+            or manifest.get("workflow_digest") != pinned["workflow_digest"]
+        ):
+            raise RunError("SETUP_FAILED", "snapshot workflow does not match the accepted digest")
+        planned = plan_snapshot(snapshot, pinned["job_id"])
+        if planned["digest"] != pinned["plan_digest"]:
+            raise RunError("SETUP_FAILED", "planned digest does not match the accepted plan")
+        if self._abandoned(record["run_id"]):
+            raise _Abandoned()
+        attempts = Path(self.state) / "attempts"
+        if attempts.is_symlink():
+            raise RunError("SETUP_FAILED", "attempt directory is not accepted")
+        attempts.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(attempts, 0o700)
+        materialize_attempt(snapshot, pinned["digest"], attempts / record["attempt_id"])
+        if self._abandoned(record["run_id"]):
+            raise _Abandoned()
+        return run_job(
+            snapshot,
+            pinned["digest"],
+            attempts / record["attempt_id"],
+            planned["plan"],
+            image,
+            event,
+        )
+
+    def _abandoned(self, run_id):
+        with self.guard:
+            return self.get(run_id)["state"] in TERMINAL
+
+    def _finish_setup_failure(self, run_id, message):
+        with self.guard, self.db:
+            current = self.get(run_id)
+            if current["state"] in TERMINAL:
+                return
+            current.update(
+                state="failed",
+                exit_code=None,
+                finished_at=now(),
+                error={"kind": "SETUP_FAILED", "message": message[:512]},
+                cleanup="confirmed_no_external_resources",
+            )
+            self.save(current)
+
+    def _finish_workflow(self, run_id, outcome):
+        with self.guard, self.db:
+            current = self.get(run_id)
+            if current["state"] in TERMINAL:
+                return
+            steps = _public_steps(outcome["steps"])
+            exit_code = outcome["exit_code"]
+            image_ok = outcome["image_digest"] == current["input"]["image_digest"]
+            if outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
+                current.update(state="succeeded", exit_code=0, error=None, steps=steps)
+            elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
+                current.update(state="failed", exit_code=exit_code, error=None, steps=steps)
+            else:
+                current.update(
+                    state="failed",
+                    exit_code=None,
+                    error={
+                        "kind": "SETUP_FAILED" if not image_ok else "STEP_FAILED",
+                        "message": _step_failure_message(outcome, image_ok)[:512],
+                    },
+                    steps=steps,
+                )
+            current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
+            self.save(current)
+
+    def _remove_workspace(self, workspace):
+        attempts = Path(self.state) / "attempts"
+        try:
+            if workspace.is_symlink() or workspace.parent != attempts or not workspace.is_dir():
+                return
+            shutil.rmtree(workspace)
+        except OSError:
+            return
 
     def submit_workflow(self, p):
         fields(p, ("version", "submission_key", "workflow", "job_id", "event", "image"))
@@ -334,7 +538,7 @@ class Worker:
             },
             "backend": {"name": "workflow", "version": __version__},
             "compatibility_notes": [
-                "Queued one-job workflow. Steps are not executed by this acceptance.",
+                "One sequential run job in a caller-pinned container.",
                 "Expressions, actions, needs, secrets, matrices, and services are not claimed.",
             ],
             "accepted_at": now(),

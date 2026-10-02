@@ -98,7 +98,7 @@ class WorkflowSubmitTests(unittest.TestCase):
         )
 
     def await_state(self, run_id, states):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 20
         record = None
         while time.monotonic() < deadline:
             record = self.rpc("run.get", {"run_id": run_id})
@@ -151,10 +151,15 @@ class WorkflowSubmitTests(unittest.TestCase):
 
     def test_registry_pin_stores_sha256_prefix(self):
         self.write_workflows()
+        blocker = self.submit("hold-registry", delay_ms=3000)
+        self.await_state(blocker["run_id"], {"running"})
         reference = "example.com/runner/app@sha256:" + "ab" * 32
         run = self.rpc("run.submit", self.params(submission_key="wf-ref", image=reference))
         self.assertEqual(run["input"]["image_reference"], reference)
         self.assertEqual(run["input"]["image_digest"], "sha256:" + "ab" * 32)
+        cancelled = self.rpc("run.cancel", {"version": 0, "run_id": run["run_id"]})
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertIsNone(cancelled["attempt_id"])
 
     def test_describe_advertises_workflow_job_only(self):
         described = self.rpc("worker.describe", {})
@@ -192,11 +197,14 @@ class WorkflowSubmitTests(unittest.TestCase):
         conflict = call(self.state, "run.submit", self.params(event={"kind": "other"}))
         self.assert_fault(conflict, "IDEMPOTENCY_CONFLICT")
         self.assertEqual(len(self.rpc("run.list", {})["runs"]), 1)
+        failed = self.await_state(run["run_id"], {"failed"})
+        self.assertIsNone(failed["exit_code"])
+        self.assertEqual(failed["error"]["kind"], "SETUP_FAILED")
+        self.assertEqual(failed["input"], recorded)
         development = self.submit("dev-after")
         self.assertEqual(
             self.await_state(development["run_id"], {"succeeded"})["state"], "succeeded"
         )
-        self.assertEqual(self.rpc("run.get", {"run_id": run["run_id"]})["state"], "queued")
 
     def test_invalid_workflow_creates_no_run(self):
         self.write_workflows()
@@ -232,15 +240,24 @@ class WorkflowSubmitTests(unittest.TestCase):
             )
         runs = self.rpc("run.list", {})["runs"]
         self.assertEqual(len(runs), 1)
-        self.assertEqual(runs[0]["state"], "queued")
         retry = self.rpc("run.submit", params)
         self.assertEqual(retry["run_id"], runs[0]["run_id"])
         self.assertEqual(len(self.rpc("run.list", {})["runs"]), 1)
+        failed = self.await_state(runs[0]["run_id"], {"failed"})
+        self.assertIsNone(failed["exit_code"])
+        self.assertEqual(failed["error"]["kind"], "SETUP_FAILED")
 
     def test_cancel_queued_workflow_does_not_start_it(self):
         self.write_workflows()
+        blocker = self.submit("hold-cancel", delay_ms=3000)
+        self.await_state(blocker["run_id"], {"running"})
         run = self.rpc("run.submit", self.params())
+        self.assertEqual(run["state"], "queued")
         cancelled = self.rpc("run.cancel", {"version": 0, "run_id": run["run_id"]})
         self.assertEqual(cancelled["state"], "cancelled")
         self.assertIsNone(cancelled["exit_code"])
         self.assertIsNone(cancelled["attempt_id"])
+        self.assertEqual(self.await_state(blocker["run_id"], {"succeeded"})["state"], "succeeded")
+        self.assertEqual(self.rpc("run.get", {"run_id": run["run_id"]})["state"], "cancelled")
+        attempts = self.state / "attempts"
+        self.assertEqual([] if not attempts.exists() else list(attempts.iterdir()), [])
