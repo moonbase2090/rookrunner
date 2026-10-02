@@ -5,7 +5,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from execution_core.plan import PlanError, plan_snapshot, plan_workflow
+from execution_core.plan import (
+    DEFAULT_JOB_TIMEOUT_MINUTES,
+    MAX_JOB_TIMEOUT_MINUTES,
+    MAX_WORKFLOW_BYTES,
+    PlanError,
+    plan_snapshot,
+    plan_workflow,
+)
 from execution_core.protocol import canonical
 from execution_core.snapshot import SourceCapture
 
@@ -75,6 +82,7 @@ class PlanTests(unittest.TestCase):
             {"shell": "sh", "working_directory": "app"},
         )
         self.assertEqual(plan["job"]["env"], {"JOB": "job-value"})
+        self.assertEqual(plan["job"]["timeout_minutes"], DEFAULT_JOB_TIMEOUT_MINUTES)
         self.assertEqual([step["index"] for step in plan["job"]["steps"]], [0, 1])
         first_step, second_step = plan["job"]["steps"]
         self.assertEqual(first_step["id"], "one")
@@ -147,6 +155,58 @@ jobs:
                     plan_workflow(workflow.encode(), job_id)
                 self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
                 self.assertIn("no selected job", str(raised.exception))
+
+    def test_step_records_have_no_count_cap(self):
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "schemas/v0/contract.schema.json").read_text()
+        )
+        steps_schema = schema["$defs"]["Run"]["properties"]["steps"]
+        self.assertNotIn("maxItems", steps_schema)
+        count = 300
+        lines = "\n".join(f"      - run: echo {index}" for index in range(count))
+        workflow = f"on: push\njobs:\n  build:\n    steps:\n{lines}\n"
+        planned = plan_workflow(workflow.encode(), "build")
+        self.assertEqual(len(planned["plan"]["job"]["steps"]), count)
+        self.assertLess(len(workflow.encode()), MAX_WORKFLOW_BYTES)
+
+    def test_workflow_file_over_500kb_is_a_capability_error(self):
+        body = b"on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"
+        pad = MAX_WORKFLOW_BYTES - len(body)
+        exact = body + b"#" + b"x" * (pad - 1)
+        self.assertEqual(len(exact), MAX_WORKFLOW_BYTES)
+        planned = plan_workflow(exact, "build")
+        self.assertEqual(len(planned["plan"]["job"]["steps"]), 1)
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(exact + b"\n", "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("500 KB", str(raised.exception))
+        self.assertIn("docs.github.com/en/actions/reference/limits", str(raised.exception))
+
+    def test_job_time_bound_is_timeout_minutes(self):
+        def workflow(minutes):
+            return f"on: push\njobs:\n  build:\n    timeout-minutes: {minutes}\n    steps:\n      - run: echo ok\n"
+
+        short = plan_workflow(workflow(10).encode(), "build")
+        self.assertEqual(short["plan"]["job"]["timeout_minutes"], 10)
+        hosted = plan_workflow(workflow(DEFAULT_JOB_TIMEOUT_MINUTES).encode(), "build")
+        self.assertEqual(hosted["plan"]["job"]["timeout_minutes"], DEFAULT_JOB_TIMEOUT_MINUTES)
+        ceiling = plan_workflow(workflow(MAX_JOB_TIMEOUT_MINUTES).encode(), "build")
+        self.assertEqual(ceiling["plan"]["job"]["timeout_minutes"], MAX_JOB_TIMEOUT_MINUTES)
+        above_hosted = plan_workflow(workflow(DEFAULT_JOB_TIMEOUT_MINUTES + 1).encode(), "build")
+        self.assertEqual(
+            above_hosted["plan"]["job"]["timeout_minutes"],
+            DEFAULT_JOB_TIMEOUT_MINUTES + 1,
+        )
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow(MAX_JOB_TIMEOUT_MINUTES + 1).encode(), "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("5 day", str(raised.exception))
+        self.assertIn("docs.github.com/en/actions/reference/limits", str(raised.exception))
+        for minutes in ("0", "-1", "'30'", "1.5"):
+            with self.subTest(minutes=minutes):
+                with self.assertRaises(PlanError) as raised:
+                    plan_workflow(workflow(minutes).encode(), "build")
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
 
     def test_job_must_be_sequential_run_steps(self):
         cases = [
@@ -266,6 +326,13 @@ jobs:
   test:
     steps:
       - if: ${{ false }}
+        run: echo hi
+""",
+            "jobs.test.steps.0.timeout-minutes": """\
+jobs:
+  test:
+    steps:
+      - timeout-minutes: 1
         run: echo hi
 """,
         }

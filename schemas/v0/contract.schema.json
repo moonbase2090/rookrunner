@@ -698,8 +698,8 @@
           ]
         },
         "steps": {
+          "description": "Stored step records. GitHub documents no per-job step limit. https://docs.github.com/en/actions/reference/limits",
           "type": "array",
-          "maxItems": 256,
           "items": {
             "$ref": "#/$defs/StepResult"
           }

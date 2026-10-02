@@ -40,8 +40,11 @@ also specifies wire and stateful rules:
   digest must match the captured normalized input. A workflow job stores the
   snapshot UUID separately. Its content digests are 64 lowercase hex characters,
   and its `image_digest` is `sha256:` plus 64 hex characters. A finished workflow
-  job may include step records. A setup failure has a null exit code and error
-  kind `SETUP_FAILED`. The schema validates those shapes; it cannot prove input
+  job may include step records. Those records have no count cap. A workflow
+  file larger than 500 KB is rejected at planning
+  (https://docs.github.com/en/actions/reference/limits). A setup failure has a
+  null exit code and error kind `SETUP_FAILED`. The schema validates those
+  shapes; it cannot prove input
   correspondence. Timestamp ordering is checked separately.
 
 The independent validation helper is `tests/schema_support.py`. Worker request

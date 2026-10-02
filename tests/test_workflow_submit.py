@@ -9,6 +9,7 @@ import time
 import unittest
 
 from execution_core.cli import call
+from execution_core.plan import MAX_WORKFLOW_BYTES
 from execution_core.protocol import canonical
 from schema_support import validate_response, validator
 
@@ -221,6 +222,35 @@ class WorkflowSubmitTests(unittest.TestCase):
         for params, kind, code in cases:
             with self.subTest(kind=kind, workflow=params["workflow"], image=params["image"]):
                 self.assert_fault(call(self.state, "run.submit", params), kind, code)
+        self.assertEqual(self.rpc("run.list", {})["runs"], [])
+        snaps = self.state / "snapshots"
+        self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
+
+    def test_workflow_over_file_limit_creates_no_run(self):
+        self.write_workflows()
+        body = b"on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"
+        extra = MAX_WORKFLOW_BYTES + 1 - len(body)
+        path = self.repo / ".github/workflows/large.yml"
+        path.write_bytes(body + b"#" + b"x" * (extra - 1))
+        self.assertGreater(path.stat().st_size, MAX_WORKFLOW_BYTES)
+        self.git("add", ".github/workflows/large.yml")
+        self.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "large",
+        )
+        reply = call(
+            self.state,
+            "run.submit",
+            self.params(workflow=".github/workflows/large.yml", submission_key="large"),
+        )
+        self.assert_fault(reply, "CAPABILITY_UNSUPPORTED", -32000)
+        self.assertIn("500 KB", reply["error"]["message"])
+        self.assertIn("docs.github.com/en/actions/reference/limits", reply["error"]["message"])
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
         snaps = self.state / "snapshots"
         self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])

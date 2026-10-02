@@ -49,6 +49,14 @@ Acceptance criteria:
   feature.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
+- A workflow file larger than 500 KB produces no plan. The error is a
+  capability error and cites that limit. The plan records job
+  `timeout-minutes` as the job time bound, default 360 minutes, and rejects
+  a value above 5 days. Matrix expansion stays unsupported. GitHub's
+  documented limits for this slice are a 500 KB workflow file, 256 matrix
+  jobs per run, and job execution time of 6 hours on hosted runners or 5
+  days on self-hosted runners
+  (https://docs.github.com/en/actions/reference/limits).
 - Tests cover one valid workflow and these rejections without Docker. The
   planner launches no process.
 
@@ -149,7 +157,10 @@ container. It runs the accepted plan with `run_job` and the accepted image
 pin. Success is `succeeded` with exit code 0 and the accepted digests
 unchanged. A nonzero step is `failed` with that exit code. A setup failure
 is `failed`, with a null exit code and error kind `SETUP_FAILED`. Step
-records are stored on the run. Stdout and stderr on those records are capped
+records are stored on the run. A workflow file larger than 500 KB is
+rejected before a run exists. The job time bound recorded on the plan is
+`timeout-minutes` (default 360 minutes). Stopping the container at that
+bound is NS-8. Stdout and stderr on those records are capped
 at 65536 characters, and `run.logs` does not page them yet. Closing the
 client does not stop the worker or the container. A cancel that commits
 while the job is still queued does not start a container. Stopping a running
@@ -178,6 +189,10 @@ Acceptance criteria:
   container output for the fixture, independent of page size.
 
 **NS-8. Enforce a timeout.**
+
+The job time bound is `timeout-minutes` (default 360 minutes). GitHub-hosted
+job execution time is 6 hours and self-hosted job execution time is 5 days
+(https://docs.github.com/en/actions/reference/limits).
 
 Acceptance criteria:
 
