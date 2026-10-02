@@ -79,7 +79,12 @@ after the container is gone. If the container is still present, the run is
 cleanup `unresolved`. A new workflow submission then returns
 `WORKER_NOT_READY` and a queued workflow job is not started. Development
 fixtures still run, and `worker.describe` `ready` stays the scheduler flag.
-That block is in memory. Restart does not remove a leftover container.
+That block is in memory and ends when this process stops. Restart removes a
+container recorded for the attempt, or records the attempt `lost` with
+cleanup `unresolved` and `cancel_requested` false. The same submission key
+returns that run. It is not launched again. A queued workflow can start. A
+new attempt that would reuse the unresolved container name or attempt
+workspace is refused. The container name is not stored on the run record.
 A job matrix stays unsupported; GitHub's matrix
 limit is 256 jobs per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
@@ -178,8 +183,9 @@ Startup root mismatch fails before serving requests. SQLite full errors on proto
 operations produce `STORAGE_FULL`; failed acceptance is rolled back without
 consuming the submission key. Other database errors produce sanitized
 `INTERNAL_ERROR` replies. If the scheduler cannot persist a transition, it stops
-and reports not-ready; restart reconciles any active attempt as lost. Broader
-disk budgets, retention, and external-resource recovery remain M2 work.
+and reports not-ready; restart reconciles any active attempt as lost. A
+killed worker's owned container is removed on restart or left unresolved.
+Broader disk budgets and retention remain later work.
 
 CLI results are JSON-RPC envelopes. Exit zero means the requested protocol
 operation succeeded, including fetching a failed or active run. **A successful

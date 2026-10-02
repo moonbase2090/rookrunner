@@ -7,7 +7,10 @@ subset, version 1 execution of one accepted job, paging of that job's
 step stdout and stderr, the job and step timeout bounds, and caller
 cancellation of a running container are implemented. If that cleanup cannot
 be shown, the run is lost and a new workflow attempt is refused until this
-process restarts. Restart cleanup of a leftover container is not.
+process restarts. Restart removes a container left by a killed worker, or
+records that attempt unresolved and does not run it again. A queued workflow
+can still start. An unresolved attempt blocks reuse of its container or
+workspace identity.
 The rest of this plan is not.
 
 ## Execution path

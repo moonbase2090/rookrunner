@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-9 are
+roadmap step 1 and the first executable subset. NS-1 through NS-10 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -168,8 +168,8 @@ bound. Stdout and stderr on those records are capped
 at 65536 characters. `run.logs` pages the captured step output. Closing the
 client does not stop the worker or the container. A cancel that commits
 while the job is still queued does not start a container. Caller cancellation
-of a running container stops it. Removing a container left by a killed worker
-is still NS-10. Development fixtures are unchanged.
+of a running container stops it. A container left by a killed worker is
+reconciled on restart by NS-10. Development fixtures are unchanged.
 
 Acceptance criteria:
 
@@ -236,7 +236,7 @@ A run that finishes inside the timeout is unchanged. The bound is the
 submitted `timeout-minutes`, or the recorded default of 360 when the
 workflow omits it. Cancelling a queued run still does not start a container.
 Cancelling a running container from `run.cancel` stops it and is specified
-by NS-9. Removing a container left by a killed worker remains NS-10.
+by NS-9. A container left by a killed worker is reconciled on restart by NS-10.
 
 Acceptance criteria:
 
@@ -262,9 +262,10 @@ true, error kind `WORKER_INTERRUPTED`, and cleanup `unresolved`. A new
 workflow attempt is refused with `WORKER_NOT_READY` while that ownership is
 unresolved, and a queued workflow job stays queued. Development fixtures still
 run. `worker.describe` `ready` stays the scheduler flag. The first committed
-terminal state wins against completion. The refusal is in memory. Restart
-still marks a running record `lost` without removing a leftover container;
-that reconciliation is NS-10.
+terminal state wins against completion. The in-process refusal is in memory
+and ends when the process stops. Restart removes a leftover owned container,
+or keeps the attempt unresolved, as NS-10 specifies. That restart does not
+use the in-process refusal to hold queued work.
 
 Acceptance criteria:
 
@@ -277,6 +278,23 @@ Acceptance criteria:
   Development-fixture cancellation still passes its existing tests.
 
 **NS-10. Reconcile a restart without running the attempt twice.**
+
+Status: implemented.
+
+A kill during a workflow attempt leaves the run `running`. Restart marks
+that attempt `lost` and does not launch it again. The same submission key
+returns that run. The container name is recorded beside the attempt, outside
+the workspace and outside the run record, before `docker create`. Restart
+removes only that container. If it is gone, cleanup is
+`confirmed_no_external_resources`. If it is still present, cleanup is
+`unresolved`, `cancel_requested` is false, and the error does not include
+the container name or a host path. A later attempt that would reuse that
+attempt id or container name is refused. Queued workflow runs stay queued
+and can start. They receive a new attempt id and a new container name.
+Development fixtures still become `lost` with confirmed cleanup and no
+container removal. A second worker still cannot take the state directory.
+The in-process refusal from NS-9 still blocks every new workflow attempt
+until that process stops.
 
 Acceptance criteria:
 

@@ -47,8 +47,11 @@ also specifies wire and stateful rules:
   cancellation sets `cancel_requested` true. A lost run may use cleanup
   `unresolved` when caller cancellation could not show that the owned
   container was gone. That record has `cancel_requested` true. A restart
-  still records cleanup `confirmed_no_external_resources` and
-  `cancel_requested` false; it does not remove a leftover container.
+  records `cancel_requested` false. Cleanup is
+  `confirmed_no_external_resources` when no owned container remains,
+  including one that restart removed. Cleanup is `unresolved` when that
+  container is still present. The run record does not include the container
+  name.
   `run.logs` pages the
   job's step stdout and stderr. A setup failure has a
   null exit code and error kind `SETUP_FAILED`. The schema validates those

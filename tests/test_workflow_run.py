@@ -5,6 +5,7 @@ from pathlib import Path
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -154,9 +155,9 @@ class WorkflowRunTests(unittest.TestCase):
                 process.communicate(timeout=5)
         self.processes.clear()
 
-    def start_worker(self, env=None):
+    def start_worker(self, env=None, timeout=5):
         process = self.spawn(env)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 self.fail(process.communicate()[1].decode())
@@ -364,6 +365,15 @@ class WorkflowRunTests(unittest.TestCase):
                 self.fail(f"run finished before its container could be cancelled: {record}")
             time.sleep(0.05)
         self.fail(f"owned container did not appear: {record}")
+
+    def container_names(self):
+        names = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return [line for line in names.stdout.splitlines() if line.startswith("rookrunner-")]
 
     def assert_no_containers(self):
         names = subprocess.run(
@@ -631,3 +641,150 @@ jobs:
         again = self.rpc("run.cancel", {"version": 0, "run_id": submitted["run_id"]})
         self.assertEqual(again, done)
         self.assert_no_containers()
+
+    def test_restart_marks_a_workflow_lost_and_starts_the_queue(self):
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 30
+    steps:
+      - id: sleep
+        run: sleep infinity
+"""
+        )
+        submitted = self.rpc("run.submit", self.params(submission_key="active-workflow"))
+        running = self.await_owned_container(submitted["run_id"])
+        attempt_id = running["attempt_id"]
+        ownership = self.state / "ownership" / attempt_id
+        name = ownership.read_text().strip()
+        self.assertRegex(name, r"^rookrunner-[0-9a-f]{16}$")
+        self.assertEqual(stat.S_IMODE(ownership.stat().st_mode), 0o600)
+        self.assertEqual(self.container_names(), [name])
+        self.assertNotIn(name, json.dumps(running))
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 30
+    steps:
+      - id: show
+        run: echo queued-ok
+"""
+        )
+        queued = self.rpc("run.submit", self.params(submission_key="queued-workflow"))
+        self.assertEqual(queued["state"], "queued")
+        self.worker.kill()
+        self.worker.communicate(timeout=5)
+        self.worker = self.start_worker(timeout=30)
+        lost = self.rpc("run.get", {"run_id": submitted["run_id"]})
+        self.assertEqual(lost["state"], "lost")
+        self.assertIsNone(lost["exit_code"])
+        self.assertFalse(lost["cancel_requested"])
+        self.assertEqual(lost["cleanup"], "confirmed_no_external_resources")
+        self.assertEqual(lost["error"]["kind"], "WORKER_INTERRUPTED")
+        self.assertEqual(lost["attempt_id"], attempt_id)
+        self.assertNotIn(name, json.dumps(lost))
+        self.assertNotIn("/", lost["error"]["message"])
+        self.assertEqual(
+            self.rpc("run.submit", self.params(submission_key="active-workflow"))["run_id"],
+            submitted["run_id"],
+        )
+        self.assertEqual(self.container_names(), [])
+        self.assertFalse(ownership.exists())
+        other = self.spawn()
+        other.communicate(timeout=5)
+        self.assertNotEqual(other.returncode, 0)
+        done = self.await_state(queued["run_id"], {"succeeded", "failed", "cancelled", "lost"})
+        self.assertEqual(done["state"], "succeeded")
+        self.assertEqual(done["exit_code"], 0)
+        self.assertNotEqual(done["attempt_id"], attempt_id)
+        still = self.rpc("run.get", {"run_id": submitted["run_id"]})
+        self.assertEqual(still["state"], "lost")
+        self.assertEqual(still["attempt_id"], attempt_id)
+        self.assert_no_containers()
+
+    def test_unremoved_leftover_blocks_reuse_and_still_starts_the_queue(self):
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 30
+    steps:
+      - id: sleep
+        run: sleep infinity
+"""
+        )
+        submitted = self.rpc("run.submit", self.params(submission_key="keep-workflow"))
+        running = self.await_owned_container(submitted["run_id"])
+        attempt_id = running["attempt_id"]
+        name = (self.state / "ownership" / attempt_id).read_text().strip()
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 30
+    steps:
+      - id: show
+        run: echo queued-ok
+"""
+        )
+        queued = self.rpc("run.submit", self.params(submission_key="queued-after-kill"))
+        self.assertEqual(queued["state"], "queued")
+        self.worker.kill()
+        self.worker.communicate(timeout=5)
+        real = shutil.which("docker")
+        wrapper = self.root / "bin"
+        wrapper.mkdir()
+        script = wrapper / "docker"
+        script.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "rm" ] && [ -n "$ROOKRUNNER_KEEP_CONTAINER" ]; then\n'
+            '  for arg in "$@"; do\n'
+            '    if [ "$arg" = "$ROOKRUNNER_KEEP_CONTAINER" ]; then\n'
+            "      exit 1\n"
+            "    fi\n"
+            "  done\n"
+            "fi\n"
+            f'exec {shlex.quote(real)} "$@"\n'
+        )
+        script.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = str(wrapper) + os.pathsep + env.get("PATH", "")
+        env["ROOKRUNNER_KEEP_CONTAINER"] = name
+        self.worker = self.start_worker(env=env, timeout=30)
+        lost = self.rpc("run.get", {"run_id": submitted["run_id"]})
+        self.assertEqual(lost["state"], "lost")
+        self.assertEqual(lost["cleanup"], "unresolved")
+        self.assertFalse(lost["cancel_requested"])
+        self.assertIsNone(lost["exit_code"])
+        self.assertEqual(lost["error"]["kind"], "WORKER_INTERRUPTED")
+        self.assertEqual(lost["attempt_id"], attempt_id)
+        self.assertNotIn(name, json.dumps(lost))
+        self.assertNotIn("/", lost["error"]["message"])
+        self.assertEqual((self.state / "ownership" / attempt_id).read_text().strip(), name)
+        self.assertIn(name, self.container_names())
+        self.assertEqual(
+            self.rpc("run.submit", self.params(submission_key="keep-workflow"))["run_id"],
+            submitted["run_id"],
+        )
+        self.assertTrue(self.rpc("worker.describe", {})["ready"])
+        done = self.await_state(
+            queued["run_id"], {"succeeded", "failed", "cancelled", "lost"}, timeout=90
+        )
+        self.assertEqual(done["state"], "succeeded")
+        self.assertEqual(done["exit_code"], 0)
+        self.assertNotEqual(done["attempt_id"], attempt_id)
+        self.assertEqual(self.container_names(), [name])
+        still = self.rpc("run.get", {"run_id": submitted["run_id"]})
+        self.assertEqual(still["state"], "lost")
+        self.assertEqual(still["attempt_id"], attempt_id)
+        self.assertEqual(still["cleanup"], "unresolved")

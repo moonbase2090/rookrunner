@@ -8,11 +8,18 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 
 from execution_core.cli import call
 from execution_core.protocol import canonical
-from execution_core.worker import Worker, conflicts_with_unresolved
+from execution_core.run import (
+    ContainerLease,
+    _container_name,
+    owned_container_present,
+    release_owned_container,
+)
+from execution_core.worker import Worker, conflicts_with_unresolved, reuses_unresolved_identity
 from schema_support import validate_response
 
 
@@ -27,6 +34,224 @@ class UnresolvedAttemptTests(unittest.TestCase):
             conflicts_with_unresolved(pending, attempt_id="other", container_name="other")
         )
         self.assertTrue(conflicts_with_unresolved({"attempt-1": None}, container_name=None))
+
+    def test_reuse_is_only_the_same_identity(self):
+        owners = {"attempt-1": "rookrunner-0123456789abcdef"}
+        self.assertFalse(reuses_unresolved_identity({}))
+        self.assertFalse(
+            reuses_unresolved_identity(
+                owners, attempt_id="other", container_name="rookrunner-other"
+            )
+        )
+        self.assertTrue(reuses_unresolved_identity(owners, attempt_id="attempt-1"))
+        self.assertTrue(
+            reuses_unresolved_identity(owners, container_name="rookrunner-0123456789abcdef")
+        )
+
+    def test_container_name_skips_a_retained_name(self):
+        first = b"\x11" * 8
+        second = b"\x22" * 8
+        owner = ContainerLease()
+        owner.blocked_names = frozenset({"rookrunner-" + first.hex()})
+        with patch("execution_core.run.os.urandom", side_effect=[first, second]):
+            self.assertEqual(_container_name(owner), "rookrunner-" + second.hex())
+
+    def test_begin_records_the_name_before_create(self):
+        seen = []
+        lease = ContainerLease()
+        lease.reserve = seen.append
+        self.assertTrue(lease.begin("docker", "rookrunner-0123456789abcdef"))
+        self.assertEqual(seen, ["rookrunner-0123456789abcdef"])
+        self.assertEqual(lease.snapshot()[0], "creating")
+
+    def test_begin_leaves_the_name_unreserved_when_recording_fails(self):
+        lease = ContainerLease()
+
+        def boom(_name):
+            raise OSError("disk")
+
+        lease.reserve = boom
+        with self.assertRaises(OSError):
+            lease.begin("docker", "rookrunner-0123456789abcdef")
+        self.assertEqual(lease.snapshot()[:2], ("idle", None))
+
+    def test_release_rejects_a_foreign_container_name(self):
+        with patch("execution_core.run._stop_container") as stop:
+            self.assertFalse(release_owned_container("other-container"))
+            self.assertFalse(release_owned_container("rookrunner-short"))
+            self.assertFalse(owned_container_present("other-container"))
+            stop.assert_not_called()
+
+
+class RestartReconciliationTests(unittest.TestCase):
+    def test_restart_removes_only_the_recorded_container(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.start()
+            try:
+                fixture = self._insert(worker, "fixture", "development_fixture")
+                bare = self._insert(worker, "bare", "workflow_job")
+                owned = self._insert(worker, "owned", "workflow_job")
+                name = "rookrunner-0123456789abcdef"
+                worker._write_ownership(owned["attempt_id"], name)
+                self.assertEqual(
+                    (state / "ownership" / owned["attempt_id"]).read_text(), name + "\n"
+                )
+            finally:
+                worker.close()
+            with (
+                patch(
+                    "execution_core.worker.release_owned_container", return_value=True
+                ) as release,
+                patch("execution_core.worker.owned_container_present", return_value=True),
+            ):
+                again = Worker(directory, state)
+                again.start()
+            try:
+                release.assert_called_once_with(name)
+                for run_id in (fixture["run_id"], bare["run_id"], owned["run_id"]):
+                    lost = again.get(run_id)
+                    self.assertEqual(lost["state"], "lost")
+                    self.assertIsNone(lost["exit_code"])
+                    self.assertFalse(lost["cancel_requested"])
+                    self.assertEqual(lost["cleanup"], "confirmed_no_external_resources")
+                    self.assertEqual(lost["error"]["message"], "worker stopped during execution")
+                    self.assertNotIn(name, json.dumps(lost))
+                self.assertFalse((state / "ownership" / owned["attempt_id"]).exists())
+                self.assertEqual(again.retained, {})
+                self.assertFalse(again.unresolved)
+            finally:
+                again.close()
+
+    def test_restart_keeps_an_unremoved_container_and_blocks_its_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.start()
+            try:
+                owned = self._insert(worker, "owned", "workflow_job")
+                name = "rookrunner-fedcba9876543210"
+                worker._write_ownership(owned["attempt_id"], name)
+            finally:
+                worker.close()
+            with patch(
+                "execution_core.worker.release_owned_container", return_value=False
+            ) as release:
+                again = Worker(directory, state)
+                again.start()
+            try:
+                release.assert_called_once_with(name)
+                lost = again.get(owned["run_id"])
+                self.assertEqual(lost["state"], "lost")
+                self.assertEqual(lost["cleanup"], "unresolved")
+                self.assertFalse(lost["cancel_requested"])
+                self.assertEqual(lost["error"]["kind"], "WORKER_INTERRUPTED")
+                self.assertNotIn(name, json.dumps(lost))
+                self.assertNotIn("/", lost["error"]["message"])
+                self.assertEqual(again.retained[owned["attempt_id"]], name)
+                self.assertFalse(again.unresolved)
+                self.assertTrue(
+                    reuses_unresolved_identity(again.retained, attempt_id=owned["attempt_id"])
+                )
+                self.assertTrue(reuses_unresolved_identity(again.retained, container_name=name))
+                self.assertFalse(
+                    reuses_unresolved_identity(
+                        again.retained,
+                        attempt_id="other",
+                        container_name="rookrunner-0000000000000000",
+                    )
+                )
+                reused = self._insert(again, "reused", "workflow_job")
+                reused["attempt_id"] = owned["attempt_id"]
+                with again.guard, again.db:
+                    again.save(reused)
+                lease = ContainerLease()
+                again.live[reused["run_id"]] = lease
+                with patch.object(again, "_run_accepted", side_effect=AssertionError("launched")):
+                    again._execute_workflow(reused, {}, lease)
+                refused = again.get(reused["run_id"])
+                self.assertEqual(refused["state"], "lost")
+                self.assertEqual(refused["cleanup"], "unresolved")
+                self.assertFalse(refused["cancel_requested"])
+                self.assertNotIn(name, json.dumps(refused))
+                self.assertEqual(again.get(owned["run_id"])["state"], "lost")
+                self.assertEqual(
+                    (state / "ownership" / owned["attempt_id"]).read_text(), name + "\n"
+                )
+            finally:
+                again.close()
+            with (
+                patch("execution_core.worker.release_owned_container") as release,
+                patch("execution_core.worker.owned_container_present", return_value=False),
+            ):
+                third = Worker(directory, state)
+                third.start()
+            try:
+                release.assert_not_called()
+                self.assertEqual(third.retained, {})
+                self.assertFalse((state / "ownership" / owned["attempt_id"]).exists())
+                stored = third.get(owned["run_id"])
+                self.assertEqual(stored["state"], "lost")
+                self.assertEqual(stored["cleanup"], "unresolved")
+            finally:
+                third.close()
+
+    def test_invalid_ownership_is_not_a_container_to_remove(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.start()
+            try:
+                owned = self._insert(worker, "owned", "workflow_job")
+                directory_path = state / "ownership"
+                directory_path.mkdir(mode=0o700)
+                outside = Path(directory) / "outside"
+                outside.write_text("rookrunner-0123456789abcdef\n")
+                link = directory_path / owned["attempt_id"]
+                link.symlink_to(outside)
+            finally:
+                worker.close()
+            with patch("execution_core.worker.release_owned_container") as release:
+                again = Worker(directory, state)
+                again.start()
+            try:
+                release.assert_not_called()
+                lost = again.get(owned["run_id"])
+                self.assertEqual(lost["cleanup"], "unresolved")
+                self.assertFalse(lost["cancel_requested"])
+                self.assertIsNone(again.retained[owned["attempt_id"]])
+                self.assertEqual(outside.read_text(), "rookrunner-0123456789abcdef\n")
+                self.assertTrue(link.is_symlink())
+            finally:
+                again.close()
+
+    def _insert(self, worker, key, kind):
+        attempt_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        record = {
+            "run_id": run_id,
+            "worker_id": worker.worker_id,
+            "submission_key": key,
+            "state": "running",
+            "exit_code": None,
+            "input": {"kind": kind},
+            "backend": {"name": "workflow", "version": "0.0.1"},
+            "compatibility_notes": [],
+            "accepted_at": "2026-10-02T00:00:00.000000+00:00",
+            "started_at": "2026-10-02T00:00:00.000001+00:00",
+            "finished_at": None,
+            "attempt_id": attempt_id,
+            "cancel_requested": False,
+            "error": None,
+            "cleanup": "not_started",
+        }
+        with worker.guard, worker.db:
+            worker.db.execute(
+                "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+                (run_id, key, "{}", canonical(record), b""),
+            )
+        return record
 
 
 class FailureTests(unittest.TestCase):
