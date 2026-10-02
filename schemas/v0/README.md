@@ -1,8 +1,9 @@
 # Development execution contract v0
 
-`contract.schema.json` is the machine-readable contract for the M1 development
-backend. It uses JSON Schema draft 2020-12. Its default root validates a supported
-request. All references are local; validation requires no schema downloads.
+`contract.schema.json` is the machine-readable contract for version 0 development
+fixtures and version 1 workflow acceptance. It uses JSON Schema draft 2020-12.
+Its default root validates a supported request. All references are local;
+validation requires no schema downloads.
 
 Select another entry by replacing the root `$ref`:
 

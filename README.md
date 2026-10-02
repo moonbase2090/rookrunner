@@ -2,9 +2,9 @@
 
 A local tool, worker agent, and execution protocol for software builds and tests.
 
-**Status:** M1 complete; M2 started. The worker runs synthetic development fixtures,
-and a new local command captures repository inputs. Real workflow execution is
-not implemented yet.
+**Status:** M1 complete; M2 started. The worker runs synthetic development fixtures
+and can accept one captured workflow job onto the queue. It does not execute
+that job yet.
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection

@@ -102,7 +102,9 @@ Implemented:
   directory. It does not submit a run or execute a workflow.
 - A planner reads one selected job of sequential `run` steps. Snapshot
   verification and attempt materialization rebuild a private workspace from
-  a captured digest. Nothing in that workspace is executed.
+  a captured digest.
+- Version 1 `run.submit` accepts that job only after capture, verification,
+  and planning. The run stays queued. Nothing in the workspace is executed.
 - `run.artifacts` is rejected. There is no doctor command, MCP adapter,
   dashboard, packaging, or container supervisor.
 - Push and pull request checks run ruff and the unit test suite.
@@ -120,7 +122,7 @@ Milestones are outcome gates, not dates. Detail and exit evidence are in the
 | --- | --- | --- |
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
-| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, and attempt materialization are implemented. Container execution and workflow submission are not. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, and version 1 workflow acceptance are implemented. Accepted workflow jobs stay queued. Container execution is not. |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
 | M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
 
@@ -159,16 +161,16 @@ demonstrates. It is not a waiver.
 | --- | --- | --- | --- |
 | P01 | Install outside the development checkout | Release archive works in a clean supported environment; uninstall instructions exist | Not started. Invocation is `PYTHONPATH=src python3 -m execution_core`. |
 | P02 | Diagnose readiness | Doctor reports versions, supported backend, repository root, Docker access, and actionable missing prerequisites | Development `worker.describe` reports synthetic-backend readiness only. No doctor command. |
-| P03 | Persist accepted submissions | Client disconnect after submission does not discard the run; retry does not create duplicate work | Met for development fixtures, including across restart. Not met for workflow submission. |
-| P04 | Execute captured source | Editing the original checkout after acceptance leaves the run's input digest unchanged | Capture stores an independent copy and digest. Verification accepts only a matching snapshot, and materialization copies it into a new private workspace. Nothing executes that copy. A development run's digest identifies fixture JSON, not repository source. |
+| P03 | Persist accepted submissions | Client disconnect after submission does not discard the run; retry does not create duplicate work | Met for development fixtures, including across restart. Met for an accepted workflow job, including a disconnect before the reply. A changed input under the same key conflicts and does not create a second run. |
+| P04 | Execute captured source | Editing the original checkout after acceptance leaves the run's input digest unchanged | Capture stores an independent copy and digest. Verification accepts only a matching snapshot, and materialization copies it into a new private workspace. An accepted workflow job keeps that snapshot id and its manifest, workflow, plan, and image digests after the checkout changes. Nothing executes that copy. A development run's digest identifies fixture JSON, not repository source. |
 | P05 | Report truthful outcomes | Success requires backend exit zero; backend errors, cancellation, and interrupted execution remain distinguishable | Met for synthetic fixtures: `succeeded` requires exit 0; failed, cancelled, and lost stay distinct. No workflow backend exists. |
 | P06 | Bound output consumption | Clients page logs by cursor; large output does not require loading the entire log | Met for development logs. Pages are 1–65536 bytes. |
 | P07 | Cancel owned execution | Cancellation stops backend processes and owned containers, then records confirmed cleanup or an unresolved outcome | Development fixtures own no processes or containers. Their cancellation is recorded. Container cleanup is not implemented. |
 | P08 | Recover after restart | Accepted queued work remains discoverable; interrupted work cannot silently become successful or execute twice | Met for the development backend. Queued fixtures remain; an active fixture becomes `lost` and is not retried. |
-| P09 | Explain compatibility | Unsupported requested features produce explicit capability errors or recorded limitations before execution | The planner rejects unsupported workflow fields by name before a plan exists. Workflow submission is still refused. Development command, secret, and artifact requests are rejected. |
+| P09 | Explain compatibility | Unsupported requested features produce explicit capability errors or recorded limitations before execution | The planner rejects unsupported workflow fields by name before a plan exists. Version 1 submission of those fields creates no run. `worker.describe` advertises `workflow.job` and does not advertise actions, needs, secrets, matrices, or services. Development command, secret, and artifact requests are rejected. |
 | P10 | Protect local access | Other OS users cannot submit through the socket; secrets are excluded from automatic source capture | State directory mode 0700 and socket mode 0600 are tested. Capture excludes known credential paths and ignores an explicit include of those paths. This is not universal secret detection. |
 | P11 | Serve agents and humans consistently | CLI and MCP observe the same run identifiers, states, logs, and errors | CLI JSON only. MCP is not implemented. |
-| P12 | Preserve execution evidence | Result identifies source/workflow digests, engine version, image identity, timing, and exit status | A development result identifies the fixture digest, backend name and version `0.0.1`, timestamps, and exit status. It has no workflow digest or image identity. |
+| P12 | Preserve execution evidence | Result identifies source/workflow digests, engine version, image identity, timing, and exit status | A development result identifies the fixture digest, backend name and version `0.0.1`, timestamps, and exit status. An accepted workflow job also records snapshot, manifest, workflow, plan, and image digests. It has not executed, so it has no exit status. |
 
 The initial release supports trusted repositories owned by the local user.
 Docker access and workflow execution are powerful capabilities. Local mode is

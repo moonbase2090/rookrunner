@@ -1,7 +1,9 @@
-"""Single-user Unix worker with durable deterministic development runs.
+"""Single-user Unix worker.
 
-The development backend interprets bounded fixture data. It never launches
-commands, reads a workflow, or claims to have captured repository source.
+Version 0 submits a synthetic development fixture. It never launches commands
+or reads a workflow. Version 1 captures the repository, verifies that
+snapshot, plans one selected job, and commits a queued run. It does not start
+a container.
 """
 
 import base64
@@ -10,6 +12,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import signal
 import socket
 import sqlite3
@@ -19,6 +23,7 @@ import uuid
 from datetime import datetime, timezone
 
 from . import __version__
+from .plan import PlanError, plan_snapshot
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -40,6 +45,11 @@ from .protocol import (
     utf8_string,
     valid_id,
 )
+from .snapshot import CaptureError, SourceCapture
+from .verify import VerifyError, verify_snapshot
+
+_IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 
 
 def now():
@@ -205,7 +215,7 @@ class Worker:
         while not self.stop.is_set():
             with self.guard:
                 row = self.db.execute(
-                    "SELECT record, request FROM runs WHERE json_extract(record, '$.state')='queued' ORDER BY sequence LIMIT 1"
+                    "SELECT record, request FROM runs WHERE json_extract(record, '$.state')='queued' AND json_extract(record, '$.input.kind')='development_fixture' ORDER BY sequence LIMIT 1"
                 ).fetchone()
                 if row:
                     record, request = json.loads(row[0]), json.loads(row[1])
@@ -238,18 +248,153 @@ class Worker:
                 record.update(finished_at=now(), cleanup="confirmed_no_external_resources")
                 self.save(record)
 
+    def submit_workflow(self, p):
+        fields(p, ("version", "submission_key", "workflow", "job_id", "event", "image"))
+        key = p["submission_key"]
+        if not utf8_string(key, 1, 128):
+            invalid("submission_key must be a UTF-8 string of 1 to 128 characters")
+        if not utf8_string(p["workflow"], 1, 1024) or not utf8_string(p["job_id"], 1, 128):
+            invalid("workflow and job_id must be UTF-8 strings within their limits")
+        if not isinstance(p["image"], str) or not (
+            _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
+        ):
+            invalid("image is not pinned by digest")
+        try:
+            event_text = canonical(p["event"])
+        except (TypeError, ValueError, UnicodeError):
+            invalid("event input is not accepted")
+        normalized = canonical(
+            {
+                "version": 1,
+                "workflow": p["workflow"],
+                "job_id": p["job_id"],
+                "event": p["event"],
+                "image": p["image"],
+            }
+        )
+        existing = self.db.execute(
+            "SELECT request, record FROM runs WHERE submission_key=?", (key,)
+        ).fetchone()
+        if existing:
+            if existing[0] != normalized:
+                raise Fault(
+                    "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
+                )
+            return json.loads(existing[1])
+        if self.stop.is_set() or self.execution_error is not None:
+            raise Fault(
+                "WORKER_NOT_READY",
+                "worker cannot accept new execution; inspect worker.describe",
+            )
+        queued = self.db.execute(
+            "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
+        ).fetchone()[0]
+        if queued >= MAX_QUEUE:
+            raise Fault("QUEUE_FULL", "queued run limit reached")
+        try:
+            captured = SourceCapture(self.repository, self.state).capture(p["workflow"])
+        except CaptureError as exc:
+            self._capture_fault(exc)
+        snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+        try:
+            manifest = verify_snapshot(snapshot, captured["digest"])
+            planned = plan_snapshot(snapshot, p["job_id"])
+        except VerifyError as exc:
+            self._drop_snapshot(captured["snapshot_id"])
+            raise Fault("INTERNAL_ERROR", "captured snapshot failed verification") from exc
+        except PlanError as exc:
+            self._drop_snapshot(captured["snapshot_id"])
+            kind = (
+                "CAPABILITY_UNSUPPORTED"
+                if exc.kind == "CAPABILITY_UNSUPPORTED"
+                else "INVALID_PARAMS"
+            )
+            raise Fault(kind, str(exc)[:512]) from exc
+        except (OSError, UnicodeError, ValueError) as exc:
+            self._drop_snapshot(captured["snapshot_id"])
+            raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
+        image_digest = p["image"].rsplit("sha256:", 1)[1]
+        record = {
+            "run_id": str(uuid.uuid4()),
+            "worker_id": self.worker_id,
+            "submission_key": key,
+            "state": "queued",
+            "exit_code": None,
+            "input": {
+                "kind": "workflow_job",
+                "digest": captured["digest"],
+                "snapshot_id": captured["snapshot_id"],
+                "workflow": manifest["workflow"],
+                "workflow_digest": captured["workflow_digest"],
+                "plan_digest": planned["digest"],
+                "job_id": p["job_id"],
+                "event_digest": hashlib.sha256(event_text.encode("ascii")).hexdigest(),
+                "image_digest": image_digest,
+                "image_reference": p["image"],
+            },
+            "backend": {"name": "workflow", "version": __version__},
+            "compatibility_notes": [
+                "Queued one-job workflow. Steps are not executed by this acceptance.",
+                "Expressions, actions, needs, secrets, matrices, and services are not claimed.",
+            ],
+            "accepted_at": now(),
+            "started_at": None,
+            "finished_at": None,
+            "attempt_id": None,
+            "cancel_requested": False,
+            "error": None,
+            "cleanup": "not_started",
+        }
+        try:
+            with self.db:
+                self.db.execute(
+                    "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+                    (record["run_id"], key, normalized, canonical(record), b""),
+                )
+        except sqlite3.IntegrityError:
+            self._drop_snapshot(captured["snapshot_id"])
+            existing = self.db.execute(
+                "SELECT request, record FROM runs WHERE submission_key=?", (key,)
+            ).fetchone()
+            if existing and existing[0] == normalized:
+                return json.loads(existing[1])
+            raise Fault(
+                "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
+            ) from None
+        return record
+
+    @staticmethod
+    def _capture_fault(exc):
+        message = str(exc)[:512]
+        if exc.kind == "CAPABILITY_UNSUPPORTED":
+            raise Fault("CAPABILITY_UNSUPPORTED", message) from exc
+        if exc.kind == "SOURCE_UNSTABLE":
+            raise Fault("SOURCE_UNSTABLE", message) from exc
+        raise Fault("INVALID_PARAMS", message) from exc
+
+    def _drop_snapshot(self, snapshot_id):
+        target = Path(self.state) / "snapshots" / snapshot_id
+        if target.is_symlink() or not target.is_dir():
+            return
+        shutil.rmtree(target)
+
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
             return {
-                "protocol_versions": [0],
+                "protocol_versions": [0, 1],
                 "worker_id": self.worker_id,
                 "repository": self.repository,
                 "version": __version__,
                 "ready": not self.stop.is_set() and self.execution_error is None,
                 "readiness_error": self.execution_error,
                 "methods": METHODS,
-                "capabilities": ["development.fixture", "run.cancel", "run.logs"],
+                "capabilities": [
+                    "development.fixture",
+                    "run.cancel",
+                    "run.logs",
+                    "workflow.job",
+                ],
                 "limits": {
                     "message_bytes": MAX_MESSAGE,
                     "log_page_bytes": MAX_LOG_PAGE,
@@ -265,6 +410,8 @@ class Worker:
                 "retention": "runs and submission keys retained indefinitely; pruning unsupported",
             }
         if method == "run.submit":
+            if isinstance(p, dict) and is_integer(p.get("version")) and int(p["version"]) == 1:
+                return self.submit_workflow(p)
             fields(p, ("version", "submission_key", "backend", "fixture"))
             self.version(p)
             if p["backend"] != "development":

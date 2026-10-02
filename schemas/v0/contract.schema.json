@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Local development execution contract v0",
-  "description": "M1 development backend only. Select a $defs entry for requests, per-method responses, or durable run records. Transport and stateful rules are in docs/design/development-contract.md.",
+  "description": "Version 0 is the development fixture contract. Version 1 accepts one workflow job and leaves it queued. Select a $defs entry for requests, per-method responses, or durable run records. Transport and stateful rules are in docs/design/development-contract.md.",
   "$ref": "#/$defs/Request",
   "$defs": {
     "RequestId": {
@@ -119,32 +119,79 @@
           "const": "run.submit"
         },
         "params": {
-          "type": "object",
-          "properties": {
-            "version": {
-              "type": "integer",
-              "const": 0
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "const": 0
+                },
+                "submission_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\ud800-\\udfff]*$",
+                  "maxLength": 128
+                },
+                "backend": {
+                  "const": "development"
+                },
+                "fixture": {
+                  "$ref": "#/$defs/Fixture"
+                }
+              },
+              "required": [
+                "version",
+                "submission_key",
+                "backend",
+                "fixture"
+              ],
+              "additionalProperties": false
             },
-            "submission_key": {
-              "type": "string",
-              "minLength": 1,
-              "pattern": "^[^\\ud800-\\udfff]*$",
-              "maxLength": 128
-            },
-            "backend": {
-              "const": "development"
-            },
-            "fixture": {
-              "$ref": "#/$defs/Fixture"
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "const": 1
+                },
+                "submission_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\ud800-\\udfff]*$",
+                  "maxLength": 128
+                },
+                "workflow": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                "job_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                "event": true,
+                "image": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                }
+              },
+              "required": [
+                "version",
+                "submission_key",
+                "workflow",
+                "job_id",
+                "event",
+                "image"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "version",
-            "submission_key",
-            "backend",
-            "fixture"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
@@ -374,30 +421,94 @@
           ]
         },
         "input": {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "const": "development_fixture"
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "development_fixture"
+                },
+                "digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "snapshot_id": {
+                  "$ref": "#/$defs/Digest"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "snapshot_id"
+              ],
+              "additionalProperties": false
             },
-            "digest": {
-              "$ref": "#/$defs/Digest"
-            },
-            "snapshot_id": {
-              "$ref": "#/$defs/Digest"
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "workflow_job"
+                },
+                "digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "snapshot_id": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "workflow": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                "workflow_digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "plan_digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "job_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                "event_digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "image_digest": {
+                  "$ref": "#/$defs/Digest"
+                },
+                "image_reference": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                }
+              },
+              "required": [
+                "kind",
+                "digest",
+                "snapshot_id",
+                "workflow",
+                "workflow_digest",
+                "plan_digest",
+                "job_id",
+                "event_digest",
+                "image_digest",
+                "image_reference"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "kind",
-            "digest",
-            "snapshot_id"
-          ],
-          "additionalProperties": false
+          ]
         },
         "backend": {
           "type": "object",
           "properties": {
             "name": {
-              "const": "development"
+              "enum": [
+                "development",
+                "workflow"
+              ]
             },
             "version": {
               "type": "string",
@@ -757,7 +868,8 @@
       "properties": {
         "protocol_versions": {
           "const": [
-            0
+            0,
+            1
           ]
         },
         "worker_id": {
@@ -804,7 +916,8 @@
           "const": [
             "development.fixture",
             "run.cancel",
-            "run.logs"
+            "run.logs",
+            "workflow.job"
           ]
         },
         "limits": {
@@ -1139,7 +1252,8 @@
                     "CURSOR_EXPIRED",
                     "IDEMPOTENCY_CONFLICT",
                     "WORKER_NOT_READY",
-                    "STORAGE_FULL"
+                    "STORAGE_FULL",
+                    "SOURCE_UNSTABLE"
                   ]
                 },
                 "retryable": {

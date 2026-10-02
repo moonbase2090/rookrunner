@@ -37,6 +37,20 @@ def validate_response(method, reply):
     runs = result["runs"] if method == "run.list" else [result] if "run_id" in result else []
     for run in runs:
         # Cross-field invariants cannot be expressed by portable JSON Schema.
-        assert run["input"]["snapshot_id"] == run["input"]["digest"]
+        kind = run["input"]["kind"]
+        if kind == "development_fixture":
+            assert run["input"]["snapshot_id"] == run["input"]["digest"]
+        elif kind == "workflow_job":
+            assert run["input"]["snapshot_id"] != run["input"]["digest"]
+            for name in (
+                "digest",
+                "workflow_digest",
+                "plan_digest",
+                "event_digest",
+                "image_digest",
+            ):
+                assert len(run["input"][name]) == 64
+        else:
+            raise AssertionError(kind)
         times = [run[field] for field in ("accepted_at", "started_at", "finished_at") if run[field]]
         assert times == sorted(times)
