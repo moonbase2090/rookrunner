@@ -3,7 +3,8 @@
 Status: owned-engine direction accepted in [decision 0003](../decisions/0003-owned-execution-engine.md).
 The component decomposition and sequence below are proposed implementation details.
 Parsing, snapshot verification, attempt materialization, and the first Bash
-subset are implemented. The rest of this plan is not.
+subset are implemented. Version 1 acceptance queues one planned job and does
+not execute it. The rest of this plan is not.
 
 ## Execution path
 

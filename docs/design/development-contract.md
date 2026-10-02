@@ -44,8 +44,14 @@ repository lock. The repository must exist but need not yet be a Git checkout.
 | `run.cancel` | `version: 0`, `run_id` | none |
 
 `run.artifacts` and `artifact.read` return `CAPABILITY_UNSUPPORTED`.
-Unknown methods return `METHOD_NOT_FOUND`. Workflow, command, secret, and source
-selection parameters are unsupported and rejected.
+Unknown methods return `METHOD_NOT_FOUND`. On version 0, workflow, command,
+secret, and source selection parameters are unsupported and rejected.
+
+Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, `event`,
+and an image pinned by digest. It captures and plans one sequential `run` job,
+then stores a queued run. The stored image digest keeps the `sha256:` prefix.
+It does not execute steps. Unsupported workflow
+fields and invalid YAML create no run. Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,
 repository, version, readiness, and limits. A scheduler failure makes `ready=false`

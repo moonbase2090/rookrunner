@@ -3,16 +3,17 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1, NS-2, NS-3, and NS-4
-are implemented. Later items are not. Continuous integration runs ruff and the
-unit test suite on push and pull request. This file is not Waypoint status
-and not an acceptance of open PRD questions.
+roadmap step 1 and the first executable subset. NS-1, NS-2, NS-3, NS-4, and
+NS-5 are implemented. Later items are not. Continuous integration runs ruff
+and the unit test suite on push and pull request. This file is not Waypoint
+status and not an acceptance of open PRD questions.
 
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. The PRD leaves
 sanitized Git metadata undesigned, so those workflows stay unsupported until
 a later item. The act pin stays historical. Development `run.submit` stays
-version 0 and fixture-only until a workflow version is added beside it.
+version 0 and fixture-only. Version 1 accepts one planned job onto the queue
+and does not execute it.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -112,6 +113,17 @@ Acceptance criteria:
   container. Host credentials are not mounted.
 
 **NS-5. Accept a workflow run only after capture and planning succeed.**
+
+Status: implemented.
+
+Version 1 `run.submit` captures, verifies, and plans one job, then commits a
+queued run bound to the snapshot id and the manifest, workflow, plan, and
+image digests. The image digest keeps the `sha256:` prefix recorded by
+`run_job`. The same key and normalized input return that run. A changed
+input conflicts. Invalid YAML, an unsupported field, and an unpinned image
+create no run. The queued job is not executed. Version 0 development
+submission is unchanged. `worker.describe` advertises `workflow.job` and does
+not advertise actions, needs, secrets, matrices, or services.
 
 Acceptance criteria:
 

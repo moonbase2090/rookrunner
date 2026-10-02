@@ -1,8 +1,9 @@
 # Development execution contract v0
 
-`contract.schema.json` is the machine-readable contract for the M1 development
-backend. It uses JSON Schema draft 2020-12. Its default root validates a supported
-request. All references are local; validation requires no schema downloads.
+`contract.schema.json` is the machine-readable contract for version 0 development
+fixtures and version 1 workflow acceptance. It uses JSON Schema draft 2020-12.
+Its default root validates a supported request. All references are local;
+validation requires no schema downloads.
 
 Select another entry by replacing the root `$ref`:
 
@@ -35,9 +36,12 @@ also specifies wire and stateful rules:
   Accepted fixture numeric fields normalize to integer values before hashing.
 - Validate cursor ownership, offsets, current queue capacity, idempotency, and
   worker readiness against live state. These are not schema-only properties.
-- A run's `input.snapshot_id` equals its `input.digest`, and the digest must match
-  the captured normalized development input. The schema validates digest shape;
-  it cannot prove input correspondence. Timestamp ordering is checked separately.
+- For a development fixture, `input.snapshot_id` equals `input.digest`, and that
+  digest must match the captured normalized input. A workflow job stores the
+  snapshot UUID separately. Its content digests are 64 lowercase hex characters,
+  and its `image_digest` is `sha256:` plus 64 hex characters. The schema validates
+  those shapes; it cannot prove input correspondence. Timestamp ordering is
+  checked separately.
 
 The independent validation helper is `tests/schema_support.py`. Worker request
 validation uses standard-library code; tests compare its behavior and actual
