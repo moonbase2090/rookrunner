@@ -18,8 +18,20 @@ from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 from .protocol import canonical
 
 CAPABILITY_VERSION = 1
-MAX_WORKFLOW_BYTES = 64 * 1024 * 1024
+# https://docs.github.com/en/actions/reference/limits
+GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
+# Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
+# not start a run. GitHub documents no per-job step limit.
+# https://docs.github.com/en/actions/reference/limits
+MAX_WORKFLOW_BYTES = 500 * 1024
 MAX_DEPTH = 64
+# Job time bound is jobs.<job_id>.timeout-minutes. The default is 360 minutes,
+# which is also the 6 hour GitHub-hosted job execution time. Self-hosted job
+# execution time is 5 days, and that is the ceiling accepted here because this
+# engine runs the job. Stopping the container at the bound is later work.
+# https://docs.github.com/en/actions/reference/limits
+DEFAULT_JOB_TIMEOUT_MINUTES = 360
+MAX_JOB_TIMEOUT_MINUTES = 5 * 24 * 60
 STR_TAG = "tag:yaml.org,2002:str"
 BOOL_TAG = "tag:yaml.org,2002:bool"
 MERGE_TAG = "tag:yaml.org,2002:merge"
@@ -31,6 +43,9 @@ SCALAR_TAGS = {
     "tag:yaml.org,2002:null",
 }
 # These names change execution or hide work. Reject them wherever they appear.
+# `strategy` and `matrix` stay unsupported. GitHub's job matrix limit is 256
+# jobs per workflow run, on GitHub-hosted and self-hosted runners.
+# https://docs.github.com/en/actions/reference/limits
 FORBIDDEN = {
     "uses",
     "needs",
@@ -43,7 +58,7 @@ FORBIDDEN = {
     "workflow_call",
 }
 WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
-JOB_KEYS = {"name", "runs-on", "steps", "defaults", "env"}
+JOB_KEYS = {"name", "runs-on", "steps", "defaults", "env", "timeout-minutes"}
 STEP_KEYS = {"id", "name", "run", "shell", "working-directory", "env"}
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
@@ -139,6 +154,7 @@ class _Planner:
                 "runs_on": self._runs_on(job_body, job_field),
                 "defaults": self._defaults(job_body, job_field),
                 "env": self._env(job_body, job_field),
+                "timeout_minutes": self._timeout_minutes(job_body, job_field),
                 "steps": steps,
             },
         }
@@ -149,7 +165,11 @@ class _Planner:
         if not isinstance(workflow, (bytes, bytearray)):
             _invalid("workflow must be bytes")
         if len(workflow) > MAX_WORKFLOW_BYTES:
-            _invalid(f"workflow exceeds {MAX_WORKFLOW_BYTES} bytes")
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"workflow file exceeds 500 KB per file ({GITHUB_ACTIONS_LIMITS})",
+                "workflow",
+            )
         try:
             text = bytes(workflow).decode("utf-8")
         except UnicodeError:
@@ -278,6 +298,31 @@ class _Planner:
                 values.append(self._string_scalar(child, _join(path, index)))
             return values
         return self._string_scalar(node, path)
+
+    def _timeout_minutes(self, items, field):
+        """Record the job time bound. An omitted value is the 360 minute default."""
+
+        if "timeout-minutes" not in items:
+            return DEFAULT_JOB_TIMEOUT_MINUTES
+        path = _join(field, "timeout-minutes")
+        node = items["timeout-minutes"][1]
+        self._enter(node, path)
+        if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:int":
+            _invalid(f"{path} must be a positive integer number of minutes", path)
+        try:
+            value = self.constructor.construct_object(node, deep=False)
+        except yaml.YAMLError:
+            _invalid(f"{path} must be a positive integer number of minutes", path)
+        if type(value) is not int or value < 1:
+            _invalid(f"{path} must be a positive integer number of minutes", path)
+        if value > MAX_JOB_TIMEOUT_MINUTES:
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"{path} is above the 5 day self-hosted job execution time "
+                f"({GITHUB_ACTIONS_LIMITS})",
+                path,
+            )
+        return value
 
     def _steps(self, items, field):
         if "steps" not in items:

@@ -3,17 +3,17 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1, NS-2, NS-3, NS-4, and
-NS-5 are implemented. Later items are not. Continuous integration runs ruff
-and the unit test suite on push and pull request. This file is not Waypoint
-status and not an acceptance of open PRD questions.
+roadmap step 1 and the first executable subset. NS-1 through NS-6 are
+implemented. Later items are not. Continuous integration runs ruff and the
+unit test suite on push and pull request. This file is not Waypoint status
+and not an acceptance of open PRD questions.
 
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. The PRD leaves
 sanitized Git metadata undesigned, so those workflows stay unsupported until
 a later item. The act pin stays historical. Development `run.submit` stays
-version 0 and fixture-only. Version 1 accepts one planned job onto the queue
-and does not execute it.
+version 0 and fixture-only. Version 1 accepts one planned job and the worker
+executes it.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -49,6 +49,14 @@ Acceptance criteria:
   feature.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
+- A workflow file larger than 500 KB produces no plan. The error is a
+  capability error and cites that limit. The plan records job
+  `timeout-minutes` as the job time bound, default 360 minutes, and rejects
+  a value above 5 days. Matrix expansion stays unsupported. GitHub's
+  documented limits for this slice are a 500 KB workflow file, 256 matrix
+  jobs per run, and job execution time of 6 hours on hosted runners or 5
+  days on self-hosted runners
+  (https://docs.github.com/en/actions/reference/limits).
 - Tests cover one valid workflow and these rejections without Docker. The
   planner launches no process.
 
@@ -121,7 +129,7 @@ queued run bound to the snapshot id and the manifest, workflow, plan, and
 image digests. The image digest keeps the `sha256:` prefix recorded by
 `run_job`. The same key and normalized input return that run. A changed
 input conflicts. Invalid YAML, an unsupported field, and an unpinned image
-create no run. The queued job is not executed. Version 0 development
+create no run. Execution of the queued job is NS-6. Version 0 development
 submission is unchanged. `worker.describe` advertises `workflow.job` and does
 not advertise actions, needs, secrets, matrices, or services.
 
@@ -140,6 +148,24 @@ Acceptance criteria:
   rejected ones.
 
 **NS-6. Execute an accepted run through the supervised runtime.**
+
+Status: implemented.
+
+The scheduler claims the oldest queued run. For a workflow job it stores
+`running` and an attempt id before materializing the workspace or starting a
+container. It runs the accepted plan with `run_job` and the accepted image
+pin. Success is `succeeded` with exit code 0 and the accepted digests
+unchanged. A nonzero step is `failed` with that exit code. A setup failure
+is `failed`, with a null exit code and error kind `SETUP_FAILED`. Step
+records are stored on the run. A workflow file larger than 500 KB is
+rejected before a run exists. The job time bound recorded on the plan is
+`timeout-minutes` (default 360 minutes). Stopping the container at that
+bound is NS-8. Stdout and stderr on those records are capped
+at 65536 characters, and `run.logs` does not page them yet. Closing the
+client does not stop the worker or the container. A cancel that commits
+while the job is still queued does not start a container. Stopping a running
+container early, and removing a container left by a killed worker, are later
+items. Development fixtures are unchanged.
 
 Acceptance criteria:
 
@@ -163,6 +189,10 @@ Acceptance criteria:
   container output for the fixture, independent of page size.
 
 **NS-8. Enforce a timeout.**
+
+The job time bound is `timeout-minutes` (default 360 minutes). GitHub-hosted
+job execution time is 6 hours and self-hosted job execution time is 5 days
+(https://docs.github.com/en/actions/reference/limits).
 
 Acceptance criteria:
 

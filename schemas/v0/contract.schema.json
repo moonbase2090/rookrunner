@@ -37,6 +37,91 @@
       "minLength": 71,
       "maxLength": 71
     },
+    "StepResult": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed"
+          ]
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stdout": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^[^\\ud800-\\udfff]*$"
+        },
+        "stderr": {
+          "type": "string",
+          "maxLength": 65536,
+          "pattern": "^[^\\ud800-\\udfff]*$"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "index",
+        "id",
+        "name",
+        "status",
+        "exit_code",
+        "stdout",
+        "stderr",
+        "error"
+      ],
+      "additionalProperties": false
+    },
     "Timestamp": {
       "type": "string",
       "format": "date-time",
@@ -582,7 +667,11 @@
               "type": "object",
               "properties": {
                 "kind": {
-                  "const": "WORKER_INTERRUPTED"
+                  "enum": [
+                    "WORKER_INTERRUPTED",
+                    "SETUP_FAILED",
+                    "STEP_FAILED"
+                  ]
                 },
                 "message": {
                   "type": "string",
@@ -607,6 +696,13 @@
             "not_started",
             "confirmed_no_external_resources"
           ]
+        },
+        "steps": {
+          "description": "Stored step records. GitHub documents no per-job step limit. https://docs.github.com/en/actions/reference/limits",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StepResult"
+          }
         }
       },
       "required": [
@@ -739,12 +835,50 @@
             }
           },
           "then": {
-            "properties": {
-              "exit_code": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 255
+            "oneOf": [
+              {
+                "properties": {
+                  "exit_code": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 255
+                  },
+                  "error": {
+                    "const": null
+                  }
+                }
               },
+              {
+                "properties": {
+                  "exit_code": {
+                    "const": null
+                  },
+                  "error": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "SETUP_FAILED",
+                          "STEP_FAILED"
+                        ]
+                      },
+                      "message": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^[^\\ud800-\\udfff]*$",
+                        "maxLength": 512
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "message"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ],
+            "properties": {
               "finished_at": {
                 "$ref": "#/$defs/Timestamp"
               },
@@ -753,9 +887,6 @@
               },
               "cancel_requested": {
                 "const": false
-              },
-              "error": {
-                "const": null
               },
               "attempt_id": {
                 "$ref": "#/$defs/Uuid"
