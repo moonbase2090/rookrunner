@@ -58,7 +58,17 @@ fields and invalid YAML create no run. A workflow file larger than 500 KB
 creates no run; that rejection is a capability error. The job time bound is
 `timeout-minutes`, default 360 minutes, and a value above 5 days is a
 capability error. GitHub-hosted job execution time is 6 hours. Self-hosted
-job execution time is 5 days. A job matrix stays unsupported; GitHub's matrix
+job execution time is 5 days. A step `timeout-minutes` is optional, has no
+default, and cannot exceed 360 minutes
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+The worker enforces those bounds. A job timeout stops the owned container and
+records `cancelled` with a null exit code, a null error, and
+`cancel_requested` false. A step timeout stops the container, skips later
+steps, and records `failed` with a null exit code and error kind
+`STEP_FAILED`. A run that finishes inside the timeout is unchanged. The stop
+uses the cancellation grace of SIGINT, 7500 ms, SIGTERM, then 2500 ms
+(https://docs.github.com/en/actions/reference/workflow-cancellation-reference).
+A job matrix stays unsupported; GitHub's matrix
 limit is 256 jobs per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
 `run.logs` pages the executed steps' stdout and stderr with the same 1–65536

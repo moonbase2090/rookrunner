@@ -917,7 +917,8 @@
                 "const": "confirmed_no_external_resources"
               },
               "cancel_requested": {
-                "const": true
+                "type": "boolean",
+                "description": "True when the caller cancelled the run. False when the job timeout cancelled it. https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax"
               },
               "error": {
                 "const": null

@@ -442,7 +442,15 @@ class Worker:
             steps = _public_steps(outcome["steps"])
             exit_code = outcome["exit_code"]
             image_ok = outcome["image_digest"] == current["input"]["image_digest"]
-            if outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
+            if outcome["status"] == "cancelled" and image_ok:
+                current.update(
+                    state="cancelled",
+                    exit_code=None,
+                    error=None,
+                    cancel_requested=False,
+                    steps=steps,
+                )
+            elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
                 current.update(state="succeeded", exit_code=0, error=None, steps=steps)
             elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
                 current.update(state="failed", exit_code=exit_code, error=None, steps=steps)

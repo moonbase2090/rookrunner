@@ -162,8 +162,8 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertNotIn("error", reply, reply)
         return reply["result"]
 
-    def await_state(self, run_id, states):
-        deadline = time.monotonic() + 60
+    def await_state(self, run_id, states, timeout=60):
+        deadline = time.monotonic() + timeout
         record = None
         while time.monotonic() < deadline:
             record = self.rpc("run.get", {"run_id": run_id})
@@ -333,3 +333,113 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertEqual(done["steps"][1]["stderr"], "err-two\n")
         for limit in (1, 4, 65536):
             self.assertEqual(self.log_bytes(done["run_id"], limit), expected)
+
+    def assert_no_containers(self):
+        names = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("rookrunner-", names.stdout)
+
+    def test_explicit_timeout_allows_a_fast_job(self):
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 1
+    steps:
+      - id: show
+        run: echo ok
+"""
+        )
+        started = time.monotonic()
+        submitted = self.rpc("run.submit", self.params(submission_key="inside-timeout"))
+        done = self.await_state(submitted["run_id"], {"succeeded", "failed", "cancelled"})
+        self.assertEqual(done["state"], "succeeded")
+        self.assertEqual(done["exit_code"], 0)
+        self.assertIsNone(done["error"])
+        self.assertFalse(done["cancel_requested"])
+        self.assertEqual(done["steps"][0]["stdout"], "ok\n")
+        self.assertLess(time.monotonic() - started, 30)
+        self.assert_no_containers()
+
+    def test_job_timeout_cancels_and_stops_the_container(self):
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 1
+    steps:
+      - id: sleep
+        run: sleep infinity
+      - id: after
+        run: echo after
+"""
+        )
+        started = time.monotonic()
+        submitted = self.rpc("run.submit", self.params(submission_key="job-timeout"))
+        done = self.await_state(
+            submitted["run_id"],
+            {"cancelled", "failed", "succeeded", "lost"},
+            timeout=120,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(done["state"], "cancelled")
+        self.assertIsNone(done["exit_code"])
+        self.assertIsNone(done["error"])
+        self.assertFalse(done["cancel_requested"])
+        self.assertNotEqual(done["state"], "succeeded")
+        self.assertEqual([step["id"] for step in done["steps"]], ["sleep"])
+        self.assertEqual(done["steps"][0]["error"], "job timed out")
+        self.assertEqual(done["steps"][0]["exit_code"], None)
+        # 60s is the minimum timeout-minutes. The stop grace is 7.5s + 2.5s.
+        # https://docs.github.com/en/actions/reference/workflow-cancellation-reference
+        # The remaining gap is scheduling slack for the test, not another limit.
+        self.assertGreaterEqual(elapsed, 50)
+        self.assertLess(elapsed, 90)
+        self.assert_no_containers()
+        page = self.rpc("run.logs", {"run_id": done["run_id"]})
+        self.assertTrue(page["end_of_stream"])
+        self.assertEqual(base64.b64decode(page["data_base64"]), b"")
+
+    def test_step_timeout_fails_and_stops_before_later_steps(self):
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    timeout-minutes: 30
+    steps:
+      - id: sleep
+        timeout-minutes: 1
+        run: sleep infinity
+      - id: after
+        run: echo after
+"""
+        )
+        started = time.monotonic()
+        submitted = self.rpc("run.submit", self.params(submission_key="step-timeout"))
+        done = self.await_state(
+            submitted["run_id"],
+            {"cancelled", "failed", "succeeded", "lost"},
+            timeout=120,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(done["state"], "failed")
+        self.assertIsNone(done["exit_code"])
+        self.assertEqual(done["error"]["kind"], "STEP_FAILED")
+        self.assertIn("step timed out", done["error"]["message"])
+        self.assertFalse(done["cancel_requested"])
+        self.assertNotEqual(done["state"], "succeeded")
+        self.assertEqual([step["id"] for step in done["steps"]], ["sleep"])
+        self.assertEqual(done["steps"][0]["exit_code"], None)
+        self.assertGreaterEqual(elapsed, 50)
+        self.assertLess(elapsed, 90)
+        self.assert_no_containers()

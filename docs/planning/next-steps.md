@@ -52,11 +52,15 @@ Acceptance criteria:
 - A workflow file larger than 500 KB produces no plan. The error is a
   capability error and cites that limit. The plan records job
   `timeout-minutes` as the job time bound, default 360 minutes, and rejects
-  a value above 5 days. Matrix expansion stays unsupported. GitHub's
-  documented limits for this slice are a 500 KB workflow file, 256 matrix
-  jobs per run, and job execution time of 6 hours on hosted runners or 5
-  days on self-hosted runners
-  (https://docs.github.com/en/actions/reference/limits).
+  a value above 5 days. A step `timeout-minutes` is recorded when present.
+  Its maximum is 360 minutes; a larger value is a capability error. An
+  omitted step timeout is not given a default. Matrix expansion stays
+  unsupported. GitHub's documented limits for this slice are a 500 KB
+  workflow file, 256 matrix jobs per run, job execution time of 6 hours on
+  hosted runners or 5 days on self-hosted runners
+  (https://docs.github.com/en/actions/reference/limits), and a 360 minute
+  step timeout
+  (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
 - Tests cover one valid workflow and these rejections without Docker. The
   planner launches no process.
 
@@ -159,8 +163,8 @@ unchanged. A nonzero step is `failed` with that exit code. A setup failure
 is `failed`, with a null exit code and error kind `SETUP_FAILED`. Step
 records are stored on the run. A workflow file larger than 500 KB is
 rejected before a run exists. The job time bound recorded on the plan is
-`timeout-minutes` (default 360 minutes). Stopping the container at that
-bound is NS-8. Stdout and stderr on those records are capped
+`timeout-minutes` (default 360 minutes). NS-8 stops the container at that
+bound. Stdout and stderr on those records are capped
 at 65536 characters. `run.logs` pages the captured step output. Closing the
 client does not stop the worker or the container. A cancel that commits
 while the job is still queued does not start a container. Stopping a running
@@ -199,9 +203,40 @@ Acceptance criteria:
 
 **NS-8. Enforce a timeout.**
 
+Status: implemented.
+
 The job time bound is `timeout-minutes` (default 360 minutes). GitHub-hosted
 job execution time is 6 hours and self-hosted job execution time is 5 days
-(https://docs.github.com/en/actions/reference/limits).
+(https://docs.github.com/en/actions/reference/limits). A value above 5 days
+is rejected at planning. The deadline starts when `run_job` begins and covers
+setup and steps.
+
+A step `timeout-minutes` is optional. There is no step default. The maximum
+is 360 minutes
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+A larger step value is a capability error and creates no run. A step timeout
+longer than the job timeout is accepted at planning; the job deadline still
+ends the run.
+
+When the job deadline is reached, the owned container is stopped and the run
+ends `cancelled`, with a null exit code, a null error, and
+`cancel_requested` false. That is not a caller `run.cancel`. A step timeout
+kills that step, later steps do not run, and the run ends `failed` with a
+null exit code and error kind `STEP_FAILED`. Neither ends `succeeded`.
+
+The stop follows GitHub's cancellation grace: SIGINT, 7500 ms, SIGTERM,
+2500 ms, then the container is removed
+(https://docs.github.com/en/actions/reference/workflow-cancellation-reference).
+The engine returns as soon as the container has stopped. It signals the
+container's main process. A timed-out `docker exec` does not keep partial
+stdout or stderr, so `run.logs` pages only the text captured before the
+timeout. That page can be empty.
+
+A run that finishes inside the timeout is unchanged. The bound is the
+submitted `timeout-minutes`, or the recorded default of 360 when the
+workflow omits it. Cancelling a queued run still does not start a container.
+Cancelling a running container from `run.cancel`, and removing a container
+left by a killed worker, remain NS-9 and NS-10.
 
 Acceptance criteria:
 
