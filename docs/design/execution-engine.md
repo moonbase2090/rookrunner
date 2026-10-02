@@ -2,7 +2,9 @@
 
 Status: owned-engine direction accepted in [decision 0003](../decisions/0003-owned-execution-engine.md).
 The component decomposition and sequence below are proposed implementation details.
-No real workflow feature listed here is implemented yet.
+Parsing, snapshot verification, attempt materialization, and the first Bash
+subset are implemented. Version 1 acceptance queues one planned job and does
+not execute it. The rest of this plan is not.
 
 ## Execution path
 
@@ -60,8 +62,8 @@ capability status, not a decision to abandon those features.
 
 | Area | Planned behavior and evidence | Initial status |
 | --- | --- | --- |
-| Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Not implemented |
-| Steps and shells | Ordering, script invocation, defaults, environment precedence, working directories | Not implemented; first execution slice |
+| Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Implemented for one selected job of sequential `run` steps |
+| Steps and shells | Ordering, script invocation, defaults, environment precedence, working directories | Implemented for the Linux Bash subset in one caller-pinned container |
 | Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Not implemented |
 | Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Not implemented |
 | Runtime communication | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, state files, workflow commands and masking | Not implemented |

@@ -4,7 +4,8 @@ A local tool, worker agent, and execution protocol for software builds and tests
 
 **Status:** M1 complete; M2 started. The worker runs synthetic development fixtures
 and can accept one captured workflow job onto the queue. It does not execute
-that job yet.
+that job. Planning, snapshot verification, attempt materialization, and
+digest-pinned Bash execution exist as libraries.
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection
@@ -71,6 +72,9 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/ruff format --check src tests
 ```
 
+`tests/test_run.py` needs a local Docker daemon. It builds a disposable image
+and passes that image id. It does not select a project default image.
+
 M2 now provides preparatory source capture (requires Git):
 
 ```bash
@@ -85,5 +89,7 @@ See the [implemented contract](docs/design/development-contract.md),
 [implementation choice](docs/decisions/0001-executable-foundation.md), and
 [M1 completion evidence](docs/validation/m1-completion.md), and
 [machine-readable schemas](schemas/v0/README.md). M1 covers the development
-backend only. Packaging, workflow submission/execution, MCP, and dashboard work remain on
+backend. Version 1 can accept one workflow job onto the queue, and `run_job`
+can execute a planned job in a caller-pinned container. The worker does not
+execute an accepted job. Packaging, MCP, and dashboard work remain on
 the roadmap. Development dependency provenance is [recorded here](docs/development-dependencies.md).
