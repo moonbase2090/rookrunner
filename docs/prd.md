@@ -102,6 +102,12 @@ Implemented:
   again. The same submission key returns that run. Restart removes the
   container recorded for that attempt, or leaves the attempt unresolved
   without reusing its container or workspace. Queued workflow runs can start.
+- A configured disk budget covers state, snapshots, and attempt workspaces.
+  The default is 10 GB per repository, GitHub Actions cache storage
+  (https://docs.github.com/en/actions/reference/limits), stored as
+  `10 * 1024 * 1024 * 1024` bytes. A submission that would exceed it returns
+  `STORAGE_FULL` and does not consume the submission key. Active runs and
+  their evidence are kept.
 - A `snapshot` command that captures Git working files into the state
   directory. It does not submit a run.
 - A planner reads one selected job of sequential `run` steps. Snapshot
@@ -129,7 +135,7 @@ Milestones are outcome gates, not dates. Detail and exit evidence are in the
 | --- | --- | --- |
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
-| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, and restart reconciliation of a container left by a killed worker are implemented. Disk budget is not. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, and a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it are implemented. Artifact manifests are not. |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
 | M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
 
@@ -220,8 +226,9 @@ speed or resource claim that was not measured.
   exists.
 
 No numeric service level is defined. The development worker retains runs and
-keys indefinitely and does not yet enforce a disk budget, so it is not an
-unattended production service.
+keys indefinitely and does not prune them. A configured disk budget refuses
+new submissions when state, snapshots, and attempt workspaces would exceed
+it. The worker is not an unattended production service.
 
 ## Open questions
 

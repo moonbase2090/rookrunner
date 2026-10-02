@@ -45,6 +45,16 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     worker = commands.add_parser("worker")
     worker.add_argument("--repository", required=True)
+    worker.add_argument(
+        "--disk-budget-bytes",
+        type=int,
+        default=None,
+        help=(
+            "bytes allowed under the state directory "
+            "(default 10*1024**3, GitHub's default 10 GB cache storage per repository; "
+            "https://docs.github.com/en/actions/reference/limits)"
+        ),
+    )
     commands.add_parser("describe")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
@@ -75,7 +85,7 @@ def main():
             print(canonical({"snapshot": result}))
             return
         if args.command == "worker":
-            serve(args.repository, args.state)
+            serve(args.repository, args.state, args.disk_budget_bytes)
             return
         if args.command == "describe":
             method, params = "worker.describe", {}

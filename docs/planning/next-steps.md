@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-10 are
+roadmap step 1 and the first executable subset. NS-1 through NS-11 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -307,6 +307,24 @@ Acceptance criteria:
   container or workspace identity.
 
 **NS-11. Refuse new work when the disk budget is exhausted.**
+
+Status: implemented.
+
+The default budget is GitHub Actions cache storage, 10 GB per repository on
+every plan in the storage table
+(https://docs.github.com/en/actions/reference/limits). GitHub documents that
+figure as 10 GB. This repository stores it as `10 * 1024 * 1024 * 1024`
+bytes, the same 1024-based reading it uses for the documented 500 KB
+workflow-file limit. The budget covers the state directory: the database,
+snapshots, and attempt workspaces. A submission that would exceed it returns
+`STORAGE_FULL`, creates no run, and does not consume the submission key. The
+same key still returns a run that was already accepted. Active runs and their
+evidence stay. GitHub evicts cache entries past its limit; this budget does
+not. An operator can pass `--disk-budget-bytes`. The configured value is not
+capped at 10 GB. SQLite reporting the database full still rolls back
+acceptance without consuming the key. Runs and keys are still retained
+indefinitely. Pruning is not implemented. Artifact storage is a separate
+account quota and is not this budget.
 
 Acceptance criteria:
 

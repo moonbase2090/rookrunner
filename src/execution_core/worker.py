@@ -8,7 +8,9 @@ caller-pinned container. Cancelling a running workflow stops that container
 before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
 Restart records the container beside the attempt, removes only that
-container, and does not launch the interrupted attempt again.
+container, and does not launch the interrupted attempt again. A submission
+that would exceed the configured disk budget is refused. Active runs and
+their evidence stay.
 """
 
 import base64
@@ -30,6 +32,7 @@ from datetime import datetime, timezone
 
 from . import __version__
 from .attempt import AttemptError, materialize_attempt
+from .disk import DEFAULT_DISK_BUDGET, usage
 from .plan import PlanError, plan_snapshot
 from .run import (
     CONTAINER_NAME,
@@ -63,6 +66,7 @@ from .protocol import (
 from .snapshot import CaptureError, SourceCapture
 from .verify import VerifyError, verify_snapshot
 
+_STORAGE_FULL = "worker storage is full; free space before retrying"
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
@@ -204,7 +208,13 @@ def _step_failure_message(outcome, image_ok):
 
 
 class Worker:
-    def __init__(self, repository, state):
+    def __init__(self, repository, state, disk_budget=None):
+        if disk_budget is None:
+            disk_budget = DEFAULT_DISK_BUDGET
+        # bool is an int subclass. A flag is not a byte count.
+        if type(disk_budget) is not int or disk_budget < 0:
+            raise ValueError("disk budget must be a non-negative integer")
+        self.disk_budget = disk_budget
         self.repository = str(Path(repository).resolve(strict=True))
         if not Path(self.repository).is_dir():
             raise ValueError("repository must be a directory")
@@ -661,6 +671,14 @@ class Worker:
             raise RunError("SETUP_FAILED", "attempt directory is not accepted")
         attempts.mkdir(mode=0o700, exist_ok=True)
         os.chmod(attempts, 0o700)
+        try:
+            reserve = usage(snapshot)
+        except OSError as exc:
+            raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
+        # The snapshot is already in the state total. Reserve another copy
+        # for the attempt workspace. Do not delete the snapshot or other evidence.
+        if self._over_budget(reserve):
+            raise RunError("SETUP_FAILED", _STORAGE_FULL)
         materialize_attempt(snapshot, pinned["digest"], attempts / record["attempt_id"])
         if self._abandoned(record["run_id"]):
             raise _Abandoned()
@@ -941,6 +959,17 @@ class Worker:
             "cleanup": "not_started",
         }
         try:
+            reserve = usage(snapshot)
+        except OSError:
+            self._drop_snapshot(captured["snapshot_id"])
+            raise Fault("STORAGE_FULL", _STORAGE_FULL) from None
+        # usage(state) already includes this snapshot. Reserve the same number
+        # of bytes again for the later attempt workspace, plus the queued row.
+        reserve += len(normalized.encode()) + len(canonical(record).encode())
+        if self._over_budget(reserve):
+            self._drop_snapshot(captured["snapshot_id"])
+            raise Fault("STORAGE_FULL", _STORAGE_FULL)
+        try:
             with self.db:
                 self.db.execute(
                     "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
@@ -966,6 +995,13 @@ class Worker:
         if exc.kind == "SOURCE_UNSTABLE":
             raise Fault("SOURCE_UNSTABLE", message) from exc
         raise Fault("INVALID_PARAMS", message) from exc
+
+    def _over_budget(self, incoming):
+        try:
+            used = usage(self.state)
+        except OSError:
+            return True
+        return used + incoming > self.disk_budget
 
     def _drop_snapshot(self, snapshot_id):
         target = Path(self.state) / "snapshots" / snapshot_id
@@ -1068,6 +1104,13 @@ class Worker:
                 "error": None,
                 "cleanup": "not_started",
             }
+            incoming = (
+                len(normalized.encode())
+                + len(canonical(record).encode())
+                + len(fixture["output"].encode())
+            )
+            if self._over_budget(incoming):
+                raise Fault("STORAGE_FULL", _STORAGE_FULL)
             with self.db:
                 self.db.execute(
                     "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
@@ -1176,7 +1219,7 @@ class Worker:
             if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL:
                 return error_response(
                     request_id,
-                    Fault("STORAGE_FULL", "worker storage is full; free space before retrying"),
+                    Fault("STORAGE_FULL", _STORAGE_FULL),
                 )
             return error_response(
                 request_id, Fault("INTERNAL_ERROR", "worker storage operation failed")
@@ -1218,8 +1261,8 @@ class Worker:
             self.close()
 
 
-def serve(repository, state):
-    worker = Worker(repository, state)
+def serve(repository, state, disk_budget=None):
+    worker = Worker(repository, state, disk_budget)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()

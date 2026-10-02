@@ -10,7 +10,10 @@ be shown, the run is lost and a new workflow attempt is refused until this
 process restarts. Restart removes a container left by a killed worker, or
 records that attempt unresolved and does not run it again. A queued workflow
 can still start. An unresolved attempt blocks reuse of its container or
-workspace identity.
+workspace identity. A configured disk budget refuses a new submission that
+would exceed it. The default is 10 GB per repository of GitHub Actions cache
+storage (https://docs.github.com/en/actions/reference/limits), stored as
+10 * 1024 * 1024 * 1024 bytes. Active runs and their evidence are kept.
 The rest of this plan is not.
 
 ## Execution path

@@ -80,8 +80,9 @@ hostile code.
 capture size are bounded. Clients page logs instead of loading the whole
 stream. One worker binds one repository. The development scheduler runs one
 fixture at a time. This is not a distributed scheduler, and it is not an
-unattended release: development state is retained indefinitely and is not yet
-bounded by a disk budget.
+unattended release: development state is retained indefinitely. A disk budget
+refuses new submissions when that state would exceed it and does not prune
+active evidence.
 
 **Provenance stays visible.** The runtime uses the Python standard library.
 Development-only tools are locked and inventoried. Third-party code, runner

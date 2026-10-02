@@ -102,8 +102,10 @@ must verify the manifest and use a separate attempt workspace before consuming i
 
 Limits per capture: 10,000 selected files, 64 MiB per regular file, and 256 MiB
 total file/link bytes. The total check can temporarily stage one additional
-file before rejecting. Git metadata output, total retained snapshots, and disk
-budgets are not yet bounded; broader worker storage policy remains M2 work.
+file before rejecting. Git metadata output and the number of retained
+snapshots are not bounded by capture. The worker applies a configured disk
+budget to the state directory after capture and refuses a submission that
+would exceed it. Pruning retained snapshots remains later work.
 
 | Error kind | Meaning |
 | --- | --- |
