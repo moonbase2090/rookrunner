@@ -95,6 +95,9 @@ class SchemaTests(unittest.TestCase):
         restart = copy.deepcopy(lost)
         restart.update(cancel_requested=False, cleanup="confirmed_no_external_resources")
         validator("Run").validate(restart)
+        unresolved_restart = copy.deepcopy(lost)
+        unresolved_restart["cancel_requested"] = False
+        validator("Run").validate(unresolved_restart)
         cancelled = copy.deepcopy(lost)
         cancelled.update(state="cancelled", error=None, cleanup="unresolved")
         self.assertFalse(validator("Run").is_valid(cancelled))

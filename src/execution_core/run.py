@@ -27,8 +27,10 @@ container and returns status `cancelled`. A step `timeout-minutes` fails that
 step when it is shorter than the time left in the job. Stopping uses the
 documented cancellation grace: SIGINT, 7500 ms, SIGTERM, 2500 ms, then the
 container is removed. An optional owner reserves the container name before
-create so a caller can stop that container with the same grace. A timed-out
-`docker exec` does not keep partial stdout or stderr.
+create so a caller can stop that container with the same grace. The owner
+can record that name before create and reject a name that belongs to an
+unresolved attempt. A timed-out `docker exec` does not keep partial stdout
+or stderr.
 """
 
 import hashlib
@@ -55,6 +57,8 @@ from .verify import VerifyError, verify_snapshot
 _CANCEL_SIGINT_SECONDS = 7.5
 _CANCEL_SIGTERM_SECONDS = 2.5
 
+# 8 random bytes, hex-encoded. Only this name is removed for an attempt.
+CONTAINER_NAME = re.compile(r"^rookrunner-[0-9a-f]{16}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -565,11 +569,56 @@ def _stop_container(docker, name):
     return code
 
 
+def release_owned_container(name, docker="docker"):
+    """Remove one recorded container. Return True only when it is gone.
+
+    This does not list or remove any other container. A missing container is
+    already gone. Removal uses the cancellation grace in `_stop_container`.
+    """
+
+    if not CONTAINER_NAME.fullmatch(name or ""):
+        return False
+    try:
+        docker_bin = _docker_binary(docker)
+        stopped = _stop_container(docker_bin, name) == 0
+    except (RunError, _Timeout, OSError):
+        return False
+    if not stopped:
+        return False
+    return _container_running(docker_bin, name) is None
+
+
+def owned_container_present(name, docker="docker"):
+    """Return whether the named owned container still exists.
+
+    An invalid name is not inspected. A Docker failure is treated as present
+    so a restart does not forget an unresolved container.
+    """
+
+    if not CONTAINER_NAME.fullmatch(name or ""):
+        return False
+    try:
+        docker_bin = _docker_binary(docker)
+    except RunError:
+        return True
+    return _container_running(docker_bin, name) is not None
+
+
+def _container_name(owner):
+    """Return a new container name, skipping one the owner still holds."""
+
+    while True:
+        name = "rookrunner-" + os.urandom(8).hex()
+        if owner is None or not owner.taken(name):
+            return name
+
+
 class ContainerLease:
     """Publish one container name before `docker create`.
 
-    `begin` reserves the name. `created` and `closed` wake a caller that is
-    waiting to stop the container. Those methods do not take the worker lock.
+    `begin` reserves the name and may record it before create. `created` and
+    `closed` wake a caller that is waiting to stop the container. Those
+    methods do not take the worker lock. `blocked_names` must not be reused.
     """
 
     def __init__(self):
@@ -579,11 +628,18 @@ class ContainerLease:
         self.name = None
         self.docker = None
         self.cancel = False
+        self.reserve = None
+        self.blocked_names = frozenset()
+
+    def taken(self, name):
+        return name in self.blocked_names
 
     def begin(self, docker, name):
         with self._lock:
             if self.cancel or self.phase != "idle":
                 return False
+            if self.reserve is not None:
+                self.reserve(name)
             self.docker = docker
             self.name = name
             self.phase = "creating"
@@ -683,7 +739,7 @@ def run_job(
             os.chmod(script, 0o600)
         if "," in os.fspath(private):
             _setup("workspace path is not accepted")
-        name = "rookrunner-" + os.urandom(8).hex()
+        name = _container_name(owner)
         if owner is not None and not owner.begin(docker_bin, name):
             _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(

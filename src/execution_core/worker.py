@@ -6,7 +6,9 @@ snapshot, plans one selected job, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
 caller-pinned container. Cancelling a running workflow stops that container
 before the run is recorded cancelled. If the container is still present, the
-run is lost and a new workflow attempt is refused.
+run is lost and a new workflow attempt is refused until this process stops.
+Restart records the container beside the attempt, removes only that
+container, and does not launch the interrupted attempt again.
 """
 
 import base64
@@ -21,6 +23,7 @@ import signal
 import socket
 import sqlite3
 import stat
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -28,7 +31,14 @@ from datetime import datetime, timezone
 from . import __version__
 from .attempt import AttemptError, materialize_attempt
 from .plan import PlanError, plan_snapshot
-from .run import ContainerLease, RunError, run_job
+from .run import (
+    CONTAINER_NAME,
+    ContainerLease,
+    RunError,
+    owned_container_present,
+    release_owned_container,
+    run_job,
+)
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -53,6 +63,7 @@ from .protocol import (
 from .snapshot import CaptureError, SourceCapture
 from .verify import VerifyError, verify_snapshot
 
+_ATTEMPT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _STEP_TEXT = 65536
@@ -61,9 +72,9 @@ _QUEUED = (
     "WHERE json_extract(record, '$.state')='queued' "
     "ORDER BY sequence LIMIT 1"
 )
-# While an owned container is unresolved, leave queued workflow jobs queued.
-# Development fixtures own no container and can still run. Restart
-# reconciliation of a leftover container is NS-10; this set is in memory.
+# While this process holds an unresolved container, leave queued workflow jobs
+# queued. Development fixtures own no container and can still run. Restart
+# keeps a separate retained set and blocks only reuse of those identities.
 _QUEUED_FIXTURE = (
     "SELECT record, request FROM runs "
     "WHERE json_extract(record, '$.state')='queued' "
@@ -103,11 +114,11 @@ class _Abandoned(Exception):
 
 
 def conflicts_with_unresolved(unresolved, attempt_id=None, container_name=None):
-    """Return whether unresolved ownership blocks this workflow attempt.
+    """Return whether this process refuses a new workflow attempt.
 
     Any recorded unresolved attempt blocks a new workflow attempt. The same
-    attempt id or container name is also a conflict. The map is in memory.
-    Restart reconciliation of a leftover container is NS-10.
+    attempt id or container name is also a conflict. The map is in memory and
+    is not reloaded after restart.
     """
 
     if attempt_id is not None and attempt_id in unresolved:
@@ -115,6 +126,20 @@ def conflicts_with_unresolved(unresolved, attempt_id=None, container_name=None):
     if container_name is not None and container_name in unresolved.values():
         return True
     return bool(unresolved)
+
+
+def reuses_unresolved_identity(owners, attempt_id=None, container_name=None):
+    """Return whether this attempt would reuse an unresolved container or workspace.
+
+    A different attempt id and container name is not a conflict. An empty map
+    is not a conflict.
+    """
+
+    if not owners:
+        return False
+    if attempt_id is not None and attempt_id in owners:
+        return True
+    return container_name is not None and container_name in owners.values()
 
 
 def _error_text(exc):
@@ -193,6 +218,7 @@ class Worker:
         self.execution_error = None
         self.live = {}
         self.unresolved = {}
+        self.retained = {}
         self.socket_path = self.state / "worker.sock"
 
     def start(self):
@@ -242,21 +268,7 @@ class Worker:
             self.worker_id = self.db.execute(
                 "SELECT value FROM metadata WHERE key='worker_id'"
             ).fetchone()[0]
-            # The development backend has no external processes or containers.
-            with self.db:
-                for row in self.db.execute("SELECT record FROM runs").fetchall():
-                    record = json.loads(row[0])
-                    if record["state"] == "running":
-                        record.update(
-                            state="lost",
-                            finished_at=now(),
-                            error={
-                                "kind": "WORKER_INTERRUPTED",
-                                "message": "worker stopped during execution",
-                            },
-                            cleanup="confirmed_no_external_resources",
-                        )
-                        self.save(record)
+            self._reconcile_interrupted()
             if os.path.lexists(self.socket_path):
                 if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
                     raise ValueError("refusing to replace a non-socket worker.sock")
@@ -290,6 +302,201 @@ class Worker:
         if self.lock is not None:
             os.close(self.lock)
             self.lock = None
+
+    def _records(self):
+        return [json.loads(row[0]) for row in self.db.execute("SELECT record FROM runs").fetchall()]
+
+    def _reconcile_interrupted(self):
+        """Mark interrupted attempts lost before accepting work that could overlap them.
+
+        A development fixture has no container. A workflow attempt records its
+        container name beside the attempt, not on the run. Restart removes only
+        that container. The public record stays free of the name and of host paths.
+        """
+
+        with self.db:
+            running = [record for record in self._records() if record["state"] == "running"]
+        updates = []
+        for record in running:
+            unresolved, name = self._release_running(record)
+            updates.append((record, unresolved, name))
+        with self.db:
+            for record, unresolved, name in updates:
+                self._store_restart_lost(record, unresolved)
+                if unresolved:
+                    identity = record.get("attempt_id") or record["run_id"]
+                    self.retained[identity] = name
+        self._load_retained()
+
+    def _release_running(self, record):
+        kind = (record.get("input") or {}).get("kind")
+        if kind != "workflow_job":
+            return False, None
+        status, name = self._ownership_status(record.get("attempt_id"))
+        if status == "absent":
+            return False, None
+        if status != "name":
+            return True, None
+        try:
+            gone = release_owned_container(name)
+        except Exception:
+            gone = False
+        if gone:
+            self._delete_ownership(record.get("attempt_id"))
+            return False, None
+        return True, name
+
+    def _store_restart_lost(self, record, unresolved):
+        record.update(
+            state="lost",
+            finished_at=now(),
+            cancel_requested=False,
+            error={
+                "kind": "WORKER_INTERRUPTED",
+                "message": (
+                    "owned container cleanup was not confirmed"
+                    if unresolved
+                    else "worker stopped during execution"
+                ),
+            },
+            cleanup="unresolved" if unresolved else "confirmed_no_external_resources",
+        )
+        self.save(record)
+
+    def _load_retained(self):
+        with self.db:
+            rows = self._records()
+        for record in rows:
+            if record.get("state") != "lost" or record.get("cleanup") != "unresolved":
+                continue
+            attempt_id = record.get("attempt_id")
+            if not attempt_id or attempt_id in self.retained:
+                continue
+            status, name = self._ownership_status(attempt_id)
+            if status == "name" and owned_container_present(name):
+                self.retained[attempt_id] = name
+            elif status == "invalid":
+                self.retained[attempt_id] = None
+            elif status == "name":
+                self._delete_ownership(attempt_id)
+
+    def _ownership_directory(self):
+        directory = self.state / "ownership"
+        if not os.path.lexists(directory):
+            return "absent", None
+        if directory.is_symlink() or not directory.is_dir():
+            return "invalid", None
+        return "ok", directory
+
+    def _ownership_status(self, attempt_id):
+        if not _ATTEMPT_ID.fullmatch(attempt_id or ""):
+            return "absent", None
+        state, directory = self._ownership_directory()
+        if state != "ok":
+            return state, None
+        path = directory / attempt_id
+        if not os.path.lexists(path):
+            return "absent", None
+        try:
+            info = path.lstat()
+        except OSError:
+            return "invalid", None
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 64:
+            return "invalid", None
+        try:
+            text = path.read_text(encoding="ascii")
+        except (OSError, UnicodeError):
+            return "invalid", None
+        name = text.strip()
+        if not CONTAINER_NAME.fullmatch(name):
+            return "invalid", None
+        return "name", name
+
+    def _write_ownership(self, attempt_id, name):
+        if not _ATTEMPT_ID.fullmatch(attempt_id or "") or not CONTAINER_NAME.fullmatch(name):
+            raise OSError("attempt identity is not accepted")
+        state, directory = self._ownership_directory()
+        if state == "invalid":
+            raise OSError("attempt identity is not accepted")
+        if state == "absent":
+            directory = self.state / "ownership"
+            directory.mkdir(mode=0o700)
+        os.chmod(directory, 0o700)
+        if directory.is_symlink() or not directory.is_dir():
+            raise OSError("attempt identity is not accepted")
+        target = directory / attempt_id
+        if os.path.lexists(target) and target.is_symlink():
+            raise OSError("attempt identity is not accepted")
+        fd, temporary = tempfile.mkstemp(prefix=".", dir=directory)
+        try:
+            os.write(fd, name.encode("ascii") + b"\n")
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+        except Exception:
+            os.close(fd)
+            os.unlink(temporary)
+            raise
+        os.close(fd)
+        try:
+            os.replace(temporary, target)
+        except Exception:
+            os.unlink(temporary)
+            raise
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        os.chmod(target, 0o600)
+
+    def _delete_ownership(self, attempt_id):
+        state, directory = self._ownership_directory()
+        if state != "ok" or not _ATTEMPT_ID.fullmatch(attempt_id or ""):
+            return
+        path = directory / attempt_id
+        if path.is_symlink() or not path.is_file():
+            return
+        try:
+            path.unlink()
+        except OSError:
+            return
+
+    def _blocked_attempt(self, attempt_id, container_name=None):
+        return reuses_unresolved_identity(
+            self.retained, attempt_id, container_name
+        ) or reuses_unresolved_identity(self.unresolved, attempt_id, container_name)
+
+    def _blocked_container_names(self):
+        names = []
+        for owners in (self.retained, self.unresolved):
+            for value in owners.values():
+                if isinstance(value, str) and CONTAINER_NAME.fullmatch(value):
+                    names.append(value)
+        return frozenset(names)
+
+    def _refuse_reused_attempt(self, record):
+        with self.guard, self.db:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                self.live.pop(current["run_id"], None)
+                return current
+            current.update(
+                state="lost",
+                cancel_requested=False,
+                exit_code=None,
+                finished_at=now(),
+                error={
+                    "kind": "WORKER_INTERRUPTED",
+                    "message": "an unresolved attempt still owns this container or workspace",
+                },
+                cleanup="unresolved",
+            )
+            self.save(current)
+            self.live.pop(current["run_id"], None)
+            identity = current.get("attempt_id") or current["run_id"]
+            if identity not in self.retained:
+                self.retained[identity] = self.unresolved.get(identity)
+            return current
 
     def save(self, record):
         self.db.execute(
@@ -325,11 +532,18 @@ class Worker:
                     record, request = json.loads(row[0]), json.loads(row[1])
                     kind = record["input"]["kind"]
                     if kind in {"development_fixture", "workflow_job"}:
-                        record.update(
-                            state="running", started_at=now(), attempt_id=str(uuid.uuid4())
-                        )
+                        attempt_id = str(uuid.uuid4())
+                        while self._blocked_attempt(attempt_id):
+                            attempt_id = str(uuid.uuid4())
+                        record.update(state="running", started_at=now(), attempt_id=attempt_id)
                         if kind == "workflow_job":
                             lease = ContainerLease()
+                            lease.blocked_names = self._blocked_container_names()
+                            lease.reserve = (
+                                lambda name, attempt_id=attempt_id: self._write_ownership(
+                                    attempt_id, name
+                                )
+                            )
                             self.live[record["run_id"]] = lease
                         with self.db:
                             self.save(record)
@@ -384,6 +598,9 @@ class Worker:
     def _execute_workflow(self, record, request, lease):
         workspace = Path(self.state) / "attempts" / record["attempt_id"]
         try:
+            if self._blocked_attempt(record.get("attempt_id")):
+                self._refuse_reused_attempt(record)
+                return
             try:
                 outcome = self._run_accepted(record, request, lease)
             except _Abandoned:
@@ -480,6 +697,7 @@ class Worker:
                         cleanup="confirmed_no_external_resources",
                     )
                     self.save(current)
+                    self._delete_ownership(current.get("attempt_id"))
                     return
             # The cancel commit takes the lock after the stop. Wait without
             # holding it so that commit can land before another job starts.
@@ -530,6 +748,7 @@ class Worker:
             (_workflow_log(outcome["steps"]), run_id),
         )
         self.save(current)
+        self._delete_ownership(current.get("attempt_id"))
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
@@ -589,6 +808,7 @@ class Worker:
             )
             self.save(current)
             self.live.pop(current["run_id"], None)
+            self._delete_ownership(current.get("attempt_id"))
             return current
 
     def _commit_lost(self, record, container_name):
@@ -651,10 +871,11 @@ class Worker:
                 "WORKER_NOT_READY",
                 "worker cannot accept new execution; inspect worker.describe",
             )
-        # An unresolved container blocks a new workflow attempt. The same key
-        # still returns its original run above. Development fixtures do not use
-        # this gate, and describe.ready stays the scheduler flag. Restart
-        # reconciliation of a leftover container is NS-10.
+        # This process refuses every new workflow attempt while its unresolved
+        # map is non-empty. The same key still returns its original run above.
+        # Development fixtures do not use this gate, and describe.ready stays
+        # the scheduler flag. Restart does not keep this map. It blocks only an
+        # attempt that would reuse a retained container name or workspace.
         if conflicts_with_unresolved(self.unresolved):
             raise Fault(
                 "WORKER_NOT_READY",
