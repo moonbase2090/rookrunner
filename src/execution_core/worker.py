@@ -4,7 +4,9 @@ Version 0 submits a synthetic development fixture. It never launches commands
 or reads a workflow. Version 1 captures the repository, verifies that
 snapshot, plans one selected job, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
-caller-pinned container.
+caller-pinned container. Cancelling a running workflow stops that container
+before the run is recorded cancelled. If the container is still present, the
+run is lost and a new workflow attempt is refused.
 """
 
 import base64
@@ -26,7 +28,7 @@ from datetime import datetime, timezone
 from . import __version__
 from .attempt import AttemptError, materialize_attempt
 from .plan import PlanError, plan_snapshot
-from .run import RunError, run_job
+from .run import ContainerLease, RunError, run_job
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -59,6 +61,15 @@ _QUEUED = (
     "WHERE json_extract(record, '$.state')='queued' "
     "ORDER BY sequence LIMIT 1"
 )
+# While an owned container is unresolved, leave queued workflow jobs queued.
+# Development fixtures own no container and can still run. Restart
+# reconciliation of a leftover container is NS-10; this set is in memory.
+_QUEUED_FIXTURE = (
+    "SELECT record, request FROM runs "
+    "WHERE json_extract(record, '$.state')='queued' "
+    "AND json_extract(record, '$.input.kind')='development_fixture' "
+    "ORDER BY sequence LIMIT 1"
+)
 
 
 def now():
@@ -89,6 +100,21 @@ def offset_from(value, kind, identity):
 
 class _Abandoned(Exception):
     pass
+
+
+def conflicts_with_unresolved(unresolved, attempt_id=None, container_name=None):
+    """Return whether unresolved ownership blocks this workflow attempt.
+
+    Any recorded unresolved attempt blocks a new workflow attempt. The same
+    attempt id or container name is also a conflict. The map is in memory.
+    Restart reconciliation of a leftover container is NS-10.
+    """
+
+    if attempt_id is not None and attempt_id in unresolved:
+        return True
+    if container_name is not None and container_name in unresolved.values():
+        return True
+    return bool(unresolved)
 
 
 def _error_text(exc):
@@ -165,6 +191,8 @@ class Worker:
         self.server = None
         self.scheduler = None
         self.execution_error = None
+        self.live = {}
+        self.unresolved = {}
         self.socket_path = self.state / "worker.sock"
 
     def start(self):
@@ -287,8 +315,12 @@ class Worker:
 
     def execute_queue(self):
         while not self.stop.is_set():
+            lease = None
             with self.guard:
-                row = self.db.execute(_QUEUED).fetchone()
+                if conflicts_with_unresolved(self.unresolved):
+                    row = self.db.execute(_QUEUED_FIXTURE).fetchone()
+                else:
+                    row = self.db.execute(_QUEUED).fetchone()
                 if row:
                     record, request = json.loads(row[0]), json.loads(row[1])
                     kind = record["input"]["kind"]
@@ -296,6 +328,9 @@ class Worker:
                         record.update(
                             state="running", started_at=now(), attempt_id=str(uuid.uuid4())
                         )
+                        if kind == "workflow_job":
+                            lease = ContainerLease()
+                            self.live[record["run_id"]] = lease
                         with self.db:
                             self.save(record)
                     else:
@@ -307,7 +342,7 @@ class Worker:
             if kind == "development_fixture":
                 self._finish_fixture(record, request)
             else:
-                self._execute_workflow(record, request)
+                self._execute_workflow(record, request, lease)
 
     def _finish_fixture(self, record, request):
         interrupted = self.stop.wait(request["fixture"]["delay_ms"] / 1000)
@@ -346,35 +381,40 @@ class Worker:
         with self.db:
             self.save(record)
 
-    def _execute_workflow(self, record, request):
+    def _execute_workflow(self, record, request, lease):
         workspace = Path(self.state) / "attempts" / record["attempt_id"]
         try:
-            outcome = self._run_accepted(record, request)
-        except _Abandoned:
-            self._remove_workspace(workspace)
-            return
-        except Exception as exc:
-            message = (
-                _error_text(exc)
-                if isinstance(
-                    exc,
-                    (
-                        RunError,
-                        AttemptError,
-                        VerifyError,
-                        PlanError,
-                        OSError,
-                        UnicodeError,
-                        ValueError,
-                    ),
+            try:
+                outcome = self._run_accepted(record, request, lease)
+            except _Abandoned:
+                self._remove_workspace(workspace)
+                return
+            except Exception as exc:
+                message = (
+                    _error_text(exc)
+                    if isinstance(
+                        exc,
+                        (
+                            RunError,
+                            AttemptError,
+                            VerifyError,
+                            PlanError,
+                            OSError,
+                            UnicodeError,
+                            ValueError,
+                        ),
+                    )
+                    else "workflow attempt could not be prepared"
                 )
-                else "workflow attempt could not be prepared"
-            )
-            self._finish_setup_failure(record["run_id"], message)
-            return
-        self._finish_workflow(record["run_id"], outcome)
+                self._finish_setup_failure(record["run_id"], message)
+                return
+            self._finish_workflow(record["run_id"], outcome)
+        finally:
+            with self.guard:
+                if self.get(record["run_id"])["state"] in TERMINAL:
+                    self.live.pop(record["run_id"], None)
 
-    def _run_accepted(self, record, request):
+    def _run_accepted(self, record, request, owner=None):
         pinned = record["input"]
         event = request["event"]
         event_digest = hashlib.sha256(canonical(event).encode("ascii")).hexdigest()
@@ -414,62 +454,82 @@ class Worker:
             planned["plan"],
             image,
             event,
+            owner=owner,
         )
 
     def _abandoned(self, run_id):
         with self.guard:
             return self.get(run_id)["state"] in TERMINAL
 
+    def _caller_cancel_pending(self, run_id):
+        lease = self.live.get(run_id)
+        return lease is not None and lease.cancelled()
+
     def _finish_setup_failure(self, run_id, message):
-        with self.guard, self.db:
-            current = self.get(run_id)
-            if current["state"] in TERMINAL:
+        while True:
+            with self.guard, self.db:
+                current = self.get(run_id)
+                if current["state"] in TERMINAL:
+                    return
+                if not self._caller_cancel_pending(run_id):
+                    current.update(
+                        state="failed",
+                        exit_code=None,
+                        finished_at=now(),
+                        error={"kind": "SETUP_FAILED", "message": message[:512]},
+                        cleanup="confirmed_no_external_resources",
+                    )
+                    self.save(current)
+                    return
+            # The cancel commit takes the lock after the stop. Wait without
+            # holding it so that commit can land before another job starts.
+            if self.stop.wait(0.01):
                 return
+
+    def _finish_workflow(self, run_id, outcome):
+        while True:
+            with self.guard, self.db:
+                current = self.get(run_id)
+                if current["state"] in TERMINAL:
+                    return
+                if not self._caller_cancel_pending(run_id):
+                    self._save_workflow_outcome(run_id, current, outcome)
+                    return
+            if self.stop.wait(0.01):
+                return
+
+    def _save_workflow_outcome(self, run_id, current, outcome):
+        steps = _public_steps(outcome["steps"])
+        exit_code = outcome["exit_code"]
+        image_ok = outcome["image_digest"] == current["input"]["image_digest"]
+        if outcome["status"] == "cancelled" and image_ok:
+            current.update(
+                state="cancelled",
+                exit_code=None,
+                error=None,
+                cancel_requested=False,
+                steps=steps,
+            )
+        elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
+            current.update(state="succeeded", exit_code=0, error=None, steps=steps)
+        elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
+            current.update(state="failed", exit_code=exit_code, error=None, steps=steps)
+        else:
             current.update(
                 state="failed",
                 exit_code=None,
-                finished_at=now(),
-                error={"kind": "SETUP_FAILED", "message": message[:512]},
-                cleanup="confirmed_no_external_resources",
+                error={
+                    "kind": "SETUP_FAILED" if not image_ok else "STEP_FAILED",
+                    "message": _step_failure_message(outcome, image_ok)[:512],
+                },
+                steps=steps,
             )
-            self.save(current)
-
-    def _finish_workflow(self, run_id, outcome):
-        with self.guard, self.db:
-            current = self.get(run_id)
-            if current["state"] in TERMINAL:
-                return
-            steps = _public_steps(outcome["steps"])
-            exit_code = outcome["exit_code"]
-            image_ok = outcome["image_digest"] == current["input"]["image_digest"]
-            if outcome["status"] == "cancelled" and image_ok:
-                current.update(
-                    state="cancelled",
-                    exit_code=None,
-                    error=None,
-                    cancel_requested=False,
-                    steps=steps,
-                )
-            elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
-                current.update(state="succeeded", exit_code=0, error=None, steps=steps)
-            elif type(exit_code) is int and 1 <= exit_code <= 255 and image_ok:
-                current.update(state="failed", exit_code=exit_code, error=None, steps=steps)
-            else:
-                current.update(
-                    state="failed",
-                    exit_code=None,
-                    error={
-                        "kind": "SETUP_FAILED" if not image_ok else "STEP_FAILED",
-                        "message": _step_failure_message(outcome, image_ok)[:512],
-                    },
-                    steps=steps,
-                )
-            current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
-            self.db.execute(
-                "UPDATE runs SET log=? WHERE id=?",
-                (_workflow_log(outcome["steps"]), run_id),
-            )
-            self.save(current)
+        current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
+        self.db.execute(
+            "UPDATE runs SET log=? WHERE id=?",
+            (_workflow_log(outcome["steps"]), run_id),
+        )
+        self.save(current)
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
@@ -479,6 +539,79 @@ class Worker:
             shutil.rmtree(workspace)
         except OSError:
             return
+
+    def _cancel_running_workflow(self, record):
+        """Stop the owned container, then commit cancelled only if it is gone.
+
+        The worker lock covers the commit, not the stop. The commit reads the
+        record again under that lock and leaves a terminal state that has
+        already been committed. A finish that arrives after caller cancel is
+        marked does not replace the still-running record. Waiting for the
+        container name uses the existing 60 second docker create timeout,
+        not a new limit. The stop uses the grace in `_stop_container`.
+        """
+
+        with self.guard:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                return current
+            lease = self.live.get(current["run_id"])
+            if lease is None:
+                return self._commit_lost(current, None)
+            phase, _name, _docker = lease.request_cancel()
+            if phase == "idle":
+                return self._commit_cancelled(current)
+        if phase == "creating":
+            lease.wait_until_published(60)
+        return self._stop_and_commit(current, lease)
+
+    def _stop_and_commit(self, record, lease):
+        if not lease.removed():
+            lease.stop()
+        if lease.removed():
+            return self._commit_cancelled(record)
+        _phase, name, _docker, _cancel = lease.snapshot()
+        return self._commit_lost(record, name)
+
+    def _commit_cancelled(self, record):
+        with self.guard, self.db:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                self.live.pop(current["run_id"], None)
+                return current
+            current.update(
+                state="cancelled",
+                cancel_requested=True,
+                exit_code=None,
+                error=None,
+                finished_at=now(),
+                cleanup="confirmed_no_external_resources",
+            )
+            self.save(current)
+            self.live.pop(current["run_id"], None)
+            return current
+
+    def _commit_lost(self, record, container_name):
+        with self.guard, self.db:
+            current = self.get(record["run_id"])
+            if current["state"] in TERMINAL:
+                self.live.pop(current["run_id"], None)
+                return current
+            current.update(
+                state="lost",
+                cancel_requested=True,
+                exit_code=None,
+                finished_at=now(),
+                error={
+                    "kind": "WORKER_INTERRUPTED",
+                    "message": "owned container cleanup was not confirmed",
+                },
+                cleanup="unresolved",
+            )
+            self.save(current)
+            self.live.pop(current["run_id"], None)
+            self.unresolved[current.get("attempt_id") or current["run_id"]] = container_name
+            return current
 
     def submit_workflow(self, p):
         fields(p, ("version", "submission_key", "workflow", "job_id", "event", "image"))
@@ -517,6 +650,15 @@ class Worker:
             raise Fault(
                 "WORKER_NOT_READY",
                 "worker cannot accept new execution; inspect worker.describe",
+            )
+        # An unresolved container blocks a new workflow attempt. The same key
+        # still returns its original run above. Development fixtures do not use
+        # this gate, and describe.ready stays the scheduler flag. Restart
+        # reconciliation of a leftover container is NS-10.
+        if conflicts_with_unresolved(self.unresolved):
+            raise Fault(
+                "WORKER_NOT_READY",
+                "an unresolved owned container blocks a new attempt",
             )
         queued = self.db.execute(
             "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
@@ -717,17 +859,13 @@ class Worker:
         if method == "run.cancel":
             fields(p, ("version", "run_id"))
             self.version(p)
-            record = self.get(p["run_id"])
-            if record["state"] not in TERMINAL:
-                record.update(
-                    state="cancelled",
-                    cancel_requested=True,
-                    finished_at=now(),
-                    cleanup="confirmed_no_external_resources",
-                )
-                with self.db:
-                    self.save(record)
-            return record
+            with self.guard:
+                record = self.get(p["run_id"])
+                if record["state"] in TERMINAL:
+                    return record
+                if record["state"] == "queued" or record["input"]["kind"] != "workflow_job":
+                    return self._commit_cancelled(record)
+            return self._cancel_running_workflow(record)
         if method == "run.list":
             fields(p, (), ("cursor", "limit", "state"))
             limit = integer(p.get("limit", 20), 1, MAX_LIST_PAGE, "limit")
@@ -801,8 +939,15 @@ class Worker:
                     "INVALID_REQUEST", "expected bounded JSON-RPC request with string or integer id"
                 )
             request_id = request["id"]
-            with self.guard:
-                result = self.dispatch(request["method"], request.get("params", {}))
+            method = request["method"]
+            params = request.get("params", {})
+            # run.cancel stops a container outside this lock. Its commit takes
+            # the lock again and keeps a terminal result that landed mid-stop.
+            if method == "run.cancel":
+                result = self.dispatch(method, params)
+            else:
+                with self.guard:
+                    result = self.dispatch(method, params)
             return {"jsonrpc": "2.0", "id": request_id, "result": result}
         except Fault as error:
             return error_response(request_id, error)
