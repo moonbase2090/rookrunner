@@ -3,8 +3,9 @@
 A local tool, worker agent, and execution protocol for software builds and tests.
 
 **Status:** M1 complete; M2 started. The worker runs synthetic development fixtures,
-and a new local command captures repository inputs. Real workflow execution is
-not implemented yet.
+and a local command captures repository inputs. Planning, snapshot verification,
+attempt materialization, and digest-pinned Bash execution exist as libraries.
+The worker does not accept or run a workflow yet.
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection
@@ -70,6 +71,9 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/ruff check src tests
 .venv/bin/ruff format --check src tests
 ```
+
+`tests/test_run.py` needs a local Docker daemon. It builds a disposable image
+and passes that image id. It does not select a project default image.
 
 M2 now provides preparatory source capture (requires Git):
 
