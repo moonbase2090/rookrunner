@@ -5,11 +5,12 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 
 from execution_core.attempt import materialize_attempt
 from execution_core.plan import plan_workflow
-from execution_core.run import RunError, run_job
+from execution_core.run import RunError, _exec_limit, run_job
 from execution_core.snapshot import SourceCapture
 
 
@@ -124,6 +125,15 @@ def _capture(root, workflow_text):
 
 def _plan(workflow_text):
     return plan_workflow(workflow_text.encode(), "build")["plan"]
+
+
+class TimeoutLimitTests(unittest.TestCase):
+    def test_job_deadline_wins_an_equal_step_limit(self):
+        self.assertEqual(_exec_limit(10, None), (10, True))
+        self.assertEqual(_exec_limit(10, 10), (10, True))
+        self.assertEqual(_exec_limit(10, 11), (10, True))
+        self.assertEqual(_exec_limit(10, 9), (9, False))
+        self.assertEqual(_exec_limit(0, 5), (0, True))
 
 
 class SetupTests(unittest.TestCase):
@@ -252,6 +262,13 @@ class DockerRunTests(unittest.TestCase):
         os.environ["ROOKRUNNER_TEST_MARKER"] = "fixture-secret-value"
 
     def tearDown(self):
+        names = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
+            capture_output=True,
+            text=True,
+        )
+        for container in names.stdout.split():
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         if self.previous is None:
             os.environ.pop("ROOKRUNNER_TEST_MARKER", None)
         else:
@@ -359,3 +376,46 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
         self.assertIn("will not resolve", str(raised.exception))
         self.assertFalse(any(call and call[0] == "create" for call in self._calls()))
+
+    def test_step_timeout_argument_stops_before_the_job_deadline(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    timeout-minutes: 1
+    steps:
+      - id: sleep
+        run: sleep infinity
+      - id: after
+        run: echo after
+"""
+        root = self.root / "step-timeout"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        started = time.monotonic()
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker="docker",
+            step_timeout=2,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["exit_code"])
+        self.assertEqual(result["steps"][0]["error"], "step timed out")
+        self.assertEqual([step["id"] for step in result["steps"]], ["sleep"])
+        self.assertNotEqual(result["status"], "succeeded")
+        # 2s step ceiling plus the 7.5s + 2.5s cancellation grace, with slack.
+        self.assertLess(elapsed, 20)
+        self.assertGreater(elapsed, 1)
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(listed.stdout.strip(), "")

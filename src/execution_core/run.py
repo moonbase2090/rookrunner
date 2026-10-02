@@ -20,10 +20,19 @@ is invented. `runs-on` does not select an image.
 
 The container is created with network `none`. The Docker socket and host
 credential directories are not mounted. Expressions in `run` are not evaluated.
+
+The job deadline is `timeout-minutes` on the plan (default 360). It starts
+when `run_job` starts and covers setup and steps. Reaching it stops the owned
+container and returns status `cancelled`. A step `timeout-minutes` fails that
+step when it is shorter than the time left in the job. Stopping uses the
+documented cancellation grace: SIGINT, 7500 ms, SIGTERM, 2500 ms, then the
+container is removed. A timed-out `docker exec` does not keep partial stdout
+or stderr.
 """
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -31,9 +40,18 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 
+from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
+
+# https://docs.github.com/en/actions/reference/workflow-cancellation-reference
+# The runner sends SIGINT, waits 7500 ms, sends SIGTERM, waits 2500 ms, then
+# kills the process tree. A job still marked cancelled after 5 minutes is
+# forcibly terminated. These waits are maximums; polling returns earlier.
+_CANCEL_SIGINT_SECONDS = 7.5
+_CANCEL_SIGTERM_SECONDS = 2.5
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
@@ -54,6 +72,16 @@ class RunError(Exception):
 
 class _Timeout(Exception):
     pass
+
+
+class _JobDeadline(Exception):
+    def __init__(self, step=None):
+        self.step = step
+
+
+class _StepTimedOut(Exception):
+    def __init__(self, step):
+        self.step = step
 
 
 def _setup(message, exc=None):
@@ -88,13 +116,32 @@ def _pinned(image):
     _setup("image is not pinned by digest")
 
 
-def _resolve_image(docker, reference, digest):
-    code, stdout = _inspect(docker, reference)
+def _invoke_within(docker, args, cap, deadline):
+    """Run one Docker call. A timeout at the job deadline raises `_JobDeadline`.
+
+    Equal remaining time and `cap` counts as the job bound. A timeout caused
+    by `cap` alone stays `_Timeout`.
+    """
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _JobDeadline()
+    job_bound = remaining <= cap
+    try:
+        return _invoke(docker, args, remaining if job_bound else cap)
+    except _Timeout:
+        if job_bound:
+            raise _JobDeadline() from None
+        raise
+
+
+def _resolve_image(docker, reference, digest, deadline):
+    code, stdout = _inspect(docker, reference, deadline)
     if code != 0 and reference != digest:
-        pull_code, _stdout, _stderr = _invoke(docker, ["pull", reference], 300)
+        pull_code, _stdout, _stderr = _invoke_within(docker, ["pull", reference], 300, deadline)
         if pull_code != 0:
             _setup("image digest will not resolve")
-        code, stdout = _inspect(docker, reference)
+        code, stdout = _inspect(docker, reference, deadline)
     if code != 0:
         _setup("image digest will not resolve")
     try:
@@ -114,9 +161,9 @@ def _resolve_image(docker, reference, digest):
     return digest
 
 
-def _inspect(docker, reference):
-    code, stdout, _stderr = _invoke(
-        docker, ["image", "inspect", "--format", _INSPECT, reference], 60
+def _inspect(docker, reference, deadline):
+    code, stdout, _stderr = _invoke_within(
+        docker, ["image", "inspect", "--format", _INSPECT, reference], 60, deadline
     )
     return code, stdout
 
@@ -402,6 +449,114 @@ def _create_args(name, workspace, private, reference):
     ]
 
 
+def _job_seconds(plan):
+    """Return the job deadline in seconds. An omitted value is 360 minutes."""
+
+    minutes = DEFAULT_JOB_TIMEOUT_MINUTES
+    if isinstance(plan, dict):
+        job = plan.get("job")
+        if isinstance(job, dict) and "timeout_minutes" in job:
+            minutes = job["timeout_minutes"]
+    if type(minutes) is not int or minutes < 1 or minutes > MAX_JOB_TIMEOUT_MINUTES:
+        _setup("job timeout is not accepted")
+    return minutes * 60
+
+
+def _step_seconds(step, step_timeout):
+    """Return the tighter step ceiling in seconds, or None when neither is set."""
+
+    limits = []
+    minutes = step.get("timeout_minutes")
+    if minutes is not None:
+        if type(minutes) is not int or minutes < 1 or minutes > MAX_STEP_TIMEOUT_MINUTES:
+            _setup("step timeout is not accepted")
+        limits.append(minutes * 60)
+    if step_timeout is not None:
+        if (
+            type(step_timeout) not in (int, float)
+            or not math.isfinite(step_timeout)
+            or step_timeout <= 0
+        ):
+            _setup("step timeout is not accepted")
+        limits.append(step_timeout)
+    if not limits:
+        return None
+    return min(limits)
+
+
+def _exec_limit(remaining, step_seconds):
+    """Return `(seconds, job_bound)`.
+
+    The job deadline wins when it is equal to or tighter than the step limit.
+    """
+
+    if step_seconds is not None and step_seconds < remaining:
+        return step_seconds, False
+    return remaining, True
+
+
+def _container_running(docker, name):
+    """Return True, False, or None when no container has that name."""
+
+    try:
+        code, stdout, _stderr = _invoke(
+            docker, ["inspect", "--format", "{{.State.Running}}", name], 60
+        )
+    except (RunError, _Timeout):
+        return True
+    if code != 0:
+        return None
+    return stdout.strip() == b"true"
+
+
+def _signal(docker, name, signal):
+    try:
+        _invoke(docker, ["kill", "--signal", signal, name], 60)
+    except (RunError, _Timeout):
+        return
+
+
+def _wait_until_stopped(docker, name, seconds):
+    deadline = time.monotonic() + seconds
+    while True:
+        if _container_running(docker, name) is not True:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.2, remaining))
+
+
+def _stop_container(docker, name):
+    """Stop an owned container with the documented cancellation grace, then remove it.
+
+    The runner sends SIGINT, waits 7500 ms, sends SIGTERM, waits 2500 ms,
+    and then kills the process tree. A cancellation still in progress after
+    5 minutes is forcibly terminated by the server.
+    https://docs.github.com/en/actions/reference/workflow-cancellation-reference
+
+    PID 1 is `sleep infinity`. Signaling it stops the container, which ends
+    the step process. This returns as soon as the container is stopped. A
+    missing container is already gone. A timed-out `docker exec` does not
+    keep the partial stdout or stderr from that call.
+    """
+
+    if _container_running(docker, name) is True:
+        _signal(docker, name, "INT")
+        if not _wait_until_stopped(docker, name, _CANCEL_SIGINT_SECONDS):
+            _signal(docker, name, "TERM")
+            _wait_until_stopped(docker, name, _CANCEL_SIGTERM_SECONDS)
+    if _container_running(docker, name) is None:
+        return 0
+    try:
+        code, _stdout, _stderr = _invoke(docker, ["rm", "-f", name], 60)
+    except (RunError, _Timeout):
+        return 1
+    if code == 0 or _container_running(docker, name) is None:
+        return 0
+    return code
+
+
 def run_job(
     snapshot_dir,
     snapshot_digest,
@@ -420,20 +575,31 @@ def run_job(
     succeeded and exit_code 0 only when every step exited 0. A nonzero step
     stops the sequence. The result names that step, its exit code, and the
     image digest.
+
+    The job deadline is the plan's `timeout_minutes` (default 360) measured
+    from the start of this call. Reaching it returns status cancelled. A step
+    `timeout_minutes`, or a caller `step_timeout` in seconds, fails that step
+    when it is shorter than the time remaining. The worker does not pass
+    `step_timeout`; the accepted plan is the bound. A timed-out `docker exec`
+    discards partial stdout and stderr.
     """
 
+    deadline = time.monotonic() + _job_seconds(plan)
     reference, digest, workflow, job, steps, event_bytes, workspace = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
     )
+    resolved = digest
     docker_bin = _docker_binary(docker)
-    image_digest = _resolve_image(docker_bin, reference, digest)
     private = Path(tempfile.mkdtemp(prefix="rookrunner-run-"))
     os.chmod(private, 0o700)
-    name = "rookrunner-" + os.urandom(8).hex()
+    name = None
     created = False
+    graceful = False
     outcome = None
     failure = None
+    records = []
     try:
+        resolved = _resolve_image(docker_bin, reference, digest, deadline)
         (private / "event.json").write_bytes(event_bytes)
         os.chmod(private / "event.json", 0o600)
         for step in steps:
@@ -442,18 +608,20 @@ def run_job(
             os.chmod(script, 0o600)
         if "," in os.fspath(private):
             _setup("workspace path is not accepted")
-        code, _stdout, _stderr = _invoke(
-            docker_bin, _create_args(name, workspace, private, reference), 60
+        name = "rookrunner-" + os.urandom(8).hex()
+        code, _stdout, _stderr = _invoke_within(
+            docker_bin, _create_args(name, workspace, private, reference), 60, deadline
         )
         if code != 0:
             _setup("container setup failed")
         created = True
-        code, _stdout, _stderr = _invoke(docker_bin, ["start", name], 60)
+        code, _stdout, _stderr = _invoke_within(docker_bin, ["start", name], 60, deadline)
         if code != 0:
             _setup("container setup failed")
-        probe, _stdout, _stderr = _invoke(docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30)
+        probe, _stdout, _stderr = _invoke_within(
+            docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30, deadline
+        )
         bash_ok = probe == 0
-        records = []
         for step in steps:
             record = _run_step(
                 docker_bin,
@@ -464,20 +632,33 @@ def run_job(
                 workspace,
                 bash_ok,
                 step_timeout,
+                deadline,
             )
             records.append(record)
             if record["status"] != "succeeded":
-                outcome = _outcome(image_digest, reference, records, record)
+                outcome = _outcome(resolved, reference, records, record)
                 break
         else:
-            outcome = _outcome(image_digest, reference, records, None)
+            outcome = _outcome(resolved, reference, records, None)
+    except _JobDeadline as exc:
+        if exc.step is not None:
+            records.append(exc.step)
+        graceful = True
+        outcome = _cancelled(resolved, reference, records)
+    except _StepTimedOut as exc:
+        records.append(exc.step)
+        graceful = True
+        outcome = _outcome(resolved, reference, records, exc.step)
     except Exception as exc:
         failure = exc
     finally:
         cleanup_code = 0
-        if created:
+        if name is not None and (created or graceful):
             try:
-                cleanup_code, _stdout, _stderr = _invoke(docker_bin, ["rm", "-f", name], 60)
+                if graceful:
+                    cleanup_code = _stop_container(docker_bin, name)
+                else:
+                    cleanup_code, _stdout, _stderr = _invoke(docker_bin, ["rm", "-f", name], 60)
             except (RunError, _Timeout):
                 cleanup_code = 1
         shutil.rmtree(private, ignore_errors=True)
@@ -512,7 +693,18 @@ def _outcome(image_digest, reference, records, failed):
     }
 
 
-def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout):
+def _cancelled(image_digest, reference, records):
+    return {
+        "image_digest": image_digest,
+        "image_reference": reference,
+        "status": "cancelled",
+        "exit_code": None,
+        "failed_step": None,
+        "steps": records,
+    }
+
+
+def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout, deadline):
     shell = _chosen_shell(step, job, workflow)
     relative = _chosen_directory(step, job, workflow)
     container_script = f"/run/rookrunner/step-{step['index']}"
@@ -527,13 +719,23 @@ def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeou
     env_args = []
     for key, value in _merged_env(workflow, job, step):
         env_args.extend(["--env", f"{key}={value}"])
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _JobDeadline()
+    limit, job_bound = _exec_limit(remaining, _step_seconds(step, step_timeout))
     try:
         code, stdout, stderr = _invoke(
             docker,
             ["exec", "--workdir", workdir, *env_args, name, *command],
-            step_timeout,
+            limit,
         )
     except _Timeout:
-        return _step_result(step, "failed", None, "", "", "step timed out")
+        # The docker client is gone. Partial stdout and stderr from that call
+        # are discarded. The caller stops the container.
+        message = "job timed out" if job_bound else "step timed out"
+        record = _step_result(step, "failed", None, "", "", message)
+        if job_bound:
+            raise _JobDeadline(record) from None
+        raise _StepTimedOut(record) from None
     status = "succeeded" if code == 0 else "failed"
     return _step_result(step, status, code, _text(stdout), _text(stderr), None)

@@ -44,6 +44,39 @@ class SchemaTests(unittest.TestCase):
                 bad[field] = value
                 self.assertFalse(validator("Run").is_valid(bad))
 
+    def test_job_timeout_cancel_allows_cancel_requested_false(self):
+        examples = json.loads((ROOT / "schemas/v0/examples.json").read_text())
+        success = next(e["value"] for e in examples if e["name"] == "succeeded run")
+        timed_out = copy.deepcopy(success)
+        timed_out.update(
+            state="cancelled",
+            exit_code=None,
+            error=None,
+            cancel_requested=False,
+            steps=[
+                {
+                    "index": 0,
+                    "id": "sleep",
+                    "name": None,
+                    "status": "failed",
+                    "exit_code": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "error": "job timed out",
+                }
+            ],
+        )
+        validator("Run").validate(timed_out)
+        caller = copy.deepcopy(timed_out)
+        caller["cancel_requested"] = True
+        del caller["steps"]
+        validator("Run").validate(caller)
+        for field, value in (("exit_code", 1), ("error", {"kind": "STEP_FAILED", "message": "no"})):
+            with self.subTest(field=field):
+                bad = copy.deepcopy(timed_out)
+                bad[field] = value
+                self.assertFalse(validator("Run").is_valid(bad))
+
     def test_error_codes_and_envelopes_are_unambiguous(self):
         reply = {
             "jsonrpc": "2.0",

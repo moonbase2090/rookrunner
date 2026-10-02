@@ -28,10 +28,19 @@ MAX_DEPTH = 64
 # Job time bound is jobs.<job_id>.timeout-minutes. The default is 360 minutes,
 # which is also the 6 hour GitHub-hosted job execution time. Self-hosted job
 # execution time is 5 days, and that is the ceiling accepted here because this
-# engine runs the job. Stopping the container at the bound is later work.
+# engine runs the job. run_job stops the owned container at that bound.
 # https://docs.github.com/en/actions/reference/limits
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 DEFAULT_JOB_TIMEOUT_MINUTES = 360
 MAX_JOB_TIMEOUT_MINUTES = 5 * 24 * 60
+# jobs.<job_id>.steps[*].timeout-minutes maximum is 360 minutes on both
+# GitHub-hosted and self-hosted runners. An omitted step timeout has no
+# default; only the job bound applies. A longer step value is rejected here.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+GITHUB_WORKFLOW_SYNTAX = (
+    "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax"
+)
+MAX_STEP_TIMEOUT_MINUTES = 360
 STR_TAG = "tag:yaml.org,2002:str"
 BOOL_TAG = "tag:yaml.org,2002:bool"
 MERGE_TAG = "tag:yaml.org,2002:merge"
@@ -59,7 +68,7 @@ FORBIDDEN = {
 }
 WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
 JOB_KEYS = {"name", "runs-on", "steps", "defaults", "env", "timeout-minutes"}
-STEP_KEYS = {"id", "name", "run", "shell", "working-directory", "env"}
+STEP_KEYS = {"id", "name", "run", "shell", "working-directory", "env", "timeout-minutes"}
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
 
@@ -299,13 +308,7 @@ class _Planner:
             return values
         return self._string_scalar(node, path)
 
-    def _timeout_minutes(self, items, field):
-        """Record the job time bound. An omitted value is the 360 minute default."""
-
-        if "timeout-minutes" not in items:
-            return DEFAULT_JOB_TIMEOUT_MINUTES
-        path = _join(field, "timeout-minutes")
-        node = items["timeout-minutes"][1]
+    def _positive_minutes(self, node, path):
         self._enter(node, path)
         if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:int":
             _invalid(f"{path} must be a positive integer number of minutes", path)
@@ -315,11 +318,35 @@ class _Planner:
             _invalid(f"{path} must be a positive integer number of minutes", path)
         if type(value) is not int or value < 1:
             _invalid(f"{path} must be a positive integer number of minutes", path)
+        return value
+
+    def _timeout_minutes(self, items, field):
+        """Record the job time bound. An omitted value is the 360 minute default."""
+
+        if "timeout-minutes" not in items:
+            return DEFAULT_JOB_TIMEOUT_MINUTES
+        path = _join(field, "timeout-minutes")
+        value = self._positive_minutes(items["timeout-minutes"][1], path)
         if value > MAX_JOB_TIMEOUT_MINUTES:
             raise PlanError(
                 "CAPABILITY_UNSUPPORTED",
                 f"{path} is above the 5 day self-hosted job execution time "
                 f"({GITHUB_ACTIONS_LIMITS})",
+                path,
+            )
+        return value
+
+    def _step_timeout_minutes(self, items, field):
+        """Record a step timeout. An omitted value stays omitted; there is no step default."""
+
+        if "timeout-minutes" not in items:
+            return None
+        path = _join(field, "timeout-minutes")
+        value = self._positive_minutes(items["timeout-minutes"][1], path)
+        if value > MAX_STEP_TIMEOUT_MINUTES:
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"{path} is above the 360 minute step timeout maximum ({GITHUB_WORKFLOW_SYNTAX})",
                 path,
             )
         return value
@@ -341,20 +368,20 @@ class _Planner:
             self._allow(body, step_field, STEP_KEYS)
             if "run" not in body:
                 _invalid(f"{field} is not sequential run steps", step_field)
-            steps.append(
-                {
-                    "index": index,
-                    "location": _location(child),
-                    "id": self._optional_string(body, step_field, "id"),
-                    "name": self._optional_string(body, step_field, "name"),
-                    "run": self._string_scalar(body["run"][1], _join(step_field, "run")),
-                    "shell": self._optional_string(body, step_field, "shell"),
-                    "working_directory": self._optional_string(
-                        body, step_field, "working-directory"
-                    ),
-                    "env": self._env(body, step_field),
-                }
-            )
+            recorded = {
+                "index": index,
+                "location": _location(child),
+                "id": self._optional_string(body, step_field, "id"),
+                "name": self._optional_string(body, step_field, "name"),
+                "run": self._string_scalar(body["run"][1], _join(step_field, "run")),
+                "shell": self._optional_string(body, step_field, "shell"),
+                "working_directory": self._optional_string(body, step_field, "working-directory"),
+                "env": self._env(body, step_field),
+            }
+            timeout_minutes = self._step_timeout_minutes(body, step_field)
+            if timeout_minutes is not None:
+                recorded["timeout_minutes"] = timeout_minutes
+            steps.append(recorded)
         return steps
 
 

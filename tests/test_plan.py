@@ -8,6 +8,7 @@ from unittest.mock import patch
 from execution_core.plan import (
     DEFAULT_JOB_TIMEOUT_MINUTES,
     MAX_JOB_TIMEOUT_MINUTES,
+    MAX_STEP_TIMEOUT_MINUTES,
     MAX_WORKFLOW_BYTES,
     PlanError,
     plan_snapshot,
@@ -91,6 +92,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(first_step["shell"], "bash")
         self.assertEqual(first_step["working_directory"], "src")
         self.assertEqual(first_step["env"], {"STEP": "${{ vars.MODE }}"})
+        self.assertNotIn("timeout_minutes", first_step)
+        self.assertNotIn("timeout_minutes", second_step)
         self.assertEqual(first_step["location"]["line"], line_of("id: one"))
         self.assertGreaterEqual(first_step["location"]["column"], 1)
         self.assertIsNone(second_step["shell"])
@@ -206,6 +209,46 @@ jobs:
             with self.subTest(minutes=minutes):
                 with self.assertRaises(PlanError) as raised:
                     plan_workflow(workflow(minutes).encode(), "build")
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+
+    def test_step_timeout_minutes_is_recorded_up_to_360(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    timeout-minutes: 1
+    steps:
+      - timeout-minutes: 1
+        run: echo ok
+      - run: echo later
+"""
+        planned = plan_workflow(workflow.encode(), "build")
+        steps = planned["plan"]["job"]["steps"]
+        self.assertEqual(steps[0]["timeout_minutes"], 1)
+        self.assertNotIn("timeout_minutes", steps[1])
+        self.assertEqual(planned["plan"]["job"]["timeout_minutes"], 1)
+        longer_than_job = workflow.replace(
+            "      - timeout-minutes: 1\n", "      - timeout-minutes: 360\n"
+        )
+        accepted = plan_workflow(longer_than_job.encode(), "build")
+        self.assertEqual(
+            accepted["plan"]["job"]["steps"][0]["timeout_minutes"], MAX_STEP_TIMEOUT_MINUTES
+        )
+        self.assertEqual(accepted["plan"]["job"]["timeout_minutes"], 1)
+        above = workflow.replace("      - timeout-minutes: 1\n", "      - timeout-minutes: 361\n")
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(above.encode(), "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.build.steps.0.timeout-minutes")
+        self.assertIn("360", str(raised.exception))
+        self.assertIn("workflow-syntax", str(raised.exception))
+        for minutes in ("0", "-1", "'30'", "1.5"):
+            with self.subTest(minutes=minutes):
+                body = workflow.replace(
+                    "      - timeout-minutes: 1\n", f"      - timeout-minutes: {minutes}\n"
+                )
+                with self.assertRaises(PlanError) as raised:
+                    plan_workflow(body.encode(), "build")
                 self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
 
     def test_job_must_be_sequential_run_steps(self):
@@ -326,13 +369,6 @@ jobs:
   test:
     steps:
       - if: ${{ false }}
-        run: echo hi
-""",
-            "jobs.test.steps.0.timeout-minutes": """\
-jobs:
-  test:
-    steps:
-      - timeout-minutes: 1
         run: echo hi
 """,
         }
