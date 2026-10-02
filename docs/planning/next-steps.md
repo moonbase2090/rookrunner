@@ -3,8 +3,8 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1, NS-2, and NS-3 are
-implemented. Later items are not. Continuous integration runs ruff and the
+roadmap step 1 and the first executable subset. NS-1, NS-2, NS-3, and NS-4
+are implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
 
@@ -81,10 +81,21 @@ Acceptance criteria:
 
 **NS-4. Run that workspace as sequential Bash steps in Docker.**
 
-This is the library used by later worker code. It is not yet a protocol
-method. The caller passes an image already pinned by digest. This PR does
-not choose the project's default image. That choice remains the open PRD
-question.
+Status: implemented.
+
+This is the library used by later worker code. It is not a protocol method.
+The caller passes an image already pinned by digest. No project default
+image is selected. That choice remains the open PRD question.
+
+Omitted shell, `bash`, and `sh` follow the Linux runner commands reviewed
+2026-10-02. Explicit `bash` enables pipefail. An omitted shell does not.
+Workflow env is overridden by job env, then by step env. The runner then
+sets `GITHUB_WORKSPACE` and `ROOKRUNNER_EVENT`. The event file is the
+caller's canonical JSON, not a GitHub event delivery. The container network
+is `none`. The Docker socket and host credentials are not mounted. A nonzero
+step stops the sequence. The result names that step, its exit code, and the
+image digest. Docker missing, an unresolvable digest, and a workspace or
+snapshot that fails verification raise `SETUP_FAILED` and are not exit 0.
 
 Acceptance criteria:
 
