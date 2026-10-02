@@ -77,6 +77,28 @@ class SchemaTests(unittest.TestCase):
                 bad[field] = value
                 self.assertFalse(validator("Run").is_valid(bad))
 
+    def test_unresolved_cleanup_is_only_a_lost_run(self):
+        examples = json.loads((ROOT / "schemas/v0/examples.json").read_text())
+        success = next(e["value"] for e in examples if e["name"] == "succeeded run")
+        lost = copy.deepcopy(success)
+        lost.update(
+            state="lost",
+            exit_code=None,
+            cancel_requested=True,
+            cleanup="unresolved",
+            error={
+                "kind": "WORKER_INTERRUPTED",
+                "message": "owned container cleanup was not confirmed",
+            },
+        )
+        validator("Run").validate(lost)
+        restart = copy.deepcopy(lost)
+        restart.update(cancel_requested=False, cleanup="confirmed_no_external_resources")
+        validator("Run").validate(restart)
+        cancelled = copy.deepcopy(lost)
+        cancelled.update(state="cancelled", error=None, cleanup="unresolved")
+        self.assertFalse(validator("Run").is_valid(cancelled))
+
     def test_error_codes_and_envelopes_are_unambiguous(self):
         reply = {
             "jsonrpc": "2.0",

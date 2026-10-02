@@ -10,8 +10,21 @@ import unittest
 from unittest.mock import patch
 
 from execution_core.cli import call
-from execution_core.worker import Worker
+from execution_core.worker import Worker, conflicts_with_unresolved
 from schema_support import validate_response
+
+
+class UnresolvedAttemptTests(unittest.TestCase):
+    def test_any_unresolved_container_conflicts(self):
+        self.assertFalse(conflicts_with_unresolved({}))
+        pending = {"attempt-1": "rookrunner-abc"}
+        self.assertTrue(conflicts_with_unresolved(pending))
+        self.assertTrue(conflicts_with_unresolved(pending, attempt_id="attempt-1"))
+        self.assertTrue(conflicts_with_unresolved(pending, container_name="rookrunner-abc"))
+        self.assertTrue(
+            conflicts_with_unresolved(pending, attempt_id="other", container_name="other")
+        )
+        self.assertTrue(conflicts_with_unresolved({"attempt-1": None}, container_name=None))
 
 
 class FailureTests(unittest.TestCase):

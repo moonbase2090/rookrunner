@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-7 are
+roadmap step 1 and the first executable subset. NS-1 through NS-9 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -167,9 +167,9 @@ rejected before a run exists. The job time bound recorded on the plan is
 bound. Stdout and stderr on those records are capped
 at 65536 characters. `run.logs` pages the captured step output. Closing the
 client does not stop the worker or the container. A cancel that commits
-while the job is still queued does not start a container. Stopping a running
-container early, and removing a container left by a killed worker, are later
-items. Development fixtures are unchanged.
+while the job is still queued does not start a container. Caller cancellation
+of a running container stops it. Removing a container left by a killed worker
+is still NS-10. Development fixtures are unchanged.
 
 Acceptance criteria:
 
@@ -235,8 +235,8 @@ timeout. That page can be empty.
 A run that finishes inside the timeout is unchanged. The bound is the
 submitted `timeout-minutes`, or the recorded default of 360 when the
 workflow omits it. Cancelling a queued run still does not start a container.
-Cancelling a running container from `run.cancel`, and removing a container
-left by a killed worker, remain NS-9 and NS-10.
+Cancelling a running container from `run.cancel` stops it and is specified
+by NS-9. Removing a container left by a killed worker remains NS-10.
 
 Acceptance criteria:
 
@@ -247,6 +247,24 @@ Acceptance criteria:
   the explicit submission value, not an unstated default that hides a hang.
 
 **NS-9. Cancel owned containers.**
+
+Status: implemented.
+
+Cancelling a queued workflow run records `cancelled` and does not start a
+container. Cancelling a running workflow run stops the owned container with
+the same grace as a timeout (SIGINT, 7500 ms, SIGTERM, 2500 ms, then removal).
+The container's main process is a shell that exits on SIGINT or SIGTERM, so
+the grace returns as soon as the container stops. `sleep` is a child of that
+shell. As PID 1 it would ignore those signals. The run is `cancelled` with
+`cancel_requested` true only after that container
+is gone. If it is still present, the run is `lost` with `cancel_requested`
+true, error kind `WORKER_INTERRUPTED`, and cleanup `unresolved`. A new
+workflow attempt is refused with `WORKER_NOT_READY` while that ownership is
+unresolved, and a queued workflow job stays queued. Development fixtures still
+run. `worker.describe` `ready` stays the scheduler flag. The first committed
+terminal state wins against completion. The refusal is in memory. Restart
+still marks a running record `lost` without removing a leftover container;
+that reconciliation is NS-10.
 
 Acceptance criteria:
 

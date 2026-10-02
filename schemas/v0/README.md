@@ -44,7 +44,12 @@ also specifies wire and stateful rules:
   file larger than 500 KB is rejected at planning
   (https://docs.github.com/en/actions/reference/limits). A cancelled run may
   have `cancel_requested` false when a job timeout cancelled it. Caller
-  cancellation sets `cancel_requested` true. `run.logs` pages the
+  cancellation sets `cancel_requested` true. A lost run may use cleanup
+  `unresolved` when caller cancellation could not show that the owned
+  container was gone. That record has `cancel_requested` true. A restart
+  still records cleanup `confirmed_no_external_resources` and
+  `cancel_requested` false; it does not remove a leftover container.
+  `run.logs` pages the
   job's step stdout and stderr. A setup failure has a
   null exit code and error kind `SETUP_FAILED`. The schema validates those
   shapes; it cannot prove input

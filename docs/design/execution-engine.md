@@ -4,9 +4,10 @@ Status: owned-engine direction accepted in [decision 0003](../decisions/0003-own
 The component decomposition and sequence below are proposed implementation details.
 Parsing, snapshot verification, attempt materialization, the first Bash
 subset, version 1 execution of one accepted job, paging of that job's
-step stdout and stderr, and the job and step timeout bounds are implemented.
-Early cancellation of a running container from `run.cancel`, and restart
-cleanup of a leftover container, are not.
+step stdout and stderr, the job and step timeout bounds, and caller
+cancellation of a running container are implemented. If that cleanup cannot
+be shown, the run is lost and a new workflow attempt is refused until this
+process restarts. Restart cleanup of a leftover container is not.
 The rest of this plan is not.
 
 ## Execution path

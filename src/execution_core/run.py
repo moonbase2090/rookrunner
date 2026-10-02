@@ -26,8 +26,9 @@ when `run_job` starts and covers setup and steps. Reaching it stops the owned
 container and returns status `cancelled`. A step `timeout-minutes` fails that
 step when it is shorter than the time left in the job. Stopping uses the
 documented cancellation grace: SIGINT, 7500 ms, SIGTERM, 2500 ms, then the
-container is removed. A timed-out `docker exec` does not keep partial stdout
-or stderr.
+container is removed. An optional owner reserves the container name before
+create so a caller can stop that container with the same grace. A timed-out
+`docker exec` does not keep partial stdout or stderr.
 """
 
 import hashlib
@@ -40,6 +41,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 
 from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
@@ -439,13 +441,18 @@ def _create_args(name, workspace, private, reference):
         "--workdir",
         "/workspace",
         "--entrypoint",
-        "sleep",
+        "sh",
         "--mount",
         f"type=bind,source={workspace},destination=/workspace",
         "--mount",
         f"type=bind,source={private},destination=/run/rookrunner,readonly",
         reference,
-        "infinity",
+        "-c",
+        # PID 1 ignores SIGINT and SIGTERM unless it installs a handler.
+        # `sleep` does not, so the cancellation grace would always wait out
+        # both periods. This shell exits on those signals and `sleep` is a
+        # child that only keeps the container alive across steps.
+        "trap 'exit 130' INT TERM; sleep infinity & wait",
     ]
 
 
@@ -535,10 +542,11 @@ def _stop_container(docker, name):
     5 minutes is forcibly terminated by the server.
     https://docs.github.com/en/actions/reference/workflow-cancellation-reference
 
-    PID 1 is `sleep infinity`. Signaling it stops the container, which ends
-    the step process. This returns as soon as the container is stopped. A
-    missing container is already gone. A timed-out `docker exec` does not
-    keep the partial stdout or stderr from that call.
+    PID 1 is a shell that exits on SIGINT or SIGTERM. `sleep infinity` is its
+    child and only keeps the container alive across steps. Signaling the shell
+    stops the container, which ends the step process. This returns as soon as
+    the container is stopped. A missing container is already gone. A timed-out
+    `docker exec` does not keep the partial stdout or stderr from that call.
     """
 
     if _container_running(docker, name) is True:
@@ -557,6 +565,70 @@ def _stop_container(docker, name):
     return code
 
 
+class ContainerLease:
+    """Publish one container name before `docker create`.
+
+    `begin` reserves the name. `created` and `closed` wake a caller that is
+    waiting to stop the container. Those methods do not take the worker lock.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self.phase = "idle"
+        self.name = None
+        self.docker = None
+        self.cancel = False
+
+    def begin(self, docker, name):
+        with self._lock:
+            if self.cancel or self.phase != "idle":
+                return False
+            self.docker = docker
+            self.name = name
+            self.phase = "creating"
+            return True
+
+    def created(self):
+        with self._lock:
+            if self.phase == "creating":
+                self.phase = "live"
+            self._ready.set()
+
+    def closed(self):
+        with self._lock:
+            self.phase = "closed"
+            self._ready.set()
+
+    def cancelled(self):
+        with self._lock:
+            return self.cancel
+
+    def snapshot(self):
+        with self._lock:
+            return self.phase, self.name, self.docker, self.cancel
+
+    def request_cancel(self):
+        with self._lock:
+            self.cancel = True
+            return self.phase, self.name, self.docker
+
+    def wait_until_published(self, seconds):
+        self._ready.wait(seconds)
+
+    def removed(self):
+        _phase, name, docker, _cancel = self.snapshot()
+        if not name or not docker:
+            return True
+        return _container_running(docker, name) is None
+
+    def stop(self):
+        _phase, name, docker, _cancel = self.snapshot()
+        if not name or not docker:
+            return 0
+        return _stop_container(docker, name)
+
+
 def run_job(
     snapshot_dir,
     snapshot_digest,
@@ -567,6 +639,7 @@ def run_job(
     *,
     docker="docker",
     step_timeout=None,
+    owner=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -581,7 +654,9 @@ def run_job(
     `timeout_minutes`, or a caller `step_timeout` in seconds, fails that step
     when it is shorter than the time remaining. The worker does not pass
     `step_timeout`; the accepted plan is the bound. A timed-out `docker exec`
-    discards partial stdout and stderr.
+    discards partial stdout and stderr. `owner` reserves the name before
+    create. If that owner is already cancelled, this does not start the
+    container.
     """
 
     deadline = time.monotonic() + _job_seconds(plan)
@@ -609,12 +684,19 @@ def run_job(
         if "," in os.fspath(private):
             _setup("workspace path is not accepted")
         name = "rookrunner-" + os.urandom(8).hex()
+        if owner is not None and not owner.begin(docker_bin, name):
+            _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(
             docker_bin, _create_args(name, workspace, private, reference), 60, deadline
         )
         if code != 0:
             _setup("container setup failed")
         created = True
+        if owner is not None:
+            owner.created()
+            if owner.cancelled():
+                graceful = True
+                _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(docker_bin, ["start", name], 60, deadline)
         if code != 0:
             _setup("container setup failed")
@@ -652,6 +734,8 @@ def run_job(
     except Exception as exc:
         failure = exc
     finally:
+        if owner is not None:
+            owner.closed()
         cleanup_code = 0
         if name is not None and (created or graceful):
             try:
@@ -659,6 +743,8 @@ def run_job(
                     cleanup_code = _stop_container(docker_bin, name)
                 else:
                     cleanup_code, _stdout, _stderr = _invoke(docker_bin, ["rm", "-f", name], 60)
+                    if cleanup_code != 0 and _container_running(docker_bin, name) is None:
+                        cleanup_code = 0
             except (RunError, _Timeout):
                 cleanup_code = 1
         shutil.rmtree(private, ignore_errors=True)

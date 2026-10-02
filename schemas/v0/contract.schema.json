@@ -694,7 +694,8 @@
         "cleanup": {
           "enum": [
             "not_started",
-            "confirmed_no_external_resources"
+            "confirmed_no_external_resources",
+            "unresolved"
           ]
         },
         "steps": {
@@ -943,10 +944,14 @@
                 "$ref": "#/$defs/Timestamp"
               },
               "cleanup": {
-                "const": "confirmed_no_external_resources"
+                "enum": [
+                  "confirmed_no_external_resources",
+                  "unresolved"
+                ]
               },
               "cancel_requested": {
-                "const": false
+                "type": "boolean",
+                "description": "True when the caller cancelled and cleanup could not be shown. False when a restart marked the run lost."
               },
               "error": {
                 "type": "object",

@@ -68,6 +68,18 @@ steps, and records `failed` with a null exit code and error kind
 `STEP_FAILED`. A run that finishes inside the timeout is unchanged. The stop
 uses the cancellation grace of SIGINT, 7500 ms, SIGTERM, then 2500 ms
 (https://docs.github.com/en/actions/reference/workflow-cancellation-reference).
+Caller `run.cancel` on a queued workflow records `cancelled` and does not
+start a container. On a running workflow it stops the owned container with
+that same grace. The container's main process is a shell that exits on
+SIGINT or SIGTERM, so the grace returns as soon as the container stops.
+`sleep` keeps the container alive as a child of that shell. The run is
+recorded `cancelled` with `cancel_requested` true only
+after the container is gone. If the container is still present, the run is
+`lost`, with `cancel_requested` true, error kind `WORKER_INTERRUPTED`, and
+cleanup `unresolved`. A new workflow submission then returns
+`WORKER_NOT_READY` and a queued workflow job is not started. Development
+fixtures still run, and `worker.describe` `ready` stays the scheduler flag.
+That block is in memory. Restart does not remove a leftover container.
 A job matrix stays unsupported; GitHub's matrix
 limit is 256 jobs per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
