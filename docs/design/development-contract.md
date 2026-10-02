@@ -133,8 +133,9 @@ Submission keys are 1–128 characters and scoped to the state directory's stabl
 worker ID. Omitted fixture defaults normalize to explicit defaults. Same key and
 normalized input return the existing run; changed parameters produce
 `IDEMPOTENCY_CONFLICT`. All runs, inputs, logs, and keys are retained indefinitely;
-there is no pruning or key expiry in this prototype. Persistent storage is not
-bounded yet, so this is a development service rather than an unattended release.
+there is no pruning or key expiry in this prototype. New submissions stop when
+the configured disk budget would be exceeded. That refusal is not pruning, so
+this remains a development service rather than an unattended release.
 The retry window is therefore the entire lifetime of the retained worker state,
 including across restarts. No tombstone expiry is needed because no run or key
 can be pruned through the API. Deleting the state directory outside the service
@@ -185,7 +186,22 @@ consuming the submission key. Other database errors produce sanitized
 `INTERNAL_ERROR` replies. If the scheduler cannot persist a transition, it stops
 and reports not-ready; restart reconciles any active attempt as lost. A
 killed worker's owned container is removed on restart or left unresolved.
-Broader disk budgets and retention remain later work.
+A configured disk budget covers the state directory, including snapshots and
+attempt workspaces. The default is GitHub Actions cache storage, 10 GB per
+repository on every plan in the storage table
+(https://docs.github.com/en/actions/reference/limits), stored as
+`10 * 1024 * 1024 * 1024` bytes. GitHub documents 10 GB and does not define
+the byte multiple; this repository uses 1024, matching its 500 KB
+workflow-file limit. GitHub may evict cache entries past a repository cache
+limit. This budget does not. A submission that would exceed it returns
+`STORAGE_FULL`, creates no run, and does not consume the submission key. The
+same key still returns a run that was already accepted. The snapshot captured
+for a refused workflow submission is removed because it is not yet evidence
+of a run. Active runs and their evidence are not deleted. SQLite full errors
+still roll back acceptance the same way. Runs and keys stay until the state
+directory is removed; pruning remains later work. The budget is worker
+configuration and is not a `worker.describe` limit. GitHub Free artifact
+storage, 500 MB, is an account artifact quota and is not this budget.
 
 CLI results are JSON-RPC envelopes. Exit zero means the requested protocol
 operation succeeded, including fetching a failed or active run. **A successful

@@ -68,7 +68,7 @@ After restart, reconcile interrupted attempts before accepting new execution tha
 An unresolved attempt becomes lost. It requires explicit resubmission after cleanup, not an automatic retry.
 
 Retention must preserve active attempts and their evidence. Disk exhaustion must stop new submissions with a useful error.
-Choose and document retention and disk budget defaults during implementation.
+The default budget is GitHub Actions cache storage, 10 GB per repository (https://docs.github.com/en/actions/reference/limits), stored as 10 * 1024 * 1024 * 1024 bytes. It covers state, snapshots, and attempt workspaces. It refuses new submissions and does not evict active evidence. Runs and keys are retained indefinitely.
 
 ## Cancellation
 
