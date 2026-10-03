@@ -3,7 +3,7 @@
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-17 are
+roadmap step 1 and the first executable subset. NS-1 through NS-18 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -50,13 +50,13 @@ Acceptance criteria:
   digest of the plan bytes. Repeating the parse yields the same digest.
 - String keys such as `on` survive parsing. Duplicate YAML keys fail.
   Expression text is preserved and not evaluated.
-- `uses`, `secrets`, service containers, reusable workflow calls, and
-  host or privileged execution fail before a plan exists. The error names
-  the field and says the capability is unsupported. Unsupported is a current
-  limit, not a decision to drop the feature. Job `needs` is NS-14. Local
-  composite `uses` is NS-16. A job `strategy` matrix is NS-17. Remote
-  `uses` is still rejected. An unknown `strategy` key still fails before a
-  plan exists.
+- `secrets`, service containers, and host or privileged execution fail
+  before a plan exists. The error names the field and says the capability
+  is unsupported. Unsupported is a current limit, not a decision to drop
+  the feature. Job `needs` is NS-14. Local composite `uses` is NS-16. A
+  job `strategy` matrix is NS-17. A local job `uses` of a reusable
+  workflow is NS-18. Remote `uses` is still rejected. An unknown
+  `strategy` key still fails before a plan exists.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
 - A workflow file larger than 500 KB produces no plan. The error is a
@@ -701,22 +701,99 @@ Acceptance criteria:
 - A matrix of 256 jobs is accepted. A matrix of 257 jobs is a capability
   error and cites the 256-job limit.
 
+**NS-18. Reusable workflows.**
+
+Status: implemented.
+
+Capability version is 7. A job may call one local reusable workflow with
+`uses: ./.github/workflows/<file>.yml` or the same path under `$/`. The
+file is read from the snapshot. A subdirectory of `.github/workflows` is
+invalid. A remote `owner/repo/path@ref` stays unsupported and is not
+fetched. An expression in `uses` is invalid.
+
+The called workflow must declare `workflow_call`. Its inputs require a
+type of `boolean`, `number`, or `string`. `choice` is not a
+`workflow_call` input type. A literal `with` value must match that type.
+A whole-string `${{ }}` is checked after it is evaluated. An unknown
+input is invalid. A required input that the caller omits is invalid. A
+default does not satisfy `required`. An omitted optional input uses its
+default, or the documented type default when no default is set: `false`,
+`0`, or `""`. Those defaults are applied when the call runs.
+`jobs.<job_id>.with` is the called workflow's `inputs` context. It is
+not copied into environment variables. Booleans stay booleans.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+Workflow outputs have no type. Each output's `value` must be one
+expression. The contexts are `github`, `jobs`, `vars`, and `inputs`.
+After the called jobs finish, that expression is evaluated and published
+on the caller job as `needs.<caller>.outputs.<name>`. Inner job outputs
+are not copied onto the caller directly. A value that names `secrets` is
+rejected while planning.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+
+A chain of more than ten workflows is a capability error. Ten is the
+top-level caller plus nine called workflows, and ten is accepted. The
+error cites the nesting section of the reusable-workflow how-to. More
+than 50 unique called workflow files, including nested trees, is a
+capability error. Fifty is accepted. The same file called twice counts
+once. The caller file is not counted. The error cites the limitations
+section of the reusable-workflow reference. A loop in the workflow tree
+is invalid. These are the documented limits. This slice adds no other
+numeric ceiling.
+
+https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#nesting-reusable-workflows
+https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#limitations-of-reusable-workflows
+
+`jobs.<id>.secrets` and `secrets: inherit` are unsupported, so secrets
+are not passed implicitly or by name. `on.workflow_call.secrets` is
+unsupported. The called workflow does not receive `github.token` or
+`secrets.GITHUB_TOKEN`. GitHub passes both. This slice does not.
+
+Caller workflow env is not copied into the called workflow. The called
+workflow's env applies to its own jobs and does not leak back. Pass
+values back through workflow outputs.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#limitations-of-reusable-workflows
+
+The caller job may set `name`, `uses`, `with`, `needs`, and `if`.
+`strategy`, `secrets`, `concurrency`, `permissions`, `cache-mode`,
+`runs-on`, `steps`, `env`, `outputs`, `timeout-minutes`, and `defaults`
+on that job are unsupported and name the field. GitHub allows a matrix
+on a caller job. This slice does not, and it does not evaluate matrix
+expressions.
+
+The called workflow's jobs run in the same caller-pinned container and
+attempt workspace, one at a time, after the caller job's `needs`. GitHub
+gives each job its own runner. The caller job's `if` is evaluated before
+the call. A false `if` skips the called jobs. The call fails if any
+called job fails. Each called job has its own `timeout-minutes` deadline
+when it starts. A caller job has no `timeout-minutes`. This is not a
+GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- `workflow_call` inputs and outputs type-check.
+- Nesting over the documented limit fails with a capability error that
+  cites the docs.
+- Secrets are not passed implicitly.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-seventeen PRs. Each one updates the capability version, rejects anything it
+eighteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-18 | Reusable workflows | `workflow_call` inputs and outputs type-check. Nesting over the documented limit fails. Secrets are not passed implicitly. |
 | NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. Service containers do not receive the engine socket. |
 | NS-20 | Sanitized Git metadata | A written design lands before code. The following PR copies only the metadata that design allows, still excludes credentials and remote URLs, and proves a checkout fixture against the captured digest. Until that PR, checkout actions remain an explicit rejection. |
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-18 through NS-20 can follow that evidence. They are not required
+restart. NS-19 and NS-20 can follow that evidence. They are not required
 to say the first subset runs.

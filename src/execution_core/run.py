@@ -55,7 +55,16 @@ same attempt workspace. `strategy.fail-fast` defaults to true and skips
 later combinations after one fails. `strategy.max-parallel` is recorded and
 is not a second container count: this worker never runs two combinations at
 once. Job `if` is evaluated before that expansion. A matrix job does not
-publish outputs to `needs`. Step `if` and job `if` are evaluated.
+publish outputs to `needs`. A job may call a local reusable workflow. The
+called file was read from the snapshot while planning. Every job in that
+workflow runs here, one at a time, on this workspace. Caller workflow env
+is not copied in. `with` becomes the called workflow's `inputs` context
+and is not exported as environment variables. An omitted optional input is
+false, 0, or an empty string
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+Secrets are not passed, and `github.token` is not created. GitHub passes
+`github.token` into a called workflow. This subset does not. Step `if` and
+job `if` are evaluated.
 Expressions in workflow `run`, workflow and step `env`, and `name` stay
 literal text. `github.event` is the caller event. Other `github` properties
 are not invented. `runner.os` is `Linux` because this subset runs in a Linux
@@ -137,6 +146,7 @@ _INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
 # `bridge` is Docker's default outbound network. `none` turns that off.
 # Other names, including `host`, are rejected.
 DEFAULT_NETWORK = "bridge"
+_CALLED_WORKFLOW = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 _NETWORKS = {DEFAULT_NETWORK, "none"}
 # Inside the job, the Docker client looks at this socket. GitHub's
 # permission error names the same path.
@@ -286,15 +296,8 @@ def _docker_binary(docker):
     return str(path)
 
 
-def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 6:
-        _setup("plan is not accepted")
-    workflow = plan.get("workflow")
-    jobs = plan.get("jobs")
-    selected = plan.get("job")
-    if not isinstance(workflow, dict) or not isinstance(jobs, list) or not jobs:
-        _setup("plan is not accepted")
-    if not isinstance(selected, dict) or selected.get("id") != jobs[-1].get("id"):
+def _accept_jobs(jobs):
+    if not isinstance(jobs, list) or not jobs:
         _setup("plan is not accepted")
     seen = set()
     for job in jobs:
@@ -314,18 +317,94 @@ def _plan_parts(plan):
                 _setup("plan is not accepted")
             if not isinstance(value, str) or value.strip() == "" or "\0" in value:
                 _setup("plan is not accepted")
-        _accept_strategy(job.get("strategy"))
-        steps = job.get("steps")
-        if not isinstance(steps, list) or not steps:
-            _setup("plan is not accepted")
-        for index, step in enumerate(steps):
-            if not isinstance(step, dict) or step.get("index") != index:
+        if "call" in job:
+            _accept_call(job.get("call"))
+        else:
+            _accept_strategy(job.get("strategy"))
+            steps = job.get("steps")
+            if not isinstance(steps, list) or not steps:
                 _setup("plan is not accepted")
-            if "uses" in step:
-                _accept_composite(step)
-            elif not isinstance(step.get("run"), str) or "\0" in step["run"]:
-                _setup("plan is not accepted")
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict) or step.get("index") != index:
+                    _setup("plan is not accepted")
+                if "uses" in step:
+                    _accept_composite(step)
+                elif not isinstance(step.get("run"), str) or "\0" in step["run"]:
+                    _setup("plan is not accepted")
         seen.add(job_id)
+
+
+def _accept_call(call):
+    if not isinstance(call, dict):
+        _setup("plan is not accepted")
+    path = call.get("path")
+    if not isinstance(path, str) or not _CALLED_WORKFLOW.fullmatch(path):
+        _setup("plan is not accepted")
+    workflow = call.get("workflow")
+    if not isinstance(workflow, dict):
+        _setup("plan is not accepted")
+    _env_layer(workflow.get("env"))
+    _defaults(workflow)
+    inputs = call.get("inputs")
+    outputs = call.get("outputs")
+    if not isinstance(inputs, list) or not isinstance(outputs, dict):
+        _setup("plan is not accepted")
+    for item in inputs:
+        if not isinstance(item, dict):
+            _setup("plan is not accepted")
+        name = item.get("name")
+        kind = item.get("type")
+        if not isinstance(name, str) or name.strip() == "" or "\0" in name:
+            _setup("plan is not accepted")
+        if kind not in {"boolean", "number", "string"} or type(item.get("required")) is not bool:
+            _setup("plan is not accepted")
+        _accept_input_slot(item.get("default"))
+        _accept_input_slot(item.get("passed"))
+    for key, value in outputs.items():
+        if not isinstance(key, str) or key.strip() == "" or "\0" in key:
+            _setup("plan is not accepted")
+        if not isinstance(value, str) or not value.strip() or "\0" in value:
+            _setup("plan is not accepted")
+    _accept_jobs(call.get("jobs"))
+
+
+def _accept_input_slot(slot):
+    if slot is None:
+        return
+    if not isinstance(slot, dict) or len(slot) != 1:
+        _setup("plan is not accepted")
+    if "expression" in slot:
+        text = slot["expression"]
+        if not isinstance(text, str) or not text.strip() or "\0" in text:
+            _setup("plan is not accepted")
+        return
+    if "literal" not in slot or not _input_literal(slot["literal"]):
+        _setup("plan is not accepted")
+
+
+def _input_literal(value):
+    if value is None or type(value) is bool:
+        return True
+    if isinstance(value, str):
+        return "\0" not in value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return False
+
+
+def _plan_parts(plan):
+    if not isinstance(plan, dict) or plan.get("capability_version") != 7:
+        _setup("plan is not accepted")
+    workflow = plan.get("workflow")
+    jobs = plan.get("jobs")
+    selected = plan.get("job")
+    if not isinstance(workflow, dict) or not isinstance(jobs, list) or not jobs:
+        _setup("plan is not accepted")
+    if not isinstance(selected, dict) or selected.get("id") != jobs[-1].get("id"):
+        _setup("plan is not accepted")
+    _accept_jobs(jobs)
     return workflow, jobs
 
 
@@ -996,6 +1075,112 @@ def _combination_contexts(job):
     return pairs
 
 
+# An omitted workflow_call input uses the type's documented default.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_callinputs
+_TYPE_DEFAULTS = {"boolean": False, "number": 0, "string": ""}
+
+
+class _CallInputError(Exception):
+    pass
+
+
+def _matches_input(kind, value):
+    """Return whether `value` is the declared workflow_call input type.
+
+    A boolean is not a number. A string is not coerced into either type.
+    """
+
+    if kind == "boolean":
+        return type(value) is bool
+    if kind == "number":
+        if type(value) is int:
+            return True
+        return type(value) is float and math.isfinite(value)
+    if kind == "string":
+        return isinstance(value, str)
+    return False
+
+
+def _resolve_call_inputs(slots, passed_values, default_values_for):
+    """Bind explicit `with` values, then defaults.
+
+    A default expression sees those explicit values and does not see another
+    omitted input's default. An omitted optional input with no default is
+    false, 0, or "".
+    """
+
+    explicit = {}
+    for item in slots:
+        passed = item.get("passed")
+        if passed is None:
+            continue
+        if "literal" in passed:
+            value = passed["literal"]
+        else:
+            value = evaluate(passed["expression"], passed_values)
+        if not _matches_input(item["type"], value):
+            raise _CallInputError(f"{item['name']} must be a {item['type']}")
+        explicit[item["name"]] = value
+    default_values = default_values_for(explicit)
+    bound = dict(explicit)
+    for item in slots:
+        if item["name"] in explicit:
+            continue
+        default = item.get("default")
+        if default is None:
+            value = _TYPE_DEFAULTS[item["type"]]
+        elif "literal" in default:
+            value = default["literal"]
+        else:
+            value = evaluate(default["expression"], default_values)
+        if not _matches_input(item["type"], value):
+            raise _CallInputError(f"{item['name']} must be a {item['type']}")
+        bound[item["name"]] = value
+    return bound
+
+
+def _iter_concrete(job, parent_path):
+    """Yield `(job, step)` for every run or composite step under `job`."""
+
+    if "call" in job:
+        nested = parent_path + (job["id"],)
+        for inner in job["call"]["jobs"]:
+            yield from _iter_concrete(inner, nested)
+        return
+    for step in job["steps"]:
+        yield job, step
+
+
+def _write_job_scripts(job_list, path, private, scripts, counter=None):
+    """Write step scripts. The key includes the job-id path.
+
+    Two workflows can both use the job id `build`. The path keeps their
+    scripts apart.
+    """
+
+    if counter is None:
+        counter = [0]
+    for planned in job_list:
+        planned_path = path + (planned["id"],)
+        if "call" in planned:
+            _write_job_scripts(planned["call"]["jobs"], planned_path, private, scripts, counter)
+            continue
+        for step in planned["steps"]:
+            if "uses" in step:
+                names = []
+                for inner in step["steps"]:
+                    script_name = f"step-{counter[0]}"
+                    counter[0] += 1
+                    _write_script(private, script_name, inner["run"])
+                    names.append(script_name)
+                scripts[(planned_path, step["index"])] = names
+            else:
+                script_name = f"step-{counter[0]}"
+                counter[0] += 1
+                _write_script(private, script_name, step["run"])
+                scripts[(planned_path, step["index"])] = script_name
+
+
 def run_job(
     snapshot_dir,
     snapshot_digest,
@@ -1020,12 +1205,14 @@ def run_job(
     step whose condition is true. The result names the first failed step, its
     exit code, and the image digest.
 
-    The first job's deadline is that job's `timeout_minutes` (default 360)
-    measured from the start of this call. Each later job gets its own
-    deadline when it starts. Reaching a deadline returns status cancelled and
-    does not start later jobs. A needed job that failed or was skipped skips
-    a dependent job unless that job's `if` is true. A step timeout stops the
-    container and does not start later jobs. `owner` reserves the name before
+    The first top-level concrete job's deadline is that job's
+    `timeout_minutes` (default 360) measured from the start of this call.
+    Each later top-level job, and each job inside a called workflow, gets
+    its own deadline when it starts. A caller job has no `timeout-minutes`.
+    Reaching a deadline returns status cancelled and does not start later
+    jobs. A needed job that failed or was skipped skips a dependent job
+    unless that job's `if` is true. A step timeout stops the container and
+    does not start later jobs. `owner` reserves the name before
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
     `docker_socket` is off unless the caller passes true or a socket path.
@@ -1056,22 +1243,7 @@ def run_job(
         (private / "event.json").write_bytes(event_bytes)
         os.chmod(private / "event.json", 0o600)
         scripts = {}
-        ordinal = 0
-        for planned in jobs:
-            for step in planned["steps"]:
-                if "uses" in step:
-                    names = []
-                    for inner in step["steps"]:
-                        script_name = f"step-{ordinal}"
-                        ordinal += 1
-                        _write_script(private, script_name, inner["run"])
-                        names.append(script_name)
-                    scripts[(planned["id"], step["index"])] = names
-                else:
-                    script_name = f"step-{ordinal}"
-                    ordinal += 1
-                    _write_script(private, script_name, step["run"])
-                    scripts[(planned["id"], step["index"])] = script_name
+        _write_job_scripts(jobs, (), private, scripts)
         for label in (private, commands):
             if "," in os.fspath(label) or "\n" in os.fspath(label):
                 _setup("workspace path is not accepted")
@@ -1102,126 +1274,238 @@ def run_job(
         )
         bash_ok = probe == 0
         failed = None
-        results = {}
         output_bytes = 0
-        jobs_by_id = {planned["id"]: planned for planned in jobs}
-        for job_index, job in enumerate(jobs):
-            if job_index:
-                deadline = time.monotonic() + _job_seconds(job)
-            if owner is not None and owner.cancelled():
-                graceful = True
-                outcome = _cancelled(resolved, reference, records)
-                break
-            if deadline - time.monotonic() <= 0:
-                raise _JobDeadline()
-            needs = _needs_context(job, results)
-            ancestor_failed = _ancestor_failed(job, jobs_by_id, results)
-            cancelled = owner is not None and owner.cancelled()
-            try:
-                enabled = job_is_enabled(
-                    job.get("if"),
-                    _expression_values(event, workflow, job, {"env": {}}, [], cancelled, needs),
-                    [needs[item]["result"] for item in job["needs"]],
-                    ancestor_failed,
-                    cancelled,
-                )
-            except ExprError as exc:
-                enabled = None
-                message = str(exc)[:512]
-            if enabled is None:
-                record = _step_result(job["steps"][0], "failed", None, "", "", message, job["id"])
-                records.append(record)
-                if failed is None:
-                    failed = record
-                for step in job["steps"][1:]:
-                    records.append(_step_result(step, "skipped", None, "", "", None, job["id"]))
-                results[job["id"]] = {"result": "failure", "outputs": {}}
-                continue
-            if not enabled:
-                for step in job["steps"]:
-                    records.append(_step_result(step, "skipped", None, "", "", None, job["id"]))
-                results[job["id"]] = {"result": "skipped", "outputs": {}}
-                continue
-            runs = _combination_contexts(job)
-            if not runs:
-                results[job["id"]] = {"result": "skipped", "outputs": {}}
-                continue
-            strategy = job.get("strategy") if isinstance(job.get("strategy"), dict) else None
-            fail_fast = (
-                strategy is not None
-                and strategy.get("combinations") is not None
-                and strategy.get("fail_fast") is True
-            )
-            publish = strategy is None or strategy.get("combinations") is None
-            job_failed = False
-            produced = {}
-            cancelled_run = False
-            for matrix, strategy_context in runs:
+
+        def _mark_call(job, parent_path, message):
+            nonlocal failed
+            concrete = list(_iter_concrete(job, parent_path))
+            if message is not None and not concrete:
+                _setup("plan is not accepted")
+            for index, (inner, step) in enumerate(concrete):
+                if message is not None and index == 0:
+                    record = _step_result(step, "failed", None, "", "", message[:512], inner["id"])
+                    records.append(record)
+                    if failed is None:
+                        failed = record
+                else:
+                    records.append(_step_result(step, "skipped", None, "", "", None, inner["id"]))
+
+        def _execute_jobs(job_list, level_workflow, inputs, path, *, reset_first):
+            nonlocal deadline, failed, output_bytes, graceful, outcome
+            results = {}
+            jobs_by_id = {item["id"]: item for item in job_list}
+            for job_index, job in enumerate(job_list):
+                if "call" not in job and (reset_first or job_index):
+                    deadline = time.monotonic() + _job_seconds(job)
                 if owner is not None and owner.cancelled():
                     graceful = True
                     outcome = _cancelled(resolved, reference, records)
-                    cancelled_run = True
-                    break
-                if deadline - time.monotonic() <= 0:
+                    return None
+                if "call" not in job and deadline - time.monotonic() <= 0:
                     raise _JobDeadline()
-                prior = []
-                runtime = _JobRuntime()
-                for step in job["steps"]:
-                    if deadline - time.monotonic() <= 0:
-                        raise _JobDeadline()
-                    record = _consider_step(
-                        docker_bin,
-                        name,
-                        step,
-                        workflow,
-                        job,
-                        event,
-                        workspace,
-                        bash_ok,
-                        step_timeout,
-                        deadline,
-                        prior,
-                        owner is not None and owner.cancelled(),
-                        needs,
-                        scripts[(job["id"], step["index"])],
-                        runtime,
-                        commands,
-                        matrix=matrix,
-                        strategy=strategy_context,
-                    )
-                    records.append(record)
-                    prior.append(record)
-                    if record["status"] == "failed":
-                        job_failed = True
-                        if failed is None:
-                            failed = record
-                if publish:
-                    produced, output_bytes = _job_outputs(
-                        job,
+                needs = _needs_context(job, results)
+                ancestor_failed = _ancestor_failed(job, jobs_by_id, results)
+                cancelled = owner is not None and owner.cancelled()
+                try:
+                    enabled = job_is_enabled(
+                        job.get("if"),
                         _expression_values(
                             event,
-                            workflow,
+                            level_workflow,
                             job,
                             {"env": {}},
-                            prior,
+                            [],
                             cancelled,
                             needs,
-                            runtime,
-                            matrix=matrix,
-                            strategy=strategy_context,
+                            inputs=inputs,
                         ),
+                        [needs[item]["result"] for item in job["needs"]],
+                        ancestor_failed,
+                        cancelled,
+                    )
+                except ExprError as exc:
+                    enabled = None
+                    message = str(exc)[:512]
+                if enabled is None:
+                    if "call" in job:
+                        _mark_call(job, path, message)
+                    else:
+                        record = _step_result(
+                            job["steps"][0], "failed", None, "", "", message, job["id"]
+                        )
+                        records.append(record)
+                        if failed is None:
+                            failed = record
+                        for step in job["steps"][1:]:
+                            records.append(
+                                _step_result(step, "skipped", None, "", "", None, job["id"])
+                            )
+                    results[job["id"]] = {"result": "failure", "outputs": {}}
+                    continue
+                if not enabled:
+                    if "call" in job:
+                        _mark_call(job, path, None)
+                    else:
+                        for step in job["steps"]:
+                            records.append(
+                                _step_result(step, "skipped", None, "", "", None, job["id"])
+                            )
+                    results[job["id"]] = {"result": "skipped", "outputs": {}}
+                    continue
+                if "call" in job:
+                    try:
+                        passed_values = _expression_values(
+                            event,
+                            level_workflow,
+                            job,
+                            {"env": {}},
+                            [],
+                            cancelled,
+                            needs,
+                            inputs=inputs,
+                        )
+                        resolved_inputs = _resolve_call_inputs(
+                            job["call"]["inputs"],
+                            passed_values,
+                            lambda explicit, call_workflow=job["call"]["workflow"]: (
+                                _expression_values(
+                                    event,
+                                    call_workflow,
+                                    {"env": {}},
+                                    {"env": {}},
+                                    [],
+                                    cancelled,
+                                    inputs=explicit,
+                                )
+                            ),
+                        )
+                    except (ExprError, _CallInputError) as exc:
+                        _mark_call(job, path, str(exc))
+                        results[job["id"]] = {"result": "failure", "outputs": {}}
+                        continue
+                    inner_results = _execute_jobs(
+                        job["call"]["jobs"],
+                        job["call"]["workflow"],
+                        resolved_inputs,
+                        path + (job["id"],),
+                        reset_first=True,
+                    )
+                    if inner_results is None:
+                        return None
+                    output_values = _expression_values(
+                        event,
+                        job["call"]["workflow"],
+                        {"env": {}},
+                        {"env": {}},
+                        [],
+                        cancelled,
+                        inputs=resolved_inputs,
+                    )
+                    output_values["jobs"] = {
+                        item_id: {
+                            "result": item["result"],
+                            "outputs": dict(item["outputs"]),
+                        }
+                        for item_id, item in inner_results.items()
+                    }
+                    produced, output_bytes = _job_outputs(
+                        {"outputs": job["call"]["outputs"]},
+                        output_values,
                         output_bytes,
                     )
-                if job_failed and fail_fast:
-                    break
-            if cancelled_run:
-                break
-            result_name = "failure" if job_failed else "success"
-            results[job["id"]] = {
-                "result": result_name,
-                "outputs": produced if publish else {},
-            }
-        else:
+                    call_failed = any(
+                        item["result"] == "failure" for item in inner_results.values()
+                    )
+                    results[job["id"]] = {
+                        "result": "failure" if call_failed else "success",
+                        "outputs": produced,
+                    }
+                    continue
+                runs = _combination_contexts(job)
+                if not runs:
+                    results[job["id"]] = {"result": "skipped", "outputs": {}}
+                    continue
+                strategy = job.get("strategy") if isinstance(job.get("strategy"), dict) else None
+                fail_fast = (
+                    strategy is not None
+                    and strategy.get("combinations") is not None
+                    and strategy.get("fail_fast") is True
+                )
+                publish = strategy is None or strategy.get("combinations") is None
+                job_failed = False
+                produced = {}
+                cancelled_run = False
+                for matrix, strategy_context in runs:
+                    if owner is not None and owner.cancelled():
+                        graceful = True
+                        outcome = _cancelled(resolved, reference, records)
+                        cancelled_run = True
+                        break
+                    if deadline - time.monotonic() <= 0:
+                        raise _JobDeadline()
+                    prior = []
+                    runtime = _JobRuntime()
+                    for step in job["steps"]:
+                        if deadline - time.monotonic() <= 0:
+                            raise _JobDeadline()
+                        record = _consider_step(
+                            docker_bin,
+                            name,
+                            step,
+                            level_workflow,
+                            job,
+                            event,
+                            workspace,
+                            bash_ok,
+                            step_timeout,
+                            deadline,
+                            prior,
+                            owner is not None and owner.cancelled(),
+                            needs,
+                            scripts[(path + (job["id"],), step["index"])],
+                            runtime,
+                            commands,
+                            matrix=matrix,
+                            strategy=strategy_context,
+                            inputs=inputs,
+                        )
+                        records.append(record)
+                        prior.append(record)
+                        if record["status"] == "failed":
+                            job_failed = True
+                            if failed is None:
+                                failed = record
+                    if publish:
+                        produced, output_bytes = _job_outputs(
+                            job,
+                            _expression_values(
+                                event,
+                                level_workflow,
+                                job,
+                                {"env": {}},
+                                prior,
+                                cancelled,
+                                needs,
+                                runtime,
+                                inputs=inputs,
+                                matrix=matrix,
+                                strategy=strategy_context,
+                            ),
+                            output_bytes,
+                        )
+                    if job_failed and fail_fast:
+                        break
+                if cancelled_run:
+                    return None
+                result_name = "failure" if job_failed else "success"
+                results[job["id"]] = {
+                    "result": result_name,
+                    "outputs": produced if publish else {},
+                }
+            return results
+
+        finished = _execute_jobs(jobs, workflow, {}, (), reset_first=False)
+        if finished is not None:
             outcome = _outcome(resolved, reference, records, failed)
     except _JobDeadline as exc:
         if exc.step is not None:
@@ -1314,17 +1598,19 @@ def _expression_values(
     in this job, then this step's env. Values that contain `${{ }}` are not
     expanded. `steps.<id>.outputs` is what earlier steps wrote to
     `GITHUB_OUTPUT`. The command-file paths are not part of this map.
-    `inputs` and `github.action_path` stay empty unless the caller is inside
-    a composite action. `output_map` supplies inner-step outputs so they are
-    not stored as workflow step outputs.
+    `inputs` is empty unless the caller passes workflow inputs or composite
+    action inputs. `github.action_path` stays empty unless the caller is
+    inside a composite action. `output_map` supplies inner-step outputs so
+    they are not stored as workflow step outputs. A caller job has no `env`
+    key; a missing map is empty.
     """
 
     env = {}
-    env.update(_env_layer(workflow.get("env")))
-    env.update(_env_layer(job.get("env")))
+    env.update(_env_layer(workflow.get("env", {})))
+    env.update(_env_layer(job.get("env", {})))
     if runtime is not None:
         env.update(runtime.env)
-    env.update(_env_layer(step.get("env")))
+    env.update(_env_layer(step.get("env", {})))
     steps = {}
     for record in prior:
         step_id = record.get("id")
@@ -1468,6 +1754,7 @@ def _consider_step(
     commands,
     matrix=None,
     strategy=None,
+    inputs=None,
 ):
     job_id = job.get("id")
     try:
@@ -1482,6 +1769,7 @@ def _consider_step(
                 cancelled,
                 needs,
                 runtime,
+                inputs=inputs,
                 matrix=matrix,
                 strategy=strategy,
             ),

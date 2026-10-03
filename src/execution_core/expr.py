@@ -80,6 +80,15 @@ OUTPUT_CONTEXTS = frozenset(
     }
 )
 OUTPUT_FUNCTIONS = STEP_IF_FUNCTIONS - _STATUS
+# jobs.<job_id>.with.<input_id>
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+CALL_WITH_CONTEXTS = frozenset({"github", "needs", "strategy", "matrix", "inputs", "vars"})
+# on.workflow_call.outputs.<output_id>.value
+CALL_OUTPUT_CONTEXTS = frozenset({"github", "jobs", "vars", "inputs"})
+# on.workflow_call.inputs.<input_id>.default
+CALL_DEFAULT_CONTEXTS = frozenset({"github", "inputs", "vars"})
+# The contexts table lists no special functions for these keys.
+CALL_FUNCTIONS = OUTPUT_FUNCTIONS
 
 
 class ExprError(Exception):
@@ -117,6 +126,24 @@ def check_job_output(source):
     """Reject a job output expression the subset cannot evaluate."""
 
     _check(_parse(unwrap_expression(source)), OUTPUT_CONTEXTS, OUTPUT_FUNCTIONS)
+
+
+def check_call_with(source):
+    """Reject a reusable-workflow `with` value the subset cannot evaluate."""
+
+    _check(_parse(unwrap_expression(source)), CALL_WITH_CONTEXTS, CALL_FUNCTIONS)
+
+
+def check_call_output(source):
+    """Reject a `workflow_call` output value the subset cannot evaluate."""
+
+    _check(_parse(unwrap_expression(source)), CALL_OUTPUT_CONTEXTS, CALL_FUNCTIONS)
+
+
+def check_call_default(source):
+    """Reject a `workflow_call` input default the subset cannot evaluate."""
+
+    _check(_parse(unwrap_expression(source)), CALL_DEFAULT_CONTEXTS, CALL_FUNCTIONS)
 
 
 def mentions_context(source, name):
