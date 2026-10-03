@@ -54,7 +54,7 @@ The accepted run refers to the snapshot, never to the mutable original checkout.
 
 Preserve repository metadata needed by supported workflows without copying credentials from local Git configuration.
 Validate checkout actions and Git-dependent workflows against this capture strategy before declaring them supported.
-The allow-list is [sanitized Git metadata](git-metadata.md) and is copied to `git.json`. An owned checkout is [designed](checkout.md) and is not accepted yet. Checkout actions stay rejected.
+The allow-list is [sanitized Git metadata](git-metadata.md) and is copied to `git.json`. An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([checkout](checkout.md)). Other checkout actions stay rejected.
 
 ## Durable ownership
 

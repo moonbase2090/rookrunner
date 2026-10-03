@@ -96,12 +96,13 @@ stays an empty string.
 default, persists a token for later Git commands
 (https://github.com/actions/checkout). Its default clean step resets
 the work tree to HEAD. That would drop the dirty and untracked bytes
-this capture stores. The action stays `CAPABILITY_UNSUPPORTED`,
-including `uses: actions/checkout@v4` and a `uses` without `@`. The
-[owned checkout](checkout.md) says a later PR may accept only that `v4`
-string without replacing captured files. That acceptance is not
-implemented. Capture does not fetch, does not persist a credential, and
-does not reset the workspace.
+this capture stores. The owned checkout accepts only
+`uses: actions/checkout@v4` and does not do that reset, does not fetch,
+and does not persist a credential
+([checkout](checkout.md)). Other checkout `uses` strings, including
+`actions/checkout` without `@`, stay `CAPABILITY_UNSUPPORTED`.
+Capture does not fetch, does not persist a credential, and does not
+reset the workspace.
 
 No capture command may print configuration or remotes.
 `git config --list` and `git remote -v` are not allowed.
@@ -131,8 +132,9 @@ checkout actions.
    present, or replaced with other bytes. A separate reader rejects a
    sibling that is not the canonical five-field object or that
    disagrees with the manifest. The run path does not call that reader.
-7. `uses: actions/checkout@v4` produces no plan
-   (`CAPABILITY_UNSUPPORTED`).
+7. `uses: actions/checkout@v4` plans as an owned checkout of the captured
+   files and does not read `git.json`. `actions/checkout@v7` produces no
+   plan (`CAPABILITY_UNSUPPORTED`).
 8. Materializing the attempt leaves the workspace without `.git` and
    without `git.json`.
 
@@ -141,8 +143,7 @@ and reports no metadata digest.
 
 ## Out of scope
 
-Accepting `actions/checkout` is designed in [checkout](checkout.md) and
-is not implemented. Copying objects, synthesizing a commit, filling the
-`github` context, and publishing a GitHub-equivalence claim are later
-work. Each of those still needs its own design. None of them is
-authorized by this copy.
+Copying objects, synthesizing a commit, filling the `github` context,
+and publishing a GitHub-equivalence claim are later work. Each of those
+still needs its own design. The owned checkout in [checkout](checkout.md)
+does not authorize them.

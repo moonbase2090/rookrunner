@@ -6,7 +6,10 @@ Status: build order, 2026-10-03. Derived from the
 roadmap step 1 and the first executable subset. NS-1 through NS-19 are
 implemented. NS-20 records the sanitized Git metadata allow-list, and
 NS-21 copies it. NS-22 is the written design for an owned checkout of
-those captured files. Checkout actions stay rejected. Later items are not.
+those captured files. NS-23 accepts `uses: actions/checkout@v4` as that
+checkout. It does not replace captured files, persist a credential, or
+create `.git`. Other checkout inputs stay rejected. Copying Git objects,
+synthesizing a commit, and filling the `github` context are not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -14,8 +17,9 @@ and not an acceptance of open PRD questions.
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. Sanitized Git
 metadata is copied to a sibling `git.json`. Credentials and remote URLs
-stay excluded. An owned checkout of those files is designed and is not
-accepted yet. Checkout actions stay rejected. The act pin stays historical.
+stay excluded. An owned checkout accepts `uses: actions/checkout@v4`
+and does not replace those files, persist a credential, or create
+`.git`. Other checkout inputs stay rejected. The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -642,9 +646,10 @@ cap. Job outputs that read them still use the existing 1 MB per job and
 states the same 1 MB and 50 MB figures and says size is approximated with
 UTF-16. It does not define MB.
 
-Checkout and `actions/checkout` stay rejected. Sanitized metadata is
-the sibling `git.json` written by NS-21. The owned-checkout design is
-NS-22.
+An owned checkout accepts `uses: actions/checkout@v4` and does not
+replace those files (NS-23). Other checkout `uses` strings stay
+rejected. Sanitized metadata is the sibling `git.json` written by
+NS-21. The design is NS-22.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
@@ -917,19 +922,42 @@ Acceptance criteria:
 - That design does not replace captured files or persist a credential.
 - Checkout actions remain an explicit rejection.
 
+**NS-23. Accept the owned checkout.**
+
+Status: implemented. `uses: actions/checkout@v4` is an owned step. The
+plan stores `uses` as that string and `checkout` as `captured`. The step
+does not start a process, does not modify the workspace, does not create
+`.git`, does not read `git.json`, and does not contact a network. It
+succeeds with exit code 0. `clean: false` and `persist-credentials: false`
+are accepted. An omitted key does not mean the upstream default of true.
+`clean: true`, `persist-credentials: true`, and every other checkout
+input fail planning and create no run. Other `uses` strings stay
+rejected. `github.sha` and `github.token` stay uninvented. The capability
+version is 9. The runner accepts only that version.
+
+https://github.com/actions/checkout
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A first step `uses: actions/checkout@v4` leaves a captured dirty file
+  in place. A later `run` step still sees those bytes. The snapshot
+  digest is unchanged.
+- The same holds for `clean: false` and `persist-credentials: false`.
+- Rejected checkout inputs fail planning and create no run.
+- The workspace has no `.git` and no `git.json` after the step.
+- A workflow of only `run` steps still runs.
+
 ## After the first path
 
-The next item accepts the checkout designed above. It is not started.
-Copying Git objects, synthesizing a commit, and filling the `github`
-context are not started. None of this work is authorized to call the
+Copying Git objects, synthesizing a commit, creating a `.git` directory,
+and filling the `github` context are not started. A later `run` step
+still has no Git repository. None of this work is authorized to call the
 result GitHub-equivalent.
-
-| Order | PR | Acceptance criteria |
-| --- | --- | --- |
-| NS-23 | Accept the owned checkout | Accept only `uses: actions/checkout@v4` as a step that does not replace captured files, does not persist a credential, and does not create `.git`. Every other checkout input stays an explicit rejection. |
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-23 can follow that evidence. It is not required to say the
+restart. NS-23 is that checkout. It is not required to say the
 first subset runs.

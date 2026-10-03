@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+import hashlib
 import os
 import shutil
 import stat
@@ -618,6 +619,23 @@ class SetupTests(unittest.TestCase):
         self.assertIn("snapshot failed verification", str(raised.exception))
         self.assertFalse(self.marker.exists())
 
+    def test_previous_capability_version_is_not_migrated(self):
+        self.assertEqual(self.plan["capability_version"], 9)
+        stale = dict(self.plan)
+        stale["capability_version"] = 8
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                stale,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.docker),
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertFalse(self.marker.exists())
+
 
 class DockerRunTests(unittest.TestCase):
     @classmethod
@@ -749,6 +767,130 @@ class DockerRunTests(unittest.TestCase):
         )
         self.assertEqual(listed.stdout.strip(), "")
         self.assertEqual(stat.S_IMODE((self.workspace / "order.txt").stat().st_mode) & 0o777, 0o644)
+
+    def _owned_checkout(self, workflow, label):
+        root = self.root / label
+        root.mkdir()
+        repo = root / "repo"
+        repo.mkdir()
+        workflow_path = repo / ".github" / "workflows" / "test.yml"
+        workflow_path.parent.mkdir(parents=True)
+        workflow_path.write_text(workflow)
+        (repo / "source.txt").write_text("original\n")
+        app = repo / "app"
+        app.mkdir()
+        (app / "keep.txt").write_text("keep\n")
+        state = root / "state"
+        capture = SourceCapture(repo, state)
+        _git(repo, "init", "--initial-branch=main")
+        _git(repo, "add", ".")
+        _git(
+            repo,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        )
+        (repo / "source.txt").write_text("dirty-bytes\n")
+        captured = capture.capture(".github/workflows/test.yml")
+        snapshot = state / "snapshots" / captured["snapshot_id"]
+        attempts = state / "attempts"
+        attempts.mkdir(mode=0o700)
+        workspace = attempts / "run-1"
+        materialize_attempt(snapshot, captured["digest"], workspace)
+        manifest = (snapshot / "manifest.json").read_bytes()
+        digest_before = hashlib.sha256(manifest).hexdigest()
+        self.assertEqual(digest_before, captured["digest"])
+        planned = plan_snapshot(snapshot, "build")
+        step = planned["plan"]["job"]["steps"][0]
+        self.assertEqual(planned["plan"]["capability_version"], 9)
+        self.assertEqual(step["uses"], "actions/checkout@v4")
+        self.assertEqual(step["checkout"], "captured")
+        for absent in ("action_path", "action_digest", "steps", "inputs", "outputs"):
+            self.assertNotIn(absent, step)
+        before = self._calls() if self.log.exists() else []
+        result = run_job(
+            snapshot,
+            captured["digest"],
+            workspace,
+            planned["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(
+            hashlib.sha256((snapshot / "manifest.json").read_bytes()).hexdigest(),
+            digest_before,
+        )
+        self.assertEqual((snapshot / "files" / "source.txt").read_text(), "dirty-bytes\n")
+        self.assertEqual((workspace / "source.txt").read_text(), "dirty-bytes\n")
+        self.assertEqual((workspace / "seen.txt").read_text(), "dirty-bytes\n")
+        self.assertFalse((workspace / ".git").exists())
+        self.assertFalse((workspace / "git.json").exists())
+        self.assertFalse((snapshot / "files" / ".git").exists())
+        self.assertEqual((repo / "source.txt").read_text(), "dirty-bytes\n")
+        fresh = self._calls()[len(before) :]
+        execs = [call for call in fresh if call and call[0] == "exec"]
+        probes = [call for call in execs if call[-3:] == ["bash", "-c", "exit 0"]]
+        self.assertEqual(len(probes), 1)
+        self.assertEqual(len(execs), 2)
+        return result
+
+    def test_owned_checkout_leaves_captured_files(self):
+        omitted = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        shell: not-a-shell
+        working-directory: missing-dir
+        timeout-minutes: 1
+        env:
+          MODE: kept
+      - if: false
+        uses: actions/checkout@v4
+      - id: see
+        if: github.sha == '' && github.token == ''
+        run: |
+          cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
+          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ]; then exit 2; fi
+"""
+        result = self._owned_checkout(omitted, "omitted")
+        self.assertEqual(
+            [(step["status"], step["exit_code"]) for step in result["steps"]],
+            [("succeeded", 0), ("skipped", None), ("succeeded", 0)],
+        )
+        self.assertEqual(result["steps"][0]["stdout"], "")
+        self.assertNotIn("outputs", result["steps"][0])
+        flagged = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          persist-credentials: false
+      - id: see
+        if: github.sha == '' && github.token == ''
+        run: |
+          cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
+          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ]; then exit 2; fi
+"""
+        flagged_result = self._owned_checkout(flagged, "flagged")
+        self.assertEqual(
+            [(step["status"], step["exit_code"]) for step in flagged_result["steps"]],
+            [("succeeded", 0), ("succeeded", 0)],
+        )
+        stored = plan_workflow(flagged.encode(), "build")["plan"]["job"]["steps"][0]
+        self.assertEqual(stored["with"], {"clean": False, "persist-credentials": False})
 
     def test_network_none_is_an_explicit_create_argument(self):
         offline = "on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"

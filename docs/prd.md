@@ -167,7 +167,8 @@ A local reusable workflow is called from a job `uses` in the same
 snapshot. Inputs are boolean, number, or string. Secrets are not passed.
 JavaScript actions and Docker actions are later increments of the same
 engine. Those later increments are not promised in the first slice, and
-they are not permanently excluded. A job may run service containers from
+they are not permanently excluded. An owned checkout accepts
+`uses: actions/checkout@v4` and does not replace the captured files. A job may run service containers from
 a digest-pinned image. They do not receive the engine socket. A literal
 job matrix, with
 include, exclude, fail-fast, and max-parallel, runs one combination at a
@@ -268,7 +269,7 @@ it. The worker is not an unattended production service.
 | Supported release platform | Linux x86_64 with Docker is the proposed first artifact target. Recorded tests do not cover Python 3.11 or other operating systems. | Artifact packaging |
 | Runner image | Workflow execution needs an image pinned by digest. `run_job` requires the caller to pass one and does not select a default. Selection and provenance of a project image remain open. | A project default image |
 | Workflow parser | PyYAML 6.0.3 parses workflow text for the planner. License and source are recorded. Parsing does not execute a workflow. | Closed for planning |
-| Git metadata for checkout | Capture copies working files and excludes `.git`. The allow-list is copied to a sibling `git.json` ([design](design/git-metadata.md)). An owned checkout is [designed](design/checkout.md) and is not accepted yet, so checkout actions stay unsupported. | Claiming Git-dependent workflows |
+| Git metadata for checkout | Capture copies working files and excludes `.git`. The allow-list is copied to a sibling `git.json` ([design](design/git-metadata.md)). An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([design](design/checkout.md)). Other checkout actions stay unsupported. | Claiming Git-dependent workflows |
 | Submission-key retention once pruning exists | M1 retains keys for the life of the state directory. The workflow draft requires tombstones across a documented retry window. That window is undefined. | Workflow submission |
 | Secret provisioning | Disabled. Filename exclusions are not a secret system. | Any secret feature |
 | Dashboard direction | Runnable visual options, then a selection. | Dashboard implementation |

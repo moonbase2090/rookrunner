@@ -46,8 +46,9 @@ command already stores working-file bytes, modes, links, deletions, and
 explicitly included untracked files, and it rejects an input set that changes
 while it is being read. That snapshot is not yet a queued run. Workflow
 acceptance still has to bind a snapshot before execution. A sibling record
-copies the sanitized Git allow-list. An owned checkout of those files
-is designed and is not accepted, so checkout actions are not supported.
+copies the sanitized Git allow-list. An owned checkout accepts
+`uses: actions/checkout@v4` and does not replace those files. Other
+checkout actions are not supported.
 
 **Unsupported behavior fails in the open.** Requested execution that this
 version cannot perform is rejected before work starts. The worker does not

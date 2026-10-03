@@ -78,11 +78,12 @@ materialized LFS data is not silently treated as supported LFS behavior.
 Git commands inspect index/tree/attribute metadata. Inherited Git redirection
 variables and global/system configuration are disabled, as are hooks, fsmonitor,
 optional index locks, prompts, and lazy fetching. No local `.git` configuration,
-objects, credentials, hooks, or remote URLs are copied. Consequently Git-dependent
-workflows and `actions/checkout` are **not yet supported or validated**. The
+objects, credentials, hooks, or remote URLs are copied. A later Git command
+inside the workspace still has no repository. `uses: actions/checkout@v4`
+is an owned checkout of the captured files and does not fetch or replace
+them. Other checkout actions stay rejected. The
 [sanitized metadata design](git-metadata.md) names the only fields copied into
-the sibling `git.json`. An owned checkout of those files is
-[designed](checkout.md) and is not accepted yet. Checkout actions stay rejected.
+the sibling `git.json`. The owned checkout is [checkout](checkout.md).
 
 ## Stability and storage
 
