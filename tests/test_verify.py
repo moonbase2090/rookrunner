@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from execution_core.protocol import canonical
 from execution_core.snapshot import SourceCapture
-from execution_core.verify import VerifyError, verify_snapshot
+from execution_core.verify import (
+    VerifyError,
+    git_metadata_digest,
+    read_git_metadata,
+    verify_snapshot,
+)
 
 
 class VerifyTests(unittest.TestCase):
@@ -74,6 +79,32 @@ class VerifyTests(unittest.TestCase):
         with patch("subprocess.run", fail), patch("subprocess.Popen", fail):
             again = verify_snapshot(self.snapshot, self.digest)
         self.assertEqual(again["workflow_digest"], manifest["workflow_digest"])
+
+    def test_git_metadata_does_not_change_the_manifest_digest(self):
+        self.assertEqual(read_git_metadata(self.snapshot)["head"], "refs/heads/main")
+        self.assertEqual(git_metadata_digest(self.snapshot), self.captured["git_metadata_digest"])
+        git_path = self.snapshot / "git.json"
+        git_path.write_bytes(b"not-json")
+        verify_snapshot(self.snapshot, self.digest)
+        with self.assertRaises(VerifyError) as raised:
+            read_git_metadata(self.snapshot)
+        self.assertEqual(raised.exception.kind, "SNAPSHOT_INVALID")
+        git_path.unlink()
+        verify_snapshot(self.snapshot, self.digest)
+        self.assertIsNone(read_git_metadata(self.snapshot))
+        self.assertIsNone(git_metadata_digest(self.snapshot))
+        metadata = {
+            "format_version": 1,
+            "base_commit": "a" * 40,
+            "dirty": False,
+            "git_object_format": "sha1",
+            "head": "refs/heads/main",
+        }
+        git_path.write_bytes(canonical(metadata).encode())
+        verify_snapshot(self.snapshot, self.digest)
+        with self.assertRaises(VerifyError) as raised:
+            read_git_metadata(self.snapshot)
+        self.assertEqual(raised.exception.kind, "SNAPSHOT_INVALID")
 
     def test_changed_byte_mode_or_manifest_field_is_rejected(self):
         byte_copy = self.root / "byte"
