@@ -124,8 +124,13 @@ Implemented:
   by default, so it can reach the public internet. GitHub-hosted runners have
   that access by default
   (https://docs.github.com/en/actions/concepts/runners/private-networking).
-  `worker --network none` turns it off. The Docker socket and host credentials
-  are not mounted.
+  `worker --network none` turns it off. The Docker socket stays unmounted
+  unless the worker is started with `--docker-socket`. That mount gives the
+  job the host Docker service. The job keeps the caller user, and the image
+  must already contain the Docker client. GitHub requires that service to be installed
+  and running for container-dependent work on a self-hosted runner
+  (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
+  Host credential directories are not mounted. The container is not privileged.
 - A finished workflow attempt publishes a manifest of the regular files it
   wrote under its workspace. `run.artifacts` and `artifact.read` page that
   manifest and its bytes. A workflow run with no such files returns an empty

@@ -39,9 +39,18 @@ can reach the public internet. GitHub-hosted runners have that access by
 default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
 Pass network `none` to turn it off. Other network names are rejected. The
-Docker socket and host credential directories are not mounted. This is not
-a private-network or egress-policy implementation. Step `if` and job `if`
-are evaluated.
+Docker socket stays unmounted unless the caller sets `docker_socket`. That
+mount gives the job the engine socket this process already uses, at
+`/var/run/docker.sock` inside the container. The job keeps the caller uid.
+It is added to the socket's group and to group 0 so it can open a mode
+0660 socket, including one the engine presents as owned by root. The job
+image must already contain the Docker client. This module does not install
+one. GitHub requires Docker to be installed and the service running for
+container-dependent jobs on a self-hosted runner
+(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
+Host credential directories are not mounted. The container is not
+privileged. This is not a private-network or egress-policy implementation.
+Step `if` and job `if` are evaluated.
 Expressions in workflow `run`, workflow and step `env`, and `name` stay
 literal text. `github.event` is the caller event. Other `github` properties
 are not invented. `runner.os` is `Linux` because this subset runs in a Linux
@@ -124,6 +133,10 @@ _INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
 # Other names, including `host`, are rejected.
 DEFAULT_NETWORK = "bridge"
 _NETWORKS = {DEFAULT_NETWORK, "none"}
+# Inside the job, the Docker client looks at this socket. GitHub's
+# permission error names the same path.
+# https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners
+_CONTAINER_SOCKET = "/var/run/docker.sock"
 
 
 class _JobRuntime:
@@ -581,10 +594,53 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     return reference, digest, workflow, jobs, encoded, workspace
 
 
-def _create_args(name, workspace, private, commands, reference, network):
+def _discover_socket(docker):
+    """Return the unix socket for the engine `docker` already uses."""
+
+    host = os.environ.get("DOCKER_HOST") or ""
+    if host.startswith("unix://"):
+        return host.removeprefix("unix://")
+    try:
+        code, stdout, _stderr = _invoke(
+            docker,
+            ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            30,
+        )
+    except _Timeout:
+        _setup("Docker socket is not available")
+    if code == 0:
+        text = stdout.decode("utf-8", "replace").strip()
+        if text.startswith("unix://"):
+            return text.removeprefix("unix://")
+    return _CONTAINER_SOCKET
+
+
+def _job_socket(docker, docker_socket):
+    """Return `(host path, gid)` or `(None, None)` when the job gets no socket."""
+
+    if docker_socket is False or docker_socket is None:
+        return None, None
+    if docker_socket is True:
+        path = _discover_socket(docker)
+    elif isinstance(docker_socket, str) and docker_socket != "":
+        path = docker_socket
+    else:
+        _setup("Docker socket is not available")
+    if "," in path or "\n" in path or "\0" in path:
+        _setup("Docker socket is not available")
+    try:
+        info = os.stat(path)
+    except OSError:
+        _setup("Docker socket is not available")
+    if not stat.S_ISSOCK(info.st_mode):
+        _setup("Docker socket is not available")
+    return path, info.st_gid
+
+
+def _create_args(name, workspace, private, commands, reference, network, socket_path, socket_gid):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
-    return [
+    args = [
         "create",
         "--name",
         name,
@@ -592,24 +648,47 @@ def _create_args(name, workspace, private, commands, reference, network):
         network,
         "--user",
         f"{os.getuid()}:{os.getgid()}",
-        "--workdir",
-        "/workspace",
-        "--entrypoint",
-        "sh",
-        "--mount",
-        f"type=bind,source={workspace},destination=/workspace",
-        "--mount",
-        f"type=bind,source={private},destination=/run/rookrunner,readonly",
-        "--mount",
-        f"type=bind,source={commands},destination=/run/rookrunner-cmd",
-        reference,
-        "-c",
-        # PID 1 ignores SIGINT and SIGTERM unless it installs a handler.
-        # `sleep` does not, so the cancellation grace would always wait out
-        # both periods. This shell exits on those signals and `sleep` is a
-        # child that only keeps the container alive across steps.
-        "trap 'exit 130' INT TERM; sleep infinity & wait",
     ]
+    if socket_path is not None:
+        # The engine socket is often mode 0660. The host gid opens a native
+        # root:docker socket. Some engines present the same mount as
+        # root:root, so group 0 is added as well. The job keeps the caller uid.
+        if socket_gid != 0:
+            args.extend(["--group-add", str(socket_gid)])
+        args.extend(["--group-add", "0"])
+    args.extend(
+        [
+            "--workdir",
+            "/workspace",
+            "--entrypoint",
+            "sh",
+            "--mount",
+            f"type=bind,source={workspace},destination=/workspace",
+            "--mount",
+            f"type=bind,source={private},destination=/run/rookrunner,readonly",
+            "--mount",
+            f"type=bind,source={commands},destination=/run/rookrunner-cmd",
+        ]
+    )
+    if socket_path is not None:
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={socket_path},destination={_CONTAINER_SOCKET}",
+            ]
+        )
+    args.extend(
+        [
+            reference,
+            "-c",
+            # PID 1 ignores SIGINT and SIGTERM unless it installs a handler.
+            # `sleep` does not, so the cancellation grace would always wait out
+            # both periods. This shell exits on those signals and `sleep` is a
+            # child that only keeps the container alive across steps.
+            "trap 'exit 130' INT TERM; sleep infinity & wait",
+        ]
+    )
+    return args
 
 
 def _job_seconds(job):
@@ -853,6 +932,7 @@ def run_job(
     step_timeout=None,
     owner=None,
     network=DEFAULT_NETWORK,
+    docker_socket=False,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -872,6 +952,7 @@ def run_job(
     container and does not start later jobs. `owner` reserves the name before
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
+    `docker_socket` is off unless the caller passes true or a socket path.
     """
 
     if network not in _NETWORKS:
@@ -883,6 +964,7 @@ def run_job(
     deadline = started + _job_seconds(jobs[0])
     resolved = digest
     docker_bin = _docker_binary(docker)
+    socket_path, socket_gid = _job_socket(docker_bin, docker_socket)
     private = Path(tempfile.mkdtemp(prefix="rookrunner-run-"))
     os.chmod(private, 0o700)
     commands = Path(tempfile.mkdtemp(prefix="rookrunner-cmd-"))
@@ -922,7 +1004,9 @@ def run_job(
             _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(
             docker_bin,
-            _create_args(name, workspace, private, commands, reference, network),
+            _create_args(
+                name, workspace, private, commands, reference, network, socket_path, socket_gid
+            ),
             60,
             deadline,
         )

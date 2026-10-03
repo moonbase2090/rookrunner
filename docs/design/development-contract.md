@@ -66,8 +66,19 @@ Docker network `bridge` unless the worker was started with `--network none`.
 runners have that access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
 `none` is the documented way to turn it off. Other network names are
-rejected. The Docker socket and host credential directories are not mounted.
-This is not a private-network or egress-policy implementation. Unsupported workflow
+rejected. The Docker socket stays unmounted unless the worker is started
+with `--docker-socket`. That flag bind-mounts the engine socket this worker
+already uses into the job at `/var/run/docker.sock`. The job keeps the
+caller uid. It is added to the socket's group and to group 0, because the
+mounted socket is often mode `0660` and some engines present it as owned
+by root. The job image must already contain the Docker client. Rookrunner
+does not install one and does not select a default image. GitHub requires Docker to be
+installed and the service running for container-dependent work on a
+self-hosted runner
+(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
+A missing socket fails setup and creates no container. Host credential
+directories are not mounted. The container is not privileged. This is not a
+private-network, nested-daemon, or egress-policy implementation. Unsupported workflow
 fields and invalid YAML create no run. A workflow file larger than 500 KB
 creates no run; that rejection is a capability error. The job time bound is
 `timeout-minutes`, default 360 minutes, and a value above 5 days is a

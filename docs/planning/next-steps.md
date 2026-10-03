@@ -15,7 +15,13 @@ a later item. The act pin stays historical. Development `run.submit` stays
 version 0 and fixture-only. Version 1 accepts one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
 and the jobs it needs. Job containers use Docker network `bridge` by default.
-`worker --network none` turns public internet access off.
+`worker --network none` turns public internet access off. The job
+container does not mount the Docker socket unless the worker is started
+with `--docker-socket`. That flag gives the job the host Docker service.
+The job keeps the caller user. The image must already contain the Docker
+client. GitHub requires that service to be installed and running for
+container-dependent work on a self-hosted runner
+(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -111,7 +117,9 @@ caller's canonical JSON, not a GitHub event delivery. The container uses
 Docker network `bridge` by default, so the job can reach the public internet.
 GitHub-hosted runners have that access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-The worker flag `--network none` turns it off. The Docker socket and host
+The worker flag `--network none` turns it off. The Docker socket stays
+unmounted unless the worker is started with `--docker-socket`. That job
+keeps the caller user and can open the engine socket. Host
 credentials are not mounted. A nonzero
 step fails the job. A later step runs only when its condition is true;
 otherwise it is skipped and does not run. The result names the first failed
@@ -646,7 +654,7 @@ GitHub-equivalent.
 | --- | --- | --- |
 | NS-17 | Matrix | Include, exclude, fail-fast, and max-parallel are tested. Unsupported matrix keys fail at plan time. |
 | NS-18 | Reusable workflows | `workflow_call` inputs and outputs type-check. Nesting over the documented limit fails. Secrets are not passed implicitly. |
-| NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. The Docker socket is not mounted. |
+| NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. Service containers do not receive the engine socket. |
 | NS-20 | Sanitized Git metadata | A written design lands before code. The following PR copies only the metadata that design allows, still excludes credentials and remote URLs, and proves a checkout fixture against the captured digest. Until that PR, checkout actions remain an explicit rejection. |
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
