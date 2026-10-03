@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from execution_core.plan import PlanError, plan_workflow
 from execution_core.snapshot import CaptureError, SourceCapture
 
 
@@ -47,6 +48,15 @@ class SnapshotTests(unittest.TestCase):
         manifest_bytes = (location / "manifest.json").read_bytes()
         self.assertEqual(hashlib.sha256(manifest_bytes).hexdigest(), result["digest"])
         manifest = json.loads(manifest_bytes)
+        git_path = location / "git.json"
+        git_bytes = git_path.read_bytes()
+        self.assertEqual(stat.S_IMODE(git_path.stat().st_mode), 0o600)
+        self.assertEqual(hashlib.sha256(git_bytes).hexdigest(), result["git_metadata_digest"])
+        metadata = json.loads(git_bytes)
+        self.assertEqual(metadata["base_commit"], manifest["base_commit"])
+        self.assertEqual(metadata["dirty"], manifest["dirty"])
+        self.assertEqual(metadata["git_object_format"], manifest["git_object_format"])
+        self.assertNotIn("@", git_bytes.decode())
         for entry in manifest["entries"]:
             path = location / "files" / entry["path"]
             contents = (
@@ -258,6 +268,9 @@ class SnapshotTests(unittest.TestCase):
         reply = json.loads(result.stdout)
         self.assertIn("snapshot_id", reply["snapshot"])
         self.assertNotIn("run_id", reply["snapshot"])
+        recorded = reply["snapshot"]
+        git_bytes = (self.state / "snapshots" / recorded["snapshot_id"] / "git.json").read_bytes()
+        self.assertEqual(hashlib.sha256(git_bytes).hexdigest(), recorded["git_metadata_digest"])
         self.assertFalse((self.state / "runs.sqlite3").exists())
 
     def test_unborn_repository_captures_staged_source(self):
@@ -270,6 +283,16 @@ class SnapshotTests(unittest.TestCase):
         result = capture.capture("workflow.yml")
         self.assertIsNone(result["base_commit"])
         self.assertTrue(result["dirty"])
+        metadata = json.loads(
+            (self.state / "snapshots" / result["snapshot_id"] / "git.json").read_text()
+        )
+        self.assertIsNone(metadata["head"])
+        self.assertEqual(
+            hashlib.sha256(
+                (self.state / "snapshots" / result["snapshot_id"] / "git.json").read_bytes()
+            ).hexdigest(),
+            result["git_metadata_digest"],
+        )
 
     def test_attribute_changes_during_capture_are_rejected(self):
         original = self.capture.scan
@@ -301,6 +324,82 @@ class SnapshotTests(unittest.TestCase):
                 link.unlink(missing_ok=True)
                 link.symlink_to(target)
                 self.assert_rejected("CAPABILITY_UNSUPPORTED", ["link"])
+
+    def test_sanitized_metadata_survives_a_later_checkout_edit(self):
+        self.capture.git("remote", "add", "origin", "https://example.invalid/fixture.git")
+        credential = self.repo / ".git" / "fixture-credential"
+        credential.write_text("fixture-credential\n")
+        result, manifest, files = self.snapshot()
+        snapshot = files.parent
+        self.capture.git("remote", "set-url", "origin", "https://example.invalid/later.git")
+        credential.write_text("fixture-credential-later\n")
+        manifest_bytes = (snapshot / "manifest.json").read_bytes()
+        git_bytes = (snapshot / "git.json").read_bytes()
+        self.assertEqual(hashlib.sha256(manifest_bytes).hexdigest(), result["digest"])
+        self.assertEqual(hashlib.sha256(git_bytes).hexdigest(), result["git_metadata_digest"])
+        text = git_bytes.decode()
+        for absent in (
+            "https://example.invalid/fixture.git",
+            "https://example.invalid/later.git",
+            "fixture-credential",
+            "user.email",
+            "fixture@example.invalid",
+            "Fixture",
+        ):
+            self.assertNotIn(absent, text)
+        metadata = json.loads(text)
+        self.assertEqual(metadata["base_commit"], manifest["base_commit"])
+        self.assertEqual(metadata["dirty"], manifest["dirty"])
+        self.assertEqual(metadata["git_object_format"], manifest["git_object_format"])
+        self.assertEqual(metadata["head"], "refs/heads/main")
+        self.assertFalse((files / ".git").exists())
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(
+                b"name: fixture\non: push\njobs:\n  build:\n    steps:\n"
+                b"      - uses: actions/checkout@v4\n",
+                "build",
+            )
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+
+    def test_detached_head_stores_null(self):
+        self.capture.git("checkout", "--detach")
+        result, _, files = self.snapshot()
+        metadata = json.loads((files.parent / "git.json").read_text())
+        self.assertIsNone(metadata["head"])
+        self.assertEqual(metadata["base_commit"], result["base_commit"])
+        self.assertIsNotNone(result["base_commit"])
+
+    def test_remote_tracking_head_is_not_copied(self):
+        self.capture.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.capture.git("symbolic-ref", "HEAD", "refs/remotes/origin/main")
+        result, _, files = self.snapshot()
+        git_bytes = (files.parent / "git.json").read_bytes()
+        self.assertIsNone(json.loads(git_bytes)["head"])
+        self.assertNotIn(b"refs/remotes", git_bytes)
+        self.assertIsNotNone(result["base_commit"])
+
+    def test_branch_name_containing_at_is_not_copied(self):
+        self.capture.git("checkout", "-b", "user@host")
+        _, _, files = self.snapshot()
+        git_bytes = (files.parent / "git.json").read_bytes()
+        self.assertIsNone(json.loads(git_bytes)["head"])
+        self.assertNotIn("@", git_bytes.decode())
+
+    def test_symbolic_ref_change_during_capture_is_unstable(self):
+        self.capture.git("branch", "other")
+        original = self.capture.symbolic_head
+        seen = False
+
+        def head():
+            nonlocal seen
+            if not seen:
+                seen = True
+                return original()
+            self.capture.git("symbolic-ref", "HEAD", "refs/heads/other")
+            return original()
+
+        with patch.object(self.capture, "symbolic_head", side_effect=head):
+            self.assert_rejected("SOURCE_UNSTABLE")
 
     def test_worktree_git_file_is_not_copied(self):
         worktree = self.root / "worktree"

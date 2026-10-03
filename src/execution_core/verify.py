@@ -299,7 +299,8 @@ def verify_snapshot(snapshot_dir, digest):
     """Return the manifest when its digest and every entry still match.
 
     `digest` is the SHA-256 of the captured manifest bytes. A changed byte,
-    mode, or manifest field raises VerifyError. Nothing is written.
+    mode, or manifest field raises VerifyError. Nothing is written. A sibling
+    git.json is not read.
     """
 
     raw, files_fd = _manifest_bytes(snapshot_dir)
@@ -330,3 +331,113 @@ def verify_snapshot(snapshot_dir, digest):
         return manifest
     finally:
         os.close(files_fd)
+
+
+_GIT_KEYS = {
+    "format_version",
+    "base_commit",
+    "dirty",
+    "git_object_format",
+    "head",
+}
+
+
+def _object_id(value, algorithm):
+    if value is None:
+        return True
+    length = {"sha1": 40, "sha256": 64}.get(algorithm, 0)
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _head_name(value):
+    if value is None:
+        return True
+    if not isinstance(value, str) or not value.startswith("refs/heads/"):
+        return False
+    if any(character in value for character in "@: \t\n"):
+        return False
+    return len(value) > len("refs/heads/")
+
+
+def _read_named(snapshot_dir, name):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        root = os.open(snapshot_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise _follow_error(exc) from exc
+    try:
+        try:
+            descriptor = os.open(name, flags, dir_fd=root)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                return None
+            raise _follow_error(exc) from exc
+        try:
+            chunks = []
+            size = 0
+            while block := os.read(descriptor, 1024 * 1024):
+                size += len(block)
+                if size > MAX_MANIFEST_BYTES:
+                    _invalid("git metadata is not accepted")
+                chunks.append(block)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(root)
+    return b"".join(chunks)
+
+
+def git_metadata_digest(snapshot_dir):
+    """Return the SHA-256 of git.json, or None when that sibling is absent."""
+
+    raw = _read_named(snapshot_dir, "git.json")
+    if raw is None:
+        return None
+    return hashlib.sha256(raw).hexdigest()
+
+
+def read_git_metadata(snapshot_dir):
+    """Return the sanitized sibling, or None when git.json is absent.
+
+    A present sibling must be the canonical five-field object and must agree
+    with the manifest's base commit, dirty flag, and object format. This
+    reader is not used by verify_snapshot or by a run.
+    """
+
+    raw = _read_named(snapshot_dir, "git.json")
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        _invalid("git metadata is not accepted")
+    if (
+        not isinstance(parsed, dict)
+        or set(parsed) != _GIT_KEYS
+        or canonical(parsed).encode() != raw
+    ):
+        _invalid("git metadata is not accepted")
+    if type(parsed["format_version"]) is not int or parsed["format_version"] != 1:
+        _invalid("git metadata is not accepted")
+    if type(parsed["dirty"]) is not bool or parsed["git_object_format"] not in ("sha1", "sha256"):
+        _invalid("git metadata is not accepted")
+    if not _object_id(parsed["base_commit"], parsed["git_object_format"]) or not _head_name(
+        parsed["head"]
+    ):
+        _invalid("git metadata is not accepted")
+    manifest_raw = _read_named(snapshot_dir, "manifest.json")
+    if manifest_raw is None:
+        _invalid("git metadata is not accepted")
+    try:
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        _invalid("git metadata is not accepted")
+    if not isinstance(manifest, dict) or any(
+        parsed[key] != manifest.get(key) for key in ("base_commit", "dirty", "git_object_format")
+    ):
+        _invalid("git metadata is not accepted")
+    return parsed

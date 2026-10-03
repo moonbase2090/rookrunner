@@ -1,7 +1,8 @@
 """Preparatory Git working-file capture for M2; never executes workflows.
 
 Snapshots contain plain files and a canonical manifest, never Git configuration,
-credentials, hooks, or objects. The caller must use a private, trusted state root.
+credentials, hooks, or objects. A sibling git.json records only the sanitized
+allow-list. The caller must use a private, trusted state root.
 """
 
 from contextlib import contextmanager
@@ -47,6 +48,28 @@ class CaptureError(Exception):
 
 def reject(kind, message):
     raise CaptureError(kind, message)
+
+
+def _check_base(base, algorithm):
+    if base is None:
+        return
+    length = {"sha1": 40, "sha256": 64}[algorithm]
+    if len(base) != length or any(character not in "0123456789abcdef" for character in base):
+        reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+
+
+def _write_private(path, payload):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        output = os.fdopen(fd, "wb")
+    except Exception:
+        os.close(fd)
+        raise
+    with output:
+        output.write(payload)
+        output.flush()
+        os.fsync(output.fileno())
 
 
 def relative_path(value):
@@ -199,7 +222,35 @@ class SourceCapture:
         algorithm = self.git("rev-parse", "--show-object-format").stdout.decode("ascii").strip()
         if algorithm not in ("sha1", "sha256"):
             reject("CAPABILITY_UNSUPPORTED", "unsupported Git object format")
-        return index, tracked, base, tree, algorithm
+        return index, tracked, base, tree, algorithm, self.symbolic_head()
+
+    def symbolic_head(self):
+        """Return a local branch name, or None when the name is not copied.
+
+        An unborn repository still has a symbolic ref. The caller stores null
+        when the base commit is null. A detached HEAD exits 1 with no output.
+        """
+
+        result = self.git("symbolic-ref", "--quiet", "HEAD", allow_failure=True)
+        if result.returncode == 1 and result.stdout == b"":
+            return None
+        if (
+            result.returncode != 0
+            or result.stdout.count(b"\n") != 1
+            or not result.stdout.endswith(b"\n")
+        ):
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        try:
+            text = result.stdout[:-1].decode("utf-8")
+        except UnicodeError:
+            reject("SOURCE_INVALID", "repository metadata or paths are not supported UTF-8")
+        if (
+            "@" in text
+            or not text.startswith("refs/heads/")
+            or self.git("check-ref-format", text, allow_failure=True).returncode != 0
+        ):
+            return None
+        return text
 
     @contextmanager
     def parent(self, path):
@@ -368,7 +419,7 @@ class SourceCapture:
         staging = Path(tempfile.mkdtemp(prefix=".preparing-", dir=snapshots))
         try:
             initial = self.inventory()
-            _, tracked, base, tree, algorithm = initial
+            _, tracked, base, tree, algorithm, head_name = initial
             if any(self.excluded(path) for path in [workflow, *include]):
                 reject(
                     "SOURCE_EXCLUDED", "workflow or explicit input is excluded by capture policy"
@@ -395,6 +446,7 @@ class SourceCapture:
             selected = next((e for e in entries if e["path"] == workflow), None)
             if not selected or selected["kind"] != "file":
                 reject("SOURCE_INVALID", "workflow must be a captured regular file")
+            _check_base(base, algorithm)
             manifest = {
                 "format_version": 1,
                 "base_commit": base,
@@ -413,6 +465,15 @@ class SourceCapture:
                 output.write(encoded)
                 output.flush()
                 os.fsync(output.fileno())
+            metadata = {
+                "format_version": 1,
+                "base_commit": base,
+                "dirty": manifest["dirty"],
+                "git_object_format": algorithm,
+                "head": None if base is None else head_name,
+            }
+            git_encoded = canonical(metadata).encode()
+            _write_private(staging / "git.json", git_encoded)
             for directory, _, _ in os.walk(staging, topdown=False, followlinks=False):
                 sync_directory(directory)
             snapshot_id = str(uuid.uuid4())
@@ -426,6 +487,7 @@ class SourceCapture:
                 "dirty": manifest["dirty"],
                 "file_count": len(entries),
                 "total_bytes": sum(e["size"] for e in entries),
+                "git_metadata_digest": hashlib.sha256(git_encoded).hexdigest(),
             }
         except CaptureError:
             raise

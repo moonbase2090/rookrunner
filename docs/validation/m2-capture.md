@@ -78,7 +78,7 @@ Local Actions configuration, code, state, or identity was imported.
   attempt reconciliation, storage budgets, orphan recovery, logs, and artifacts.
 
 The current capture rules deliberately reject some legitimate inputs and do not
-provide atomic filesystem snapshots, arbitrary secret detection, sanitized Git
-metadata, or a sandbox. The allow-list is
-[designed](../design/git-metadata.md) and is not copied. See the
+provide atomic filesystem snapshots, arbitrary secret detection, or a sandbox.
+The allow-list is copied to a sibling `git.json`
+([design](../design/git-metadata.md)). Checkout actions stay rejected. See the
 [implemented capture contract](../design/source-capture.md).

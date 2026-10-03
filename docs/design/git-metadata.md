@@ -1,9 +1,8 @@
 # Sanitized Git metadata
 
-Status: design, 2026-10-03. This document does not copy metadata and does
-not accept a checkout action. The following PR copies only the fields
-below. Until that PR, and in that PR, checkout actions remain an explicit
-rejection. This is not a GitHub-equivalence claim.
+Status: design, 2026-10-03. Capture copies the fields below into a
+sibling `git.json`. Checkout actions remain an explicit rejection. This
+is not a GitHub-equivalence claim.
 
 Decision 0002 still holds for the implemented capture: the snapshot is
 plain working files and a canonical manifest, and `.git` is not copied.
@@ -16,7 +15,7 @@ The manifest stays `format_version` 1. Its digest stays the SHA-256 of
 the exact manifest bytes. Those bytes stay the identity of the submitted
 working files.
 
-The following PR may write one sibling, `git.json`, next to
+Capture writes one sibling, `git.json`, next to
 `manifest.json` in the same private staging directory, then fsync it
 before the atomic rename. The file mode is 0600. It is a regular file.
 The sibling is not a manifest field, so verification of an existing
@@ -34,7 +33,7 @@ directory. A job step that runs Git still has no repository. The disk
 budget already counts files under the state directory. This design adds
 no byte cap and no other numeric limit.
 
-## Fields the following PR may copy
+## Fields capture copies
 
 The sibling is canonical JSON with exactly these keys:
 
@@ -54,16 +53,18 @@ length matches the object format: 40 characters for `sha1`, 64 for
 `SOURCE_INVALID` kind. An unborn repository keeps a null base, as it
 does today.
 
-`head` is the only new fact. The following PR may run
-`git symbolic-ref --quiet HEAD` and `git check-ref-format` through the
-capture Git environment that already discards inherited configuration,
-hooks, prompts, and network fetch. Exit 0 is stored only when the
-output is a single line, `git check-ref-format` accepts it
+`head` is the only new fact. Capture runs `git symbolic-ref --quiet HEAD`
+and `git check-ref-format` through the capture Git environment that
+already discards inherited configuration, hooks, prompts, and network
+fetch. Exit 0 is stored only when the output is a single line,
+`git check-ref-format` accepts it
 (https://git-scm.com/docs/git-check-ref-format), and it begins with
 `refs/heads/`. The name must not contain `@`. Exit 1 with empty output
-stores null. That covers a detached HEAD and an unborn repository.
-Any other result is `SOURCE_INVALID`. A null `head` does not fail a
-capture that succeeds today.
+stores null. That is a detached HEAD. An unborn repository still has a
+symbolic ref; its base commit is null, so the sibling stores `head` null.
+A name that is not an accepted local branch stores null rather than the
+ref. Any other `symbolic-ref` result is `SOURCE_INVALID`. A null `head`
+does not fail a capture that succeeds today.
 
 A change to HEAD or to that symbolic ref between the two inventory
 reads is the existing `SOURCE_UNSTABLE` result. No new error kind is
@@ -71,8 +72,8 @@ added.
 
 ## What stays excluded
 
-The following PR must not copy, and must not run a Git command whose
-output would reveal:
+Capture does not copy, and does not run a Git command whose output
+would reveal:
 
 - `.git` itself, including config, hooks, objects, packs, alternates,
   replace refs, packed-refs, and worktree pointers
@@ -96,18 +97,18 @@ default, persists a token for later Git commands
 (https://github.com/actions/checkout). Its default clean step resets
 the work tree to HEAD. That would drop the dirty and untracked bytes
 this capture stores. The action stays `CAPABILITY_UNSUPPORTED`,
-including `uses: actions/checkout@v4` and a `uses` without `@`. The
-following PR does not fetch, does not persist a credential, and does
-not reset the workspace.
+including `uses: actions/checkout@v4` and a `uses` without `@`. Capture
+does not fetch, does not persist a credential, and does not reset the
+workspace.
 
-No command in the following PR may print configuration or remotes.
+No capture command may print configuration or remotes.
 `git config --list` and `git remote -v` are not allowed.
 `symbolic-ref` and `check-ref-format` are the only Git commands added.
 
 ## Checkout fixture
 
-The following PR proves the captured digest against a checkout, and
-still rejects checkout actions.
+Tests prove the captured digest against a checkout, and still reject
+checkout actions.
 
 1. Capture a repository that has a local branch. Record the manifest
    digest and `git_metadata_digest`.
@@ -141,4 +142,4 @@ and reports no metadata digest.
 Accepting `actions/checkout`, copying objects, synthesizing a commit,
 filling the `github` context, and publishing a GitHub-equivalence claim
 are later work. Each one needs its own design. None of them is
-authorized by the copy in the following PR.
+authorized by this copy.

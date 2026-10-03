@@ -4,16 +4,18 @@ Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
 roadmap step 1 and the first executable subset. NS-1 through NS-19 are
-implemented. NS-20 is the written design for sanitized Git metadata.
-Later items are not. Continuous integration runs ruff and the
+implemented. NS-20 records the sanitized Git metadata allow-list, and
+NS-21 copies it. Checkout actions stay rejected. Later items are not.
+Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
 
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. Sanitized Git
-metadata has a written allow-list and is not copied yet, so checkout
-actions stay rejected. The act pin stays historical.
-Development `run.submit` stays version 0 and fixture-only. Version 1 accepts one selected job. The CLI
+metadata is copied to a sibling `git.json`. Credentials and remote URLs
+stay excluded. Checkout actions stay rejected. The act pin stays historical.
+Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
+one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
 and the jobs it needs. Job containers use Docker network `bridge` by default.
 `worker --network none` turns public internet access off. The job
@@ -638,8 +640,8 @@ cap. Job outputs that read them still use the existing 1 MB per job and
 states the same 1 MB and 50 MB figures and says size is approximated with
 UTF-16. It does not define MB.
 
-Checkout and `actions/checkout` stay rejected. The sanitized metadata
-allow-list is NS-20. The copy is a later PR.
+Checkout and `actions/checkout` stay rejected. Sanitized metadata is
+the sibling `git.json` written by NS-21.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
@@ -864,20 +866,37 @@ Acceptance criteria:
 - That design excludes credentials and remote URLs.
 - Checkout actions remain an explicit rejection.
 
+**NS-21. Copy sanitized Git metadata.**
+
+Status: implemented. Capture writes `git.json` beside the manifest. The
+fields are `format_version`, `base_commit`, `dirty`, `git_object_format`,
+and `head`. `head` is a local `refs/heads/` name, or null for a detached
+HEAD, an unborn repository, or any other ref. The manifest digest does
+not include the sibling. Credentials, remote URLs, configuration, hooks,
+and objects are not copied. `verify_snapshot` does not read the sibling.
+The attempt workspace does not receive it. `actions/checkout` stays
+`CAPABILITY_UNSUPPORTED`. The capability version stays 8.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+https://git-scm.com/docs/git-check-ref-format
+https://github.com/actions/checkout
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- The sibling copies only the fields the NS-20 design allows.
+- Credentials and remote URLs are absent.
+- A later checkout edit does not change the captured digest.
+- Checkout actions remain an explicit rejection.
+
 ## After the first path
 
-These are the roadmap's later M2 increments. They are not part of the first
-twenty PRs. Each one rejects anything it still does not implement and
-records local evidence separately from any future GitHub reference run.
-None of them is authorized to call the result GitHub-equivalent. The next
-item does not change the plan or the capability version.
-
-| Order | PR | Acceptance criteria |
-| --- | --- | --- |
-| NS-21 | Copy sanitized Git metadata | Copy only the fields the NS-20 design allows. Exclude credentials and remote URLs. Prove a checkout fixture against the captured digest. Checkout actions remain an explicit rejection. |
+No later item is started. Accepting a checkout action needs its own
+design. Checkout actions remain an explicit rejection. None of this work
+is authorized to call the result GitHub-equivalent.
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-21 can follow that evidence. It is not required to say the
-first subset runs.
+restart. NS-21 follows that evidence. It does not say the first subset runs.
