@@ -20,9 +20,10 @@ manifest and its bytes. A step `if`, a job `if`, and job outputs are
 evaluated by an owned parser. `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`,
 and stdout workflow commands apply to later steps in the same job. The
 selected job runs after the jobs it needs, one at a time, in one
-caller-pinned container and one attempt workspace. `run` and `env` text stay
-literal. `hashFiles`, matrices, actions, and a secret store stay
-unsupported. This is not a GitHub-equivalence claim.
+caller-pinned container and one attempt workspace. Workflow `run` and `env`
+text stay literal. Local composite actions with `run` steps are read from
+the snapshot. `hashFiles`, matrices, JavaScript actions, Docker actions, and
+a secret store stay unsupported. This is not a GitHub-equivalence claim.
 The rest of this plan is not.
 
 ## Execution path
@@ -73,21 +74,23 @@ credentials into ordinary job containers by default.
    source checks. Compare semantic outcomes and relevant emitted values, not wall
    time or incidental log formatting. Record environment-related differences.
 
-Do not advertise expression positions other than step `if`, job `if`, and
-job outputs, or `uses`, matrices, services, or reusable workflows, while
-building this path. Early rejection is temporary capability status, not a
-decision to abandon those features.
+Do not advertise expression positions other than step `if`, job `if`, job
+outputs, and whole-string expressions in composite `env`, action output
+`value`, and the calling step's `with`. Do not advertise JavaScript
+actions, Docker actions, remote `uses`, matrices, services, or reusable
+workflows while building this path. Early rejection is temporary capability
+status, not a decision to abandon those features.
 
 ## Compatibility expansion
 
 | Area | Planned behavior and evidence | Initial status |
 | --- | --- | --- |
-| Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Implemented for one selected job of sequential `run` steps |
+| Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Implemented for one selected job of sequential `run` steps, plus local composite `uses` expanded from the snapshot |
 | Steps and shells | Ordering, script invocation, defaults, environment precedence, working directories | Implemented for the Linux Bash subset in one caller-pinned container. Process env is workflow, job, earlier `GITHUB_ENV`, then step env. Not a GitHub-equivalence claim |
 | Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Implemented for step `if`, job `if`, and job output expressions. `run` and `env` stay literal. `case` matches the expression reference and does not evaluate a branch it does not take. `env.MY-VAR` is the property `MY-VAR`, not subtraction. Not a GitHub-equivalence claim |
 | Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Implemented for the selected job's `needs` closure. Jobs run one at a time in one container and one workspace. A dependency outside the workflow fails planning. An output expression that reads `secrets` is omitted. Not a GitHub-equivalence claim |
 | Runtime communication | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, state files, workflow commands and masking | Implemented for the three files and documented stdout commands, including `add-mask`, for later steps in the same job. `set-env` and `add-path` are disabled. State files and job summaries are not. Not a GitHub-equivalence claim |
-| Action types | Composite, JavaScript, and Docker actions; inputs/outputs; setup/main/post lifecycle | Not implemented |
+| Action types | Composite, JavaScript, and Docker actions; inputs/outputs; setup/main/post lifecycle | Implemented for local composite actions whose steps are `run` steps, loaded from the snapshot (`./` and `$/`). The plan records a digest of the parsed action and the run executes that plan. JavaScript and Docker actions are not implemented. Nested `uses` is not implemented. Not a GitHub-equivalence claim |
 | Strategies | Matrix expansion, include/exclude, fail-fast, max-parallel, concurrency | Not implemented |
 | Reuse | Reusable workflows, typed inputs, outputs, nesting, explicit secret handling | Not implemented |
 | Repository behavior | Sanitized Git metadata and checkout semantics consistent with identified source | Capture exists; Git/checkout execution unsupported |
