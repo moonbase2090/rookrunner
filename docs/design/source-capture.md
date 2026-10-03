@@ -79,8 +79,9 @@ Git commands inspect index/tree/attribute metadata. Inherited Git redirection
 variables and global/system configuration are disabled, as are hooks, fsmonitor,
 optional index locks, prompts, and lazy fetching. No local `.git` configuration,
 objects, credentials, hooks, or remote URLs are copied. Consequently Git-dependent
-workflows and `actions/checkout` are **not yet supported or validated**. A sanitized
-metadata strategy must be designed and tested before claiming that compatibility.
+workflows and `actions/checkout` are **not yet supported or validated**. The
+[sanitized metadata design](git-metadata.md) names the only fields a later PR
+may copy. This slice does not copy them, and checkout actions stay rejected.
 
 ## Stability and storage
 

@@ -79,4 +79,6 @@ Local Actions configuration, code, state, or identity was imported.
 
 The current capture rules deliberately reject some legitimate inputs and do not
 provide atomic filesystem snapshots, arbitrary secret detection, sanitized Git
-metadata, or a sandbox. See the [implemented capture contract](../design/source-capture.md).
+metadata, or a sandbox. The allow-list is
+[designed](../design/git-metadata.md) and is not copied. See the
+[implemented capture contract](../design/source-capture.md).
