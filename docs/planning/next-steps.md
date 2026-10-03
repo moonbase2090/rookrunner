@@ -1,6 +1,6 @@
 # M2 next steps
 
-Status: build order, 2026-10-02. Derived from the
+Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
 roadmap step 1 and the first executable subset. NS-1 through NS-16 are
@@ -12,8 +12,9 @@ Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. The PRD leaves
 sanitized Git metadata undesigned, so those workflows stay unsupported until
 a later item. The act pin stays historical. Development `run.submit` stays
-version 0 and fixture-only. Version 1 accepts one selected job. The worker
-runs that job and the jobs it needs.
+version 0 and fixture-only. Version 1 accepts one selected job. The CLI
+submits that job and follows its status and logs. The worker runs that job
+and the jobs it needs.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable

@@ -94,8 +94,10 @@ Implemented:
 - A user-owned Unix socket and SQLite state for one bound repository.
 - Protocol version 0 methods: `worker.describe`, `run.submit`, `run.get`,
   `run.list`, `run.logs`, `run.artifacts`, `artifact.read`, and `run.cancel`.
-  Submit accepts only an explicit `development` fixture. Fixture text is never
-  executed.
+  The CLI submits an explicit `development` fixture, or a version 1 workflow
+  job with `--workflow`, `--job-id`, `--event`, and `--image`. `follow` polls
+  that run's status and log pages until the run is terminal. Fixture text is
+  never executed.
 - Durable submission keys, bounded queue and log pages, cancellation races,
   and restart behavior that keeps queued fixtures and marks an interrupted
   active fixture `lost`.
@@ -202,9 +204,10 @@ not a sandbox for arbitrary hostile repositories.
 
 ## Product flow
 
-The intended release flow. Install, doctor, workflow submission, and artifact
-retrieval are not available. Today a developer starts the worker, submits a
-development fixture or captures a snapshot, and reads JSON from the CLI.
+The intended release flow. Install, doctor, and artifact retrieval are not
+available. Today a developer starts the worker, submits a development
+fixture or a version 1 workflow job, follows its status and logs, and reads
+JSON from the CLI.
 
 1. Install the release and run doctor against a selected repository.
 2. Start its worker and inspect supported execution capabilities.

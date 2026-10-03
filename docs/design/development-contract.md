@@ -266,6 +266,27 @@ the expected `result.input.digest`.** Queued acceptance is not execution success
 Protocol errors exit 1 and print JSON to stdout; local transport/startup errors
 exit 1 and print JSON to stderr.
 
+`submit` sends version 0 when workflow flags are omitted. That command
+requires `--backend development` and `--key`. Omitted `--exit-code`,
+`--delay-ms`, and `--output` use the fixture defaults above.
+
+`submit` sends version 1 when `--workflow`, `--job-id`, `--event`, and
+`--image` are all present. `--event` is one JSON value. `--image` is the
+caller's digest pin and is not rewritten by the CLI. `--backend development`
+may be present on that command and is not sent; version 1 has no backend
+field. The source is the repository the worker was started with. Fixture
+options cannot be combined with a workflow submit. A partial set of those
+flags exits 2 before a request is sent.
+
+`follow RUN_ID` polls `run.get` and pages `run.logs` until the run is
+terminal and `end_of_stream` is true. It prints one canonical JSON-RPC
+envelope for each state change and each nonempty log page. The pause between
+polls is client pacing, not a protocol or Actions limit. Exit zero means the
+run is `succeeded` with exit code 0. Any other terminal state exits 1 after
+those envelopes. A protocol error exits 1. `get` and `logs` stay one-shot:
+they still exit zero when the protocol call succeeds, including when the run
+failed.
+
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
