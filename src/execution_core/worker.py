@@ -4,7 +4,9 @@ Version 0 submits a synthetic development fixture. It never launches commands
 or reads a workflow. Version 1 captures the repository, verifies that
 snapshot, plans one selected job, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
-caller-pinned container. Cancelling a running workflow stops that container
+caller-pinned container. That container uses Docker network `bridge` unless
+this worker was started with network `none`. Cancelling a running workflow
+stops that container
 before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
 Restart records the container beside the attempt, removes only that
@@ -38,6 +40,7 @@ from .disk import DEFAULT_DISK_BUDGET, usage
 from .plan import PlanError, plan_snapshot
 from .run import (
     CONTAINER_NAME,
+    DEFAULT_NETWORK,
     ContainerLease,
     RunError,
     owned_container_present,
@@ -213,7 +216,10 @@ def _step_failure_message(outcome, image_ok):
 
 
 class Worker:
-    def __init__(self, repository, state, disk_budget=None):
+    def __init__(self, repository, state, disk_budget=None, *, network=DEFAULT_NETWORK):
+        if network not in {DEFAULT_NETWORK, "none"}:
+            raise ValueError("container network must be bridge or none")
+        self.network = network
         if disk_budget is None:
             disk_budget = DEFAULT_DISK_BUDGET
         # bool is an int subclass. A flag is not a byte count.
@@ -704,6 +710,7 @@ class Worker:
             image,
             event,
             owner=owner,
+            network=self.network,
         )
 
     def _abandoned(self, run_id):
@@ -1377,8 +1384,8 @@ class Worker:
             self.close()
 
 
-def serve(repository, state, disk_budget=None):
-    worker = Worker(repository, state, disk_budget)
+def serve(repository, state, disk_budget=None, network=DEFAULT_NETWORK):
+    worker = Worker(repository, state, disk_budget, network=network)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()

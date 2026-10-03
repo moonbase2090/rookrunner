@@ -457,6 +457,22 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
         self.assertIn("Docker is missing", str(raised.exception))
 
+    def test_host_network_is_rejected_before_docker(self):
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                self.plan,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.docker),
+                network="host",
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("container network is not accepted", str(raised.exception))
+        self.assertFalse(self.marker.exists())
+
     def test_changed_workspace_is_not_a_step_exit(self):
         (self.workspace / "source.txt").write_text("changed\n")
         with self.assertRaises(RunError) as raised:
@@ -597,7 +613,7 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(len(creates), 1)
         create = creates[0]
         self.assertIn("--network", create)
-        self.assertEqual(create[create.index("--network") + 1], "none")
+        self.assertEqual(create[create.index("--network") + 1], "bridge")
         self.assertNotIn("--privileged", create)
         rendered = "\n".join(repr(call) for call in calls)
         self.assertNotIn("docker.sock", rendered)
@@ -613,6 +629,28 @@ class DockerRunTests(unittest.TestCase):
         )
         self.assertEqual(listed.stdout.strip(), "")
         self.assertEqual(stat.S_IMODE((self.workspace / "order.txt").stat().st_mode) & 0o777, 0o644)
+
+    def test_network_none_is_an_explicit_create_argument(self):
+        offline = "on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"
+        root = self.root / "offline"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, offline)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(offline),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            network="none",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(creates[-1][creates[-1].index("--network") + 1], "none")
+        rendered = "\n".join(repr(call) for call in self._calls())
+        self.assertNotIn("docker.sock", rendered)
 
     def test_nonzero_step_stops_and_names_the_digest(self):
         fail_root = self.root / "fail"

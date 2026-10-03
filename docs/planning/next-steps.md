@@ -14,7 +14,8 @@ sanitized Git metadata undesigned, so those workflows stay unsupported until
 a later item. The act pin stays historical. Development `run.submit` stays
 version 0 and fixture-only. Version 1 accepts one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
-and the jobs it needs.
+and the jobs it needs. Job containers use Docker network `bridge` by default.
+`worker --network none` turns public internet access off.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -106,8 +107,12 @@ Omitted shell, `bash`, and `sh` follow the Linux runner commands reviewed
 2026-10-02. Explicit `bash` enables pipefail. An omitted shell does not.
 Workflow env is overridden by job env, then by step env. The runner then
 sets `GITHUB_WORKSPACE` and `ROOKRUNNER_EVENT`. The event file is the
-caller's canonical JSON, not a GitHub event delivery. The container network
-is `none`. The Docker socket and host credentials are not mounted. A nonzero
+caller's canonical JSON, not a GitHub event delivery. The container uses
+Docker network `bridge` by default, so the job can reach the public internet.
+GitHub-hosted runners have that access by default
+(https://docs.github.com/en/actions/concepts/runners/private-networking).
+The worker flag `--network none` turns it off. The Docker socket and host
+credentials are not mounted. A nonzero
 step fails the job. A later step runs only when its condition is true;
 otherwise it is skipped and does not run. The result names the first failed
 step, its exit code, and the image digest. Docker missing, an unresolvable
