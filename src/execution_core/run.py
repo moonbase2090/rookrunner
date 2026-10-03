@@ -50,7 +50,12 @@ container-dependent jobs on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 Host credential directories are not mounted. The container is not
 privileged. This is not a private-network or egress-policy implementation.
-Step `if` and job `if` are evaluated.
+A job matrix runs in this same container, one combination at a time, on the
+same attempt workspace. `strategy.fail-fast` defaults to true and skips
+later combinations after one fails. `strategy.max-parallel` is recorded and
+is not a second container count: this worker never runs two combinations at
+once. Job `if` is evaluated before that expansion. A matrix job does not
+publish outputs to `needs`. Step `if` and job `if` are evaluated.
 Expressions in workflow `run`, workflow and step `env`, and `name` stay
 literal text. `github.event` is the caller event. Other `github` properties
 are not invented. `runner.os` is `Linux` because this subset runs in a Linux
@@ -282,7 +287,7 @@ def _docker_binary(docker):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 5:
+    if not isinstance(plan, dict) or plan.get("capability_version") != 6:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     jobs = plan.get("jobs")
@@ -309,6 +314,7 @@ def _plan_parts(plan):
                 _setup("plan is not accepted")
             if not isinstance(value, str) or value.strip() == "" or "\0" in value:
                 _setup("plan is not accepted")
+        _accept_strategy(job.get("strategy"))
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
             _setup("plan is not accepted")
@@ -920,6 +926,76 @@ def _write_script(private, script_name, text):
     os.chmod(script, 0o600)
 
 
+def _accept_strategy(strategy):
+    if strategy is None:
+        return
+    if not isinstance(strategy, dict):
+        _setup("plan is not accepted")
+    if type(strategy.get("fail_fast")) is not bool:
+        _setup("plan is not accepted")
+    max_parallel = strategy.get("max_parallel")
+    if max_parallel is not None and (type(max_parallel) is not int or max_parallel < 1):
+        _setup("plan is not accepted")
+    combinations = strategy.get("combinations")
+    if combinations is None:
+        return
+    # Same documented matrix ceiling the planner enforces.
+    # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+    if not isinstance(combinations, list) or len(combinations) > 256:
+        _setup("plan is not accepted")
+    for combo in combinations:
+        if not isinstance(combo, dict) or not _matrix_document(combo):
+            _setup("plan is not accepted")
+
+
+def _matrix_document(value):
+    if value is None or type(value) is bool:
+        return True
+    if isinstance(value, str):
+        return "\0" not in value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_matrix_document(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and key != "" and "\0" not in key and _matrix_document(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _combination_contexts(job):
+    """Return `(matrix, strategy)` pairs. No matrix is one pair of empty contexts.
+
+    `max-parallel` limits how many matrix jobs GitHub runs at once. This
+    worker has one container, so combinations run one at a time and the
+    declared value is only exposed on the strategy context.
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+    """
+
+    strategy = job.get("strategy")
+    if not isinstance(strategy, dict):
+        return [(None, None)]
+    combinations = strategy.get("combinations")
+    if combinations is None:
+        return [(None, None)]
+    total = len(combinations)
+    pairs = []
+    for index, combo in enumerate(combinations):
+        context = {
+            "fail-fast": strategy["fail_fast"],
+            "job-index": index,
+            "job-total": total,
+        }
+        if strategy.get("max_parallel") is not None:
+            context["max-parallel"] = strategy["max_parallel"]
+        pairs.append((combo, context))
+    return pairs
+
+
 def run_job(
     snapshot_dir,
     snapshot_digest,
@@ -1066,45 +1142,85 @@ def run_job(
                     records.append(_step_result(step, "skipped", None, "", "", None, job["id"]))
                 results[job["id"]] = {"result": "skipped", "outputs": {}}
                 continue
-            prior = []
-            runtime = _JobRuntime()
+            runs = _combination_contexts(job)
+            if not runs:
+                results[job["id"]] = {"result": "skipped", "outputs": {}}
+                continue
+            strategy = job.get("strategy") if isinstance(job.get("strategy"), dict) else None
+            fail_fast = (
+                strategy is not None
+                and strategy.get("combinations") is not None
+                and strategy.get("fail_fast") is True
+            )
+            publish = strategy is None or strategy.get("combinations") is None
             job_failed = False
-            for step in job["steps"]:
+            produced = {}
+            cancelled_run = False
+            for matrix, strategy_context in runs:
+                if owner is not None and owner.cancelled():
+                    graceful = True
+                    outcome = _cancelled(resolved, reference, records)
+                    cancelled_run = True
+                    break
                 if deadline - time.monotonic() <= 0:
                     raise _JobDeadline()
-                record = _consider_step(
-                    docker_bin,
-                    name,
-                    step,
-                    workflow,
-                    job,
-                    event,
-                    workspace,
-                    bash_ok,
-                    step_timeout,
-                    deadline,
-                    prior,
-                    owner is not None and owner.cancelled(),
-                    needs,
-                    scripts[(job["id"], step["index"])],
-                    runtime,
-                    commands,
-                )
-                records.append(record)
-                prior.append(record)
-                if record["status"] == "failed":
-                    job_failed = True
-                    if failed is None:
-                        failed = record
+                prior = []
+                runtime = _JobRuntime()
+                for step in job["steps"]:
+                    if deadline - time.monotonic() <= 0:
+                        raise _JobDeadline()
+                    record = _consider_step(
+                        docker_bin,
+                        name,
+                        step,
+                        workflow,
+                        job,
+                        event,
+                        workspace,
+                        bash_ok,
+                        step_timeout,
+                        deadline,
+                        prior,
+                        owner is not None and owner.cancelled(),
+                        needs,
+                        scripts[(job["id"], step["index"])],
+                        runtime,
+                        commands,
+                        matrix=matrix,
+                        strategy=strategy_context,
+                    )
+                    records.append(record)
+                    prior.append(record)
+                    if record["status"] == "failed":
+                        job_failed = True
+                        if failed is None:
+                            failed = record
+                if publish:
+                    produced, output_bytes = _job_outputs(
+                        job,
+                        _expression_values(
+                            event,
+                            workflow,
+                            job,
+                            {"env": {}},
+                            prior,
+                            cancelled,
+                            needs,
+                            runtime,
+                            matrix=matrix,
+                            strategy=strategy_context,
+                        ),
+                        output_bytes,
+                    )
+                if job_failed and fail_fast:
+                    break
+            if cancelled_run:
+                break
             result_name = "failure" if job_failed else "success"
-            produced, output_bytes = _job_outputs(
-                job,
-                _expression_values(
-                    event, workflow, job, {"env": {}}, prior, cancelled, needs, runtime
-                ),
-                output_bytes,
-            )
-            results[job["id"]] = {"result": result_name, "outputs": produced}
+            results[job["id"]] = {
+                "result": result_name,
+                "outputs": produced if publish else {},
+            }
         else:
             outcome = _outcome(resolved, reference, records, failed)
     except _JobDeadline as exc:
@@ -1189,6 +1305,8 @@ def _expression_values(
     inputs=None,
     action_path=None,
     output_map=None,
+    matrix=None,
+    strategy=None,
 ):
     """Contexts for one step `if`. Missing properties stay missing.
 
@@ -1230,8 +1348,8 @@ def _expression_values(
     return {
         "github": github,
         "needs": needs if isinstance(needs, dict) else {},
-        "strategy": {},
-        "matrix": {},
+        "strategy": strategy if isinstance(strategy, dict) else {},
+        "matrix": matrix if isinstance(matrix, dict) else {},
         "job": {"status": job_status},
         "runner": {"os": "Linux"},
         "env": env,
@@ -1348,12 +1466,25 @@ def _consider_step(
     script_name,
     runtime,
     commands,
+    matrix=None,
+    strategy=None,
 ):
     job_id = job.get("id")
     try:
         enabled = step_is_enabled(
             step.get("if"),
-            _expression_values(event, workflow, job, step, prior, cancelled, needs, runtime),
+            _expression_values(
+                event,
+                workflow,
+                job,
+                step,
+                prior,
+                cancelled,
+                needs,
+                runtime,
+                matrix=matrix,
+                strategy=strategy,
+            ),
             prior,
             cancelled,
         )
@@ -1380,6 +1511,8 @@ def _consider_step(
             runtime,
             commands,
             job_id,
+            matrix=matrix,
+            strategy=strategy,
         )
     return _run_step(
         docker,
@@ -1443,6 +1576,8 @@ def _run_composite(
     runtime,
     commands,
     job_id,
+    matrix=None,
+    strategy=None,
 ):
     """Run the inlined composite steps as one workflow step.
 
@@ -1454,7 +1589,16 @@ def _run_composite(
         _setup("plan is not accepted")
     try:
         caller_values = _expression_values(
-            event, workflow, job, step, prior, cancelled, needs, runtime
+            event,
+            workflow,
+            job,
+            step,
+            prior,
+            cancelled,
+            needs,
+            runtime,
+            matrix=matrix,
+            strategy=strategy,
         )
         resolved = {}
         for key, raw in step.get("with", {}).items():
@@ -1507,6 +1651,8 @@ def _run_composite(
             inputs=inputs,
             action_path=action_path,
             output_map=local_outputs,
+            matrix=matrix,
+            strategy=strategy,
         )
         try:
             evaluated_env = {}
@@ -1533,6 +1679,8 @@ def _run_composite(
             inputs=inputs,
             action_path=action_path,
             output_map=local_outputs,
+            matrix=matrix,
+            strategy=strategy,
         )
         try:
             enabled = step_is_enabled(inner.get("if"), if_values, inner_prior, cancelled)
@@ -1598,6 +1746,8 @@ def _run_composite(
         inputs,
         action_path,
         local_outputs,
+        matrix=matrix,
+        strategy=strategy,
     )
     calling_id = step.get("id")
     if isinstance(calling_id, str) and calling_id:
@@ -1630,6 +1780,8 @@ def _action_outputs(
     inputs,
     action_path,
     local_outputs,
+    matrix=None,
+    strategy=None,
 ):
     values = _expression_values(
         event,
@@ -1643,6 +1795,8 @@ def _action_outputs(
         inputs=inputs,
         action_path=action_path,
         output_map=local_outputs,
+        matrix=matrix,
+        strategy=strategy,
     )
     produced = {}
     outputs = step.get("outputs")

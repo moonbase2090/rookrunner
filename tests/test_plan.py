@@ -65,7 +65,8 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 5)
+        self.assertEqual(plan["capability_version"], 6)
+        self.assertIsNone(plan["job"]["strategy"])
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["needs"], [])
         self.assertEqual(plan["job"]["outputs"], {})
@@ -302,12 +303,11 @@ jobs:
       - needs: other
         run: echo hi
 """,
-            "jobs.test.strategy": """\
+            "jobs.test.strategy.fast": """\
 jobs:
   test:
     strategy:
-      matrix:
-        py: ['3.11']
+      fast: true
     steps:
       - run: echo hi
 """,
@@ -712,7 +712,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 5)
+            self.assertEqual(first["plan"]["capability_version"], 6)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -1027,6 +1027,259 @@ runs:
                 plan_snapshot(directory, "test")
             self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
             self.assertIn("not a regular file", str(raised.exception))
+
+
+class MatrixTests(unittest.TestCase):
+    def plan(self, workflow, job_id="build"):
+        return plan_workflow(workflow.encode(), job_id)["plan"]
+
+    def test_include_matches_the_documented_combinations(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        fruit: [apple, pear]
+        animal: [cat, dog]
+        include:
+          - color: green
+          - color: pink
+            animal: cat
+          - fruit: apple
+            shape: circle
+          - fruit: banana
+          - fruit: banana
+            animal: cat
+    steps:
+      - run: echo hi
+"""
+        combinations = self.plan(workflow)["job"]["strategy"]["combinations"]
+        self.assertEqual(
+            combinations,
+            [
+                {"fruit": "apple", "animal": "cat", "color": "pink", "shape": "circle"},
+                {"fruit": "apple", "animal": "dog", "color": "green", "shape": "circle"},
+                {"fruit": "pear", "animal": "cat", "color": "pink"},
+                {"fruit": "pear", "animal": "dog", "color": "green"},
+                {"fruit": "banana"},
+                {"fruit": "banana", "animal": "cat"},
+            ],
+        )
+        self.assertIs(self.plan(workflow)["job"]["strategy"]["fail_fast"], True)
+        self.assertIsNone(self.plan(workflow)["job"]["strategy"]["max_parallel"])
+
+    def test_exclude_is_a_partial_match_and_runs_before_include(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        version: [12, 14, 16]
+        environment: [staging, production]
+        exclude:
+          - os: macos-latest
+            version: 12
+            environment: production
+          - os: windows-latest
+            version: 16
+        include:
+          - os: windows-latest
+            version: 16
+            environment: restored
+    steps:
+      - run: echo hi
+"""
+        combinations = self.plan(workflow)["job"]["strategy"]["combinations"]
+        self.assertEqual(
+            combinations,
+            [
+                {"os": "macos-latest", "version": 12, "environment": "staging"},
+                {"os": "macos-latest", "version": 14, "environment": "staging"},
+                {"os": "macos-latest", "version": 14, "environment": "production"},
+                {"os": "macos-latest", "version": 16, "environment": "staging"},
+                {"os": "macos-latest", "version": 16, "environment": "production"},
+                {"os": "windows-latest", "version": 12, "environment": "staging"},
+                {"os": "windows-latest", "version": 12, "environment": "production"},
+                {"os": "windows-latest", "version": 14, "environment": "staging"},
+                {"os": "windows-latest", "version": 14, "environment": "production"},
+                {"os": "windows-latest", "version": 16, "environment": "restored"},
+            ],
+        )
+        self.assertIsInstance(combinations[0]["version"], int)
+
+    def test_unknown_exclude_key_removes_nothing(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [a, b]
+        exclude:
+          - missing: a
+    steps:
+      - run: echo hi
+"""
+        combinations = self.plan(workflow)["job"]["strategy"]["combinations"]
+        self.assertEqual(combinations, [{"os": "a"}, {"os": "b"}])
+
+    def test_include_key_matches_axis_case_and_keeps_the_axis_spelling(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux]
+        include:
+          - OS: linux
+            arch: arm
+    steps:
+      - run: echo hi
+"""
+        self.assertEqual(
+            self.plan(workflow)["job"]["strategy"]["combinations"],
+            [{"os": "linux", "arch": "arm"}],
+        )
+
+    def test_duplicate_axis_case_is_invalid(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [a]
+        OS: [b]
+    steps:
+      - run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            self.plan(workflow)
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.build.strategy.matrix.OS")
+
+    def test_fail_fast_and_max_parallel_are_stored_without_a_ceiling(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      max-parallel: 100000
+      matrix:
+        version: [1, 2]
+    steps:
+      - run: echo hi
+"""
+        strategy = self.plan(workflow)["job"]["strategy"]
+        self.assertIs(strategy["fail_fast"], False)
+        self.assertEqual(strategy["max_parallel"], 100000)
+        self.assertEqual(strategy["combinations"], [{"version": 1}, {"version": 2}])
+        rejected = """\
+jobs:
+  build:
+    strategy:
+      max-parallel: 0
+    steps:
+      - run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            self.plan(rejected)
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.build.strategy.max-parallel")
+
+    def test_matrix_expression_and_unknown_strategy_key_are_unsupported(self):
+        cases = {
+            "jobs.build.strategy.matrix.version": """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        version: ${{ github.event.versions }}
+    steps:
+      - run: echo hi
+""",
+            "jobs.build.strategy.fail-fast": """\
+jobs:
+  build:
+    strategy:
+      fail-fast: ${{ true }}
+    steps:
+      - run: echo hi
+""",
+            "on.strategy": """\
+on:
+  strategy: push
+jobs:
+  build:
+    steps:
+      - run: echo hi
+""",
+        }
+        for field, workflow in cases.items():
+            with self.subTest(field=field):
+                with self.assertRaises(PlanError) as raised:
+                    self.plan(workflow)
+                self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+                self.assertEqual(raised.exception.field, field)
+
+    def test_matrix_limit_is_256_jobs(self):
+        def workflow(count):
+            values = ", ".join(str(index) for index in range(count))
+            return f"""\
+jobs:
+  build:
+    strategy:
+      matrix:
+        a: [{values}]
+        b: [{values}]
+    steps:
+      - run: echo hi
+"""
+
+        accepted = self.plan(workflow(16))
+        self.assertEqual(len(accepted["job"]["strategy"]["combinations"]), 256)
+        with self.assertRaises(PlanError) as raised:
+            self.plan(workflow(17))
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.build.strategy.matrix")
+        self.assertIn("256", str(raised.exception))
+        self.assertIn(
+            "https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax",
+            str(raised.exception),
+        )
+
+    def test_empty_axis_keeps_only_include_combinations(self):
+        workflow = """\
+jobs:
+  build:
+    strategy:
+      matrix:
+        version: []
+        include:
+          - version: 9
+    steps:
+      - run: echo hi
+"""
+        self.assertEqual(
+            self.plan(workflow)["job"]["strategy"]["combinations"],
+            [{"version": 9}],
+        )
+
+    def test_forbidden_strategy_key_on_an_unselected_job_still_fails(self):
+        workflow = """\
+jobs:
+  other:
+    strategy:
+      fast: true
+    steps:
+      - run: echo x
+  build:
+    steps:
+      - run: echo y
+"""
+        with self.assertRaises(PlanError) as raised:
+            self.plan(workflow)
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.other.strategy.fast")
 
 
 def write_snapshot(root, workflow, files):

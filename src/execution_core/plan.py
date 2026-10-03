@@ -1,12 +1,13 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 5 records declared fields, including step and job
-`if` text, job output expressions, and local composite actions read from a
-snapshot. It checks that those expressions can be parsed and does not
-evaluate them. A selected job includes the jobs it needs. A dependency that
-is not defined in the workflow is rejected. Anything this slice cannot
-describe is rejected.
+run. Capability version 6 records declared fields, including step and job
+`if` text, job output expressions, local composite actions read from a
+snapshot, and a literal job matrix. It checks that expressions can be parsed
+and does not evaluate them. Matrix `include` and `exclude` are expanded
+here. A matrix value that is itself an expression is rejected. A selected
+job includes the jobs it needs. A dependency that is not defined in the
+workflow is rejected. Anything this slice cannot describe is rejected.
 """
 
 import hashlib
@@ -22,7 +23,7 @@ from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 from .expr import ExprError, check_job_if, check_job_output, check_step_if
 from .protocol import canonical
 
-CAPABILITY_VERSION = 5
+CAPABILITY_VERSION = 6
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -57,11 +58,13 @@ SCALAR_TAGS = {
     "tag:yaml.org,2002:null",
 }
 # These names change execution or hide work. Reject them wherever they appear.
-# `strategy` and `matrix` stay unsupported. GitHub's job matrix limit is 256
-# jobs per workflow run, on GitHub-hosted and self-hosted runners.
+# `strategy` is accepted only on a job. `matrix` is accepted only inside that
+# strategy. A matrix generates at most 256 jobs per workflow run, on
+# GitHub-hosted and self-hosted runners.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 # https://docs.github.com/en/actions/reference/limits
+MAX_MATRIX_JOBS = 256
 FORBIDDEN = {
-    "strategy",
     "matrix",
     "secrets",
     "services",
@@ -80,7 +83,9 @@ JOB_KEYS = {
     "defaults",
     "env",
     "timeout-minutes",
+    "strategy",
 }
+STRATEGY_KEYS = {"fail-fast", "max-parallel", "matrix"}
 STEP_KEYS = {
     "id",
     "name",
@@ -169,6 +174,122 @@ def _whole_expression(text):
     return stripped.startswith("${{") and stripped.endswith("}}") and "${{" not in stripped[3:-2]
 
 
+def _matrix_limit(path):
+    raise PlanError(
+        "CAPABILITY_UNSUPPORTED",
+        f"{path}: a matrix will generate a maximum of 256 jobs per workflow run "
+        f"({GITHUB_WORKFLOW_SYNTAX})",
+        path,
+    )
+
+
+_MISSING = object()
+
+
+def _lookup(mapping, name):
+    folded = name.casefold()
+    for key, value in mapping.items():
+        if key.casefold() == folded:
+            return value
+    return _MISSING
+
+
+def _product(axes):
+    """Yield combinations. The last axis changes fastest.
+
+    The workflow syntax example creates `{version: 10, os: ubuntu-latest}`
+    before `{version: 10, os: windows-latest}` when `version` is declared
+    first.
+    https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow
+    """
+
+    if not axes:
+        return
+    lengths = [len(values) for _name, values in axes]
+    if any(length == 0 for length in lengths):
+        return
+    indexes = [0] * len(axes)
+    while True:
+        yield {axes[pos][0]: axes[pos][1][indexes[pos]] for pos in range(len(axes))}
+        pos = len(axes) - 1
+        while pos >= 0:
+            indexes[pos] += 1
+            if indexes[pos] < lengths[pos]:
+                break
+            indexes[pos] = 0
+            pos -= 1
+        else:
+            return
+
+
+def _excluded(combo, rules):
+    """True when any exclude object matches. A partial match is enough.
+
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+    """
+
+    for rule in rules:
+        if all(_lookup(combo, key) == value for key, value in rule.items()):
+            return True
+    return False
+
+
+def _is_original(key, original_names):
+    folded = key.casefold()
+    return any(name.casefold() == folded for name in original_names)
+
+
+def _can_merge(combo, extra, original_names):
+    for key, value in extra.items():
+        if _is_original(key, original_names) and _lookup(combo, key) != value:
+            return False
+    return True
+
+
+def _merge_extra(combo, extra, original_names):
+    for key, value in extra.items():
+        if _is_original(key, original_names):
+            continue
+        folded = key.casefold()
+        for existing in combo:
+            if existing.casefold() == folded:
+                combo[existing] = value
+                break
+        else:
+            combo[key] = value
+
+
+def _expand_matrix(axes, excludes, includes, path):
+    """Apply exclude, then include, to the cartesian product.
+
+    Include merges only into combinations from that product. A combination
+    created by an earlier include is not a merge target. Original axis values
+    are not overwritten. Added values can be overwritten.
+    https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+    https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow
+    """
+
+    original_names = [name for name, _values in axes]
+    originals = []
+    for combo in _product(axes):
+        if _excluded(combo, excludes):
+            continue
+        originals.append(combo)
+        if len(originals) > MAX_MATRIX_JOBS:
+            _matrix_limit(path)
+    created = []
+    for extra in includes:
+        matched = [combo for combo in originals if _can_merge(combo, extra, original_names)]
+        if matched:
+            for combo in matched:
+                _merge_extra(combo, extra, original_names)
+            continue
+        created.append(dict(extra))
+        if len(originals) + len(created) > MAX_MATRIX_JOBS:
+            _matrix_limit(path)
+    return originals + created
+
+
 class _Planner:
     def __init__(self, action_root=None):
         self.seen = set()
@@ -235,7 +356,7 @@ class _Planner:
             _invalid(f"{field or 'workflow'}: YAML aliases are not accepted", field or None)
         self.seen.add(identity)
 
-    def _mapping(self, node, field, *, allow_uses=False, forbid=True):
+    def _mapping(self, node, field, *, allow_uses=False, allow_strategy=False, forbid=True):
         self._enter(node, field)
         if not isinstance(node, MappingNode) or node.tag != "tag:yaml.org,2002:map":
             _invalid(f"{field or 'workflow'} must be a mapping", field or None)
@@ -249,6 +370,8 @@ class _Planner:
             if key in items:
                 _invalid(f"duplicate YAML key {key!r} at {path}", path)
             if key == "uses" and not allow_uses:
+                _unsupported(path)
+            if forbid and key == "strategy" and not allow_strategy:
                 _unsupported(path)
             if forbid and key in FORBIDDEN:
                 _unsupported(path)
@@ -425,7 +548,7 @@ class _Planner:
     def _job(self, jobs, job_id):
         job_node = jobs[job_id][1]
         job_field = f"jobs.{job_id}"
-        job_body = self._mapping(job_node, job_field)
+        job_body = self._mapping(job_node, job_field, allow_strategy=True)
         self._allow(job_body, job_field, JOB_KEYS)
         recorded = {
             "id": job_id,
@@ -437,12 +560,121 @@ class _Planner:
             "env": self._env(job_body, job_field),
             "outputs": self._outputs(job_body, job_field),
             "timeout_minutes": self._timeout_minutes(job_body, job_field),
+            "strategy": self._strategy(job_body, job_field),
             "steps": self._steps(job_body, job_field),
         }
         condition = self._if_text(job_body, job_field, check_job_if)
         if condition is not None:
             recorded["if"] = condition
         return recorded
+
+    def _strategy(self, items, field):
+        if "strategy" not in items:
+            return None
+        path = _join(field, "strategy")
+        body = self._mapping(items["strategy"][1], path, forbid=False)
+        self._allow(body, path, STRATEGY_KEYS)
+        fail_fast = True
+        if "fail-fast" in body:
+            fail_fast = self._bool_value(body["fail-fast"][1], _join(path, "fail-fast"))
+        max_parallel = None
+        if "max-parallel" in body:
+            max_parallel = self._max_parallel(body["max-parallel"][1], _join(path, "max-parallel"))
+        combinations = None
+        if "matrix" in body:
+            combinations = self._matrix(body["matrix"][1], _join(path, "matrix"))
+        return {
+            "fail_fast": fail_fast,
+            "max_parallel": max_parallel,
+            "combinations": combinations,
+        }
+
+    def _bool_value(self, node, path):
+        self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            _unsupported(path)
+        if not isinstance(node, ScalarNode) or node.tag != BOOL_TAG:
+            _invalid(f"{path} must be a boolean", path)
+        try:
+            value = self.constructor.construct_object(node, deep=False)
+        except yaml.YAMLError:
+            _invalid(f"{path} must be a boolean", path)
+        if type(value) is not bool:
+            _invalid(f"{path} must be a boolean", path)
+        return value
+
+    def _max_parallel(self, node, path):
+        """Record the declared concurrency. GitHub publishes no numeric ceiling."""
+
+        self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            _unsupported(path)
+        if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:int":
+            _invalid(f"{path} must be a positive integer", path)
+        try:
+            value = self.constructor.construct_object(node, deep=False)
+        except yaml.YAMLError:
+            _invalid(f"{path} must be a positive integer", path)
+        if type(value) is not int or value < 1:
+            _invalid(f"{path} must be a positive integer", path)
+        return value
+
+    def _matrix(self, node, path):
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            self._enter(node, path)
+            _unsupported(path)
+        if not isinstance(node, MappingNode):
+            self._enter(node, path)
+            _invalid(f"{path} must be a mapping", path)
+        body = self._mapping(node, path, forbid=False)
+        axes = []
+        seen = []
+        includes = []
+        excludes = []
+        for key, (_, value) in body.items():
+            key_field = _join(path, key)
+            if key.casefold() in {"include", "exclude"} and key not in {"include", "exclude"}:
+                _invalid(f"{key_field}: matrix variable is not accepted", key_field)
+            if key == "include":
+                includes = self._matrix_objects(value, key_field)
+                continue
+            if key == "exclude":
+                excludes = self._matrix_objects(value, key_field)
+                continue
+            if any(key.casefold() == prior for prior in seen):
+                _invalid(f"{key_field}: duplicate matrix variable", key_field)
+            seen.append(key.casefold())
+            axes.append((key, self._axis(value, key_field)))
+        return _expand_matrix(axes, excludes, includes, path)
+
+    def _axis(self, node, path):
+        self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            _unsupported(path)
+        if not isinstance(node, SequenceNode) or node.tag != "tag:yaml.org,2002:seq":
+            _invalid(f"{path} must be a sequence", path)
+        values = []
+        for index, child in enumerate(node.value):
+            values.append(self._data(child, _join(path, index), 1))
+        return values
+
+    def _matrix_objects(self, node, path):
+        self._enter(node, path)
+        if not isinstance(node, SequenceNode) or node.tag != "tag:yaml.org,2002:seq":
+            _invalid(f"{path} must be a sequence", path)
+        objects = []
+        for index, child in enumerate(node.value):
+            item_field = _join(path, index)
+            if not isinstance(child, MappingNode):
+                _invalid(f"{item_field} must be a mapping", item_field)
+            body = self._mapping(child, item_field, forbid=False)
+            recorded = {}
+            for key, (_, value) in body.items():
+                if any(key.casefold() == existing.casefold() for existing in recorded):
+                    _invalid(f"{item_field}: duplicate matrix variable", item_field)
+                recorded[key] = self._data(value, _join(item_field, key), 1)
+            objects.append(recorded)
+        return objects
 
     def _needs(self, items, field, job_id):
         if "needs" not in items:
