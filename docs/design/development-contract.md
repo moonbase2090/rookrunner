@@ -60,7 +60,14 @@ then stores a queued run. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
-the client does not stop the container. Unsupported workflow
+the client does not stop the container. The job container is attached to
+Docker network `bridge` unless the worker was started with `--network none`.
+`bridge` gives the job outbound access to the public internet. GitHub-hosted
+runners have that access by default
+(https://docs.github.com/en/actions/concepts/runners/private-networking).
+`none` is the documented way to turn it off. Other network names are
+rejected. The Docker socket and host credential directories are not mounted.
+This is not a private-network or egress-policy implementation. Unsupported workflow
 fields and invalid YAML create no run. A workflow file larger than 500 KB
 creates no run; that rejection is a capability error. The job time bound is
 `timeout-minutes`, default 360 minutes, and a value above 5 days is a

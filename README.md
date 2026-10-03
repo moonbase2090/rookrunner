@@ -42,6 +42,12 @@ export PYTHONPATH="$PWD/src"
 python3 -m execution_core --state "$PWD/.execution-state" worker --repository "$PWD"
 ```
 
+Job containers use Docker network `bridge` by default, so a job can reach the
+public internet. GitHub-hosted runners have that access by default
+(https://docs.github.com/en/actions/concepts/runners/private-networking).
+Start the worker with `--network none` to turn it off. The Docker socket is
+not mounted.
+
 In another terminal, from the same checkout:
 
 ```bash

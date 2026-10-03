@@ -132,6 +132,17 @@ def main():
             "https://docs.github.com/en/actions/reference/limits)"
         ),
     )
+    worker.add_argument(
+        "--network",
+        choices=["bridge", "none"],
+        default="bridge",
+        help=(
+            "Docker network for job containers (default bridge). "
+            "GitHub-hosted runners have public internet access by default "
+            "(https://docs.github.com/en/actions/concepts/runners/private-networking). "
+            "none turns that access off."
+        ),
+    )
     commands.add_parser("describe")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
@@ -178,7 +189,7 @@ def main():
             print(canonical({"snapshot": result}))
             return
         if args.command == "worker":
-            serve(args.repository, args.state, args.disk_budget_bytes)
+            serve(args.repository, args.state, args.disk_budget_bytes, args.network)
             return
         if args.command == "describe":
             method, params = "worker.describe", {}

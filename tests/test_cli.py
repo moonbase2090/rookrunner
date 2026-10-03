@@ -10,6 +10,7 @@ import unittest
 
 from execution_core.cli import call
 from execution_core.protocol import canonical
+from execution_core.worker import Worker
 from schema_support import validate_response
 
 
@@ -104,6 +105,30 @@ class CliUsageTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("--event must be one JSON value", result.stderr)
+
+    def test_worker_network_none_is_recognized(self):
+        result = run_cli(
+            "unused-state", "worker", "--repository", "unused-repo", "--network", "none"
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("unrecognized arguments", result.stderr)
+
+    def test_worker_network_host_exits_2(self):
+        result = run_cli(
+            "unused-state", "worker", "--repository", "unused-repo", "--network", "host"
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
+
+    def test_worker_records_bridge_or_none(self):
+        with tempfile.TemporaryDirectory(prefix="cli-network-") as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            state = Path(directory) / "state"
+            self.assertEqual(Worker(repo, state).network, "bridge")
+            self.assertEqual(Worker(repo, state, network="none").network, "none")
+        with self.assertRaises(ValueError):
+            Worker(".", ".", network="host")
 
 
 class CliWorkerTests(unittest.TestCase):

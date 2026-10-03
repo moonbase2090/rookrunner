@@ -34,8 +34,14 @@ output, and its example writes that value to `GITHUB_OUTPUT` and reads it
 back. This subset follows the example: the output is kept, and logs of that
 value in the same job are masked. A later job does not inherit the mask.
 
-The container is created with network `none`. The Docker socket and host
-credential directories are not mounted. Step `if` and job `if` are evaluated.
+The container is created on Docker network `bridge` by default, so the job
+can reach the public internet. GitHub-hosted runners have that access by
+default
+(https://docs.github.com/en/actions/concepts/runners/private-networking).
+Pass network `none` to turn it off. Other network names are rejected. The
+Docker socket and host credential directories are not mounted. This is not
+a private-network or egress-policy implementation. Step `if` and job `if`
+are evaluated.
 Expressions in workflow `run`, workflow and step `env`, and `name` stay
 literal text. `github.event` is the caller event. Other `github` properties
 are not invented. `runner.os` is `Linux` because this subset runs in a Linux
@@ -112,6 +118,12 @@ _FILE_MODES = {"100644": 0o644, "100755": 0o755}
 _OUTPUT_JOB_BYTES = 1024 * 1024
 _OUTPUT_RUN_BYTES = 50 * 1024 * 1024
 _INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
+# GitHub-hosted runners have access to the public internet by default.
+# https://docs.github.com/en/actions/concepts/runners/private-networking
+# `bridge` is Docker's default outbound network. `none` turns that off.
+# Other names, including `host`, are rejected.
+DEFAULT_NETWORK = "bridge"
+_NETWORKS = {DEFAULT_NETWORK, "none"}
 
 
 class _JobRuntime:
@@ -569,13 +581,15 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     return reference, digest, workflow, jobs, encoded, workspace
 
 
-def _create_args(name, workspace, private, commands, reference):
+def _create_args(name, workspace, private, commands, reference, network):
+    if network not in _NETWORKS:
+        _setup("container network is not accepted")
     return [
         "create",
         "--name",
         name,
         "--network",
-        "none",
+        network,
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "--workdir",
@@ -838,6 +852,7 @@ def run_job(
     docker="docker",
     step_timeout=None,
     owner=None,
+    network=DEFAULT_NETWORK,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -856,9 +871,11 @@ def run_job(
     a dependent job unless that job's `if` is true. A step timeout stops the
     container and does not start later jobs. `owner` reserves the name before
     create. If that owner is already cancelled, this does not start the
-    container.
+    container. `network` is `bridge` unless the caller passes `none`.
     """
 
+    if network not in _NETWORKS:
+        _setup("container network is not accepted")
     started = time.monotonic()
     reference, digest, workflow, jobs, event_bytes, workspace = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
@@ -905,7 +922,7 @@ def run_job(
             _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(
             docker_bin,
-            _create_args(name, workspace, private, commands, reference),
+            _create_args(name, workspace, private, commands, reference, network),
             60,
             deadline,
         )

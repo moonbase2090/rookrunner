@@ -120,7 +120,12 @@ Implemented:
   and planning. The worker records an attempt, then executes it with `run_job`
   in one caller-pinned container. Success is `succeeded` and exit code 0. A
   nonzero step is `failed`. A setup failure is `failed`, with a null exit
-  code and a structured error.
+  code and a structured error. The job container uses Docker network `bridge`
+  by default, so it can reach the public internet. GitHub-hosted runners have
+  that access by default
+  (https://docs.github.com/en/actions/concepts/runners/private-networking).
+  `worker --network none` turns it off. The Docker socket and host credentials
+  are not mounted.
 - A finished workflow attempt publishes a manifest of the regular files it
   wrote under its workspace. `run.artifacts` and `artifact.read` page that
   manifest and its bytes. A workflow run with no such files returns an empty
