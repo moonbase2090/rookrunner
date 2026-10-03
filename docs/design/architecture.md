@@ -54,7 +54,7 @@ The accepted run refers to the snapshot, never to the mutable original checkout.
 
 Preserve repository metadata needed by supported workflows without copying credentials from local Git configuration.
 Validate checkout actions and Git-dependent workflows against this capture strategy before declaring them supported.
-The allow-list is [sanitized Git metadata](git-metadata.md) and is copied to `git.json`. An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([checkout](checkout.md)). Other checkout actions stay rejected. Copying the trees and blobs of the captured base commit is designed ([git objects](git-objects.md)) and is not implemented.
+The allow-list is [sanitized Git metadata](git-metadata.md) and is copied to `git.json`. An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([checkout](checkout.md)). Other checkout actions stay rejected. The trees and blobs of the captured base commit are stored beside the manifest ([git objects](git-objects.md)). Commit objects stay excluded.
 
 ## Durable ownership
 

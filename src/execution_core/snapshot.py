@@ -1,11 +1,14 @@
 """Preparatory Git working-file capture for M2; never executes workflows.
 
-Snapshots contain plain files and a canonical manifest, never Git configuration,
-credentials, hooks, or objects. A sibling git.json records only the sanitized
-allow-list. The caller must use a private, trusted state root.
+Snapshots contain plain files, a canonical manifest, and the loose trees and
+blobs of the captured base commit. They never contain Git configuration,
+credentials, hooks, commit objects, or a repository. A sibling git.json
+records only the sanitized allow-list. The caller must use a private,
+trusted state root.
 """
 
 from contextlib import contextmanager
+import errno
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -14,6 +17,7 @@ import stat
 import subprocess
 import tempfile
 import uuid
+import zlib
 
 from .protocol import canonical
 
@@ -70,6 +74,142 @@ def _write_private(path, payload):
         output.write(payload)
         output.flush()
         os.fsync(output.fileno())
+
+
+def _loose_object(kind, payload, algorithm, oid):
+    raw = f"{kind} {len(payload)}\0".encode("ascii") + payload
+    if hashlib.new(algorithm, raw).hexdigest() != oid:
+        reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+    return zlib.compress(raw)
+
+
+def _one_oid(raw, algorithm):
+    if raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
+        reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+    try:
+        text = raw[:-1].decode("ascii")
+    except UnicodeError:
+        reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+    _check_base(text, algorithm)
+    return text
+
+
+def _classify_descriptor(fd):
+    info = os.fstat(fd)
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if stat.S_ISDIR(info.st_mode):
+        return "directory"
+    if not stat.S_ISREG(info.st_mode):
+        return "other"
+    if info.st_size == 0:
+        return "empty"
+    return "nonempty"
+
+
+def _read_regular(fd):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+        return None
+    os.lseek(fd, 0, os.SEEK_SET)
+    data = os.read(fd, info.st_size)
+    if len(data) != info.st_size:
+        return None
+    return data
+
+
+def _open_at(parent, name, *, directory):
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    if directory:
+        flags |= os.O_DIRECTORY
+    try:
+        return os.open(name, flags, dir_fd=parent), None
+    except FileNotFoundError:
+        return None, "absent"
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, "symlink"
+        if exc.errno in (errno.ENOTDIR, errno.EISDIR):
+            return None, "other"
+        raise
+
+
+def _walk(start, parts, *, final_directory):
+    fd = os.dup(start)
+    try:
+        for index, part in enumerate(parts):
+            last = index + 1 == len(parts)
+            opened, kind = _open_at(fd, part, directory=final_directory if last else True)
+            if opened is None:
+                os.close(fd)
+                return None, kind
+            os.close(fd)
+            fd = opened
+        return fd, None
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _directory_from_text(start, text):
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    if text.startswith("/"):
+        root = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            return _walk(root, parts, final_directory=True)
+        finally:
+            os.close(root)
+    return _walk(start, parts, final_directory=True)
+
+
+def _gitdir_text(data):
+    prefix = b"gitdir: "
+    if not data.startswith(prefix) or data.count(b"\n") != 1 or not data.endswith(b"\n"):
+        return None
+    try:
+        text = data[len(prefix) : -1].decode("utf-8")
+    except UnicodeError:
+        return None
+    if not text or "\0" in text:
+        return None
+    return text
+
+
+def _alternates_in(fd):
+    found, kind = _walk(fd, ("objects", "info", "alternates"), final_directory=False)
+    if found is None:
+        return kind
+    try:
+        return _classify_descriptor(found)
+    finally:
+        os.close(found)
+
+
+def _common_alternates(git_fd):
+    opened, kind = _open_at(git_fd, "commondir", directory=False)
+    if opened is None:
+        if kind == "absent":
+            return _alternates_in(git_fd)
+        return kind
+    try:
+        data = _read_regular(opened)
+    finally:
+        os.close(opened)
+    if data is None or data.count(b"\n") != 1 or not data.endswith(b"\n"):
+        return "other"
+    try:
+        text = data[:-1].decode("utf-8")
+    except UnicodeError:
+        return "other"
+    if not text or "\0" in text:
+        return "other"
+    common, kind = _directory_from_text(git_fd, text)
+    if common is None:
+        return kind
+    try:
+        return _alternates_in(common)
+    finally:
+        os.close(common)
 
 
 def relative_path(value):
@@ -207,9 +347,22 @@ class SourceCapture:
             reject("SOURCE_LIMIT", "tracked file count exceeds capture limit")
         head = self.git("rev-parse", "--verify", "HEAD", allow_failure=True)
         base = head.stdout.decode("ascii").strip() if head.returncode == 0 else None
+        algorithm = self.git("rev-parse", "--show-object-format").stdout.decode("ascii").strip()
+        if algorithm not in ("sha1", "sha256"):
+            reject("CAPABILITY_UNSUPPORTED", "unsupported Git object format")
         tree = {}
+        root_tree = None
+        object_ids = None
         if base:
-            for row in self.git("ls-tree", "-r", "-z", base).stdout.split(b"\0"):
+            _check_base(base, algorithm)
+            root_tree = _one_oid(
+                self.git("rev-parse", "--verify", f"{base}^{{tree}}").stdout, algorithm
+            )
+            # -t lists intermediate trees. The root id comes from rev-parse.
+            # https://git-scm.com/docs/git-ls-tree
+            excluded_in_tree = False
+            oids = [root_tree]
+            for row in self.git("ls-tree", "-r", "-t", "-z", base).stdout.split(b"\0"):
                 if not row:
                     continue
                 meta, encoded = row.split(b"\t", 1)
@@ -217,12 +370,117 @@ class SourceCapture:
                 path = relative_path(encoded.decode("utf-8"))
                 if kind == "commit":
                     reject("CAPABILITY_UNSUPPORTED", "submodule history at HEAD is not supported")
-                if not self.excluded(path):
+                if kind not in ("blob", "tree"):
+                    reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+                _check_base(oid, algorithm)
+                if self.excluded(path):
+                    excluded_in_tree = True
+                elif kind == "blob":
                     tree[path] = [mode, oid]
-        algorithm = self.git("rev-parse", "--show-object-format").stdout.decode("ascii").strip()
-        if algorithm not in ("sha1", "sha256"):
-            reject("CAPABILITY_UNSUPPORTED", "unsupported Git object format")
-        return index, tracked, base, tree, algorithm, self.symbolic_head()
+                oids.append(oid)
+            if not excluded_in_tree:
+                object_ids = tuple(sorted(set(oids)))
+        return (
+            index,
+            tracked,
+            base,
+            tree,
+            algorithm,
+            self.symbolic_head(),
+            root_tree,
+            object_ids,
+            self._alternates(),
+        )
+
+    def _alternates(self):
+        """Classify the object alternates file without following a symlink.
+
+        A linked worktree stores objects in the common Git directory. The
+        file is not read and is not copied.
+        https://git-scm.com/docs/git
+        """
+
+        root = os.open(self.repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            git_fd, kind = _open_at(root, ".git", directory=False)
+            if git_fd is None:
+                return kind
+            try:
+                info = os.fstat(git_fd)
+                if stat.S_ISDIR(info.st_mode):
+                    return _alternates_in(git_fd)
+                if stat.S_ISLNK(info.st_mode):
+                    return "symlink"
+                if not stat.S_ISREG(info.st_mode):
+                    return "other"
+                data = _read_regular(git_fd)
+                if data is None:
+                    return "other"
+                gitdir = _gitdir_text(data)
+                if gitdir is None:
+                    return "other"
+                admin, kind = _directory_from_text(root, gitdir)
+                if admin is None:
+                    return kind
+                try:
+                    return _common_alternates(admin)
+                finally:
+                    os.close(admin)
+            finally:
+                os.close(git_fd)
+        finally:
+            os.close(root)
+
+    def _objects(self, oids, algorithm):
+        """Read tree and blob payloads. A missing object is not fetched.
+
+        https://git-scm.com/docs/git-cat-file
+        """
+
+        requested = list(oids)
+        result = self.git(
+            "cat-file",
+            "--batch",
+            input="".join(f"{oid}\n" for oid in requested).encode("ascii"),
+        )
+        data = result.stdout
+        found = {}
+        offset = 0
+        for oid in requested:
+            newline = data.find(b"\n", offset)
+            if newline < 0:
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            header = data[offset:newline]
+            offset = newline + 1
+            parts = header.split(b" ")
+            if len(parts) == 2 and parts[1] == b"missing":
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            if len(parts) != 3:
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            try:
+                reported = parts[0].decode("ascii")
+            except UnicodeError:
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            if reported != oid or parts[1] not in (b"blob", b"tree"):
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            try:
+                size = int(parts[2])
+            except ValueError:
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            if (
+                size < 0
+                or offset + size >= len(data)
+                or data[offset + size : offset + size + 1] != b"\n"
+            ):
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            if parts[1] == b"blob" and size > MAX_FILE_BYTES:
+                reject("SOURCE_LIMIT", "blob exceeds capture byte limit")
+            payload = data[offset : offset + size]
+            offset += size + 1
+            found[oid] = _loose_object(parts[1].decode("ascii"), payload, algorithm, oid)
+        if offset != len(data):
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        return found
 
     def symbolic_head(self):
         """Return a local branch name, or None when the name is not copied.
@@ -419,7 +677,17 @@ class SourceCapture:
         staging = Path(tempfile.mkdtemp(prefix=".preparing-", dir=snapshots))
         try:
             initial = self.inventory()
-            _, tracked, base, tree, algorithm, head_name = initial
+            (
+                _,
+                tracked,
+                base,
+                tree,
+                algorithm,
+                head_name,
+                _,
+                object_ids,
+                alternates,
+            ) = initial
             if any(self.excluded(path) for path in [workflow, *include]):
                 reject(
                     "SOURCE_EXCLUDED", "workflow or explicit input is excluded by capture policy"
@@ -441,6 +709,10 @@ class SourceCapture:
                     "SOURCE_UNSTABLE",
                     "source or Git selection changed during capture; retry explicitly",
                 )
+            if alternates == "nonempty":
+                reject("CAPABILITY_UNSUPPORTED", "object alternates are not supported")
+            if alternates not in ("absent", "empty"):
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
             entries, _, objects, deleted = first
             deleted = sorted(set(deleted) | (set(tree) - set(objects)))
             selected = next((e for e in entries if e["path"] == workflow), None)
@@ -474,6 +746,15 @@ class SourceCapture:
             }
             git_encoded = canonical(metadata).encode()
             _write_private(staging / "git.json", git_encoded)
+            objects_canonical = None
+            if object_ids is not None:
+                objects_root = staging / "objects"
+                objects_root.mkdir(mode=0o700)
+                for oid, payload in self._objects(object_ids, algorithm).items():
+                    bucket = objects_root / oid[:2]
+                    bucket.mkdir(mode=0o700, exist_ok=True)
+                    _write_private(bucket / oid[2:], payload)
+                objects_canonical = canonical(list(object_ids)).encode()
             for directory, _, _ in os.walk(staging, topdown=False, followlinks=False):
                 sync_directory(directory)
             snapshot_id = str(uuid.uuid4())
@@ -488,6 +769,11 @@ class SourceCapture:
                 "file_count": len(entries),
                 "total_bytes": sum(e["size"] for e in entries),
                 "git_metadata_digest": hashlib.sha256(git_encoded).hexdigest(),
+                "git_objects_digest": (
+                    None
+                    if objects_canonical is None
+                    else hashlib.sha256(objects_canonical).hexdigest()
+                ),
             }
         except CaptureError:
             raise

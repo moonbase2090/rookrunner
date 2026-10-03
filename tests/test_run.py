@@ -860,7 +860,7 @@ jobs:
         if: github.sha == '' && github.token == ''
         run: |
           cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
-          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ]; then exit 2; fi
+          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
 """
         result = self._owned_checkout(omitted, "omitted")
         self.assertEqual(
@@ -882,7 +882,7 @@ jobs:
         if: github.sha == '' && github.token == ''
         run: |
           cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
-          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ]; then exit 2; fi
+          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
 """
         flagged_result = self._owned_checkout(flagged, "flagged")
         self.assertEqual(

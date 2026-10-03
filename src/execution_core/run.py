@@ -109,7 +109,8 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-synt
 `uses: actions/checkout@v4` is an owned checkout of the files already in
 the workspace. The plan stores `checkout` as `captured`. The step does not
 start a process, does not modify the workspace, does not create `.git`,
-does not read `git.json`, and does not contact a network. It succeeds with
+does not read `git.json` or the object store, and does not contact a
+network. It succeeds with
 exit code 0 and publishes no outputs. `clean: false` and
 `persist-credentials: false` are the only accepted `with` values. Omitting
 either key does not mean the upstream default of true

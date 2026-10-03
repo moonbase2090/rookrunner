@@ -102,6 +102,16 @@ class VerifyTests(unittest.TestCase):
         }
         git_path.write_bytes(canonical(metadata).encode())
         verify_snapshot(self.snapshot, self.digest)
+        objects = self.snapshot / "objects"
+        self.assertTrue(objects.is_dir())
+        verify_snapshot(self.snapshot, self.digest)
+        for path in sorted(objects.rglob("*"), reverse=True):
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink()
+        objects.rmdir()
+        verify_snapshot(self.snapshot, self.digest)
         with self.assertRaises(VerifyError) as raised:
             read_git_metadata(self.snapshot)
         self.assertEqual(raised.exception.kind, "SNAPSHOT_INVALID")
