@@ -41,9 +41,16 @@ repository lock. The repository must exist but need not yet be a Git checkout.
 | `run.get` | `run_id` | none |
 | `run.list` | none | `cursor`, `limit`, `state` |
 | `run.logs` | `run_id` | `cursor`, `limit` |
+| `run.artifacts` | `run_id` | `cursor`, `limit` |
+| `artifact.read` | `artifact_id` | `offset`, `limit` |
 | `run.cancel` | `version: 0`, `run_id` | none |
 
-`run.artifacts` and `artifact.read` return `CAPABILITY_UNSUPPORTED`.
+`run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
+On a workflow run it returns a page of artifact entries and `next_cursor`.
+An entry has `id`, workspace-relative `path`, `size`, and SHA-256 `digest`.
+A workflow run that wrote no files returns an empty list, not a capability
+error. `artifact.read` returns base64 bytes, `next_offset`, and
+`end_of_stream`. A path that leaves the attempt workspace is rejected.
 Unknown methods return `METHOD_NOT_FOUND`. On version 0, workflow, command,
 secret, and source selection parameters are unsupported and rejected.
 
@@ -90,7 +97,16 @@ limit is 256 jobs per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
 `run.logs` pages the executed steps' stdout and stderr with the same 1–65536
 byte pages as development fixtures. `end_of_stream` is true only after the
-run is terminal and those bytes are consumed.
+run is terminal and those bytes are consumed. A finished workflow attempt
+publishes the regular files it wrote under its workspace. Unchanged snapshot
+files are omitted. Symlinks are not followed. `run.artifacts` pages that
+manifest with the existing list page of 100. `artifact.read` pages bytes with
+the existing 65536-byte log page. GitHub's artifact storage quota depends on
+the plan and the limits page states no per-file or per-job count
+(https://docs.github.com/en/actions/reference/limits). Those bytes stay in
+the attempt workspace under the configured disk budget. This is not an
+upload-artifact zip. The manifest is retained with the workspace until the
+state directory is removed. Pruning is not implemented.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,
@@ -140,9 +156,10 @@ The retry window is therefore the entire lifetime of the retained worker state,
 including across restarts. No tombstone expiry is needed because no run or key
 can be pruned through the API. Deleting the state directory outside the service
 discards its identity and history; it is not a supported retry/retention operation.
-Artifacts and event payloads are unsupported, so no artifact/event retention is
-implied. The captured fixture and logs are SQLite values committed atomically
-with acceptance/completion, not references to mutable checkout files.
+Workflow artifact bytes stay in the attempt workspace for the life of that
+state directory. Event payloads are still unsupported. Development fixtures
+publish no artifacts. The captured fixture and logs are SQLite values committed
+atomically with acceptance/completion, not references to mutable checkout files.
 
 The request limit is 1 MiB including its newline. Queue capacity is 100 queued
 runs, excluding the single active run. Log pages are 1–65536 bytes, default 65536;
