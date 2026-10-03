@@ -14,6 +14,9 @@ workspace identity. A configured disk budget refuses a new submission that
 would exceed it. The default is 10 GB per repository of GitHub Actions cache
 storage (https://docs.github.com/en/actions/reference/limits), stored as
 10 * 1024 * 1024 * 1024 bytes. Active runs and their evidence are kept.
+A finished workflow attempt publishes a manifest of the regular files it
+wrote under its workspace. `run.artifacts` and `artifact.read` page that
+manifest and its bytes.
 The rest of this plan is not.
 
 ## Execution path

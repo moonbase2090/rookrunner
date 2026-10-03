@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-11 are
+roadmap step 1 and the first executable subset. NS-1 through NS-12 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -335,6 +335,23 @@ Acceptance criteria:
   development backend's existing full-disk rollback test still passes.
 
 **NS-12. Publish an artifact manifest for the subset.**
+
+Status: implemented.
+
+When a workflow attempt finishes, the worker lists regular files under that
+attempt workspace whose bytes differ from the captured snapshot. Each entry
+has an id, a workspace-relative path, a size, and a SHA-256 digest.
+`run.artifacts` pages that manifest with the existing list page of 100.
+`artifact.read` pages the file bytes with the existing 65536-byte log page.
+A workflow run that wrote nothing returns an empty manifest. A path that
+leaves the workspace is rejected. Symlinks are not followed. Development
+fixtures still return `CAPABILITY_UNSUPPORTED`. The bytes stay in the attempt
+workspace. GitHub's artifact storage quota depends on the plan (500 MB on
+GitHub Free, 1 GB on GitHub Pro, 500 MB on GitHub Free for organizations,
+2 GB on GitHub Team, and 50 GB on GitHub Enterprise Cloud) and that page
+states no per-file or per-job count
+(https://docs.github.com/en/actions/reference/limits). This worker does not
+add a second quota, does not evict, and does not build an upload-artifact zip.
 
 Acceptance criteria:
 

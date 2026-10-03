@@ -68,12 +68,16 @@ def main():
     submit.add_argument("--exit-code", type=int, default=0)
     submit.add_argument("--delay-ms", type=int, default=0)
     submit.add_argument("--output", default="development fixture completed\n")
-    for name in ("get", "cancel", "logs"):
+    for name in ("get", "cancel", "logs", "artifacts"):
         command = commands.add_parser(name)
         command.add_argument("run_id")
-        if name == "logs":
+        if name in {"logs", "artifacts"}:
             command.add_argument("--cursor")
             command.add_argument("--limit", type=int)
+    artifact_read = commands.add_parser("artifact-read")
+    artifact_read.add_argument("artifact_id")
+    artifact_read.add_argument("--offset", type=int)
+    artifact_read.add_argument("--limit", type=int)
     listing = commands.add_parser("list")
     listing.add_argument("--cursor")
     listing.add_argument("--limit", type=int)
@@ -89,6 +93,12 @@ def main():
             return
         if args.command == "describe":
             method, params = "worker.describe", {}
+        elif args.command == "artifact-read":
+            method = "artifact.read"
+            params = {"artifact_id": args.artifact_id}
+            for name in ("offset", "limit"):
+                if getattr(args, name, None) is not None:
+                    params[name] = getattr(args, name)
         elif args.command == "submit":
             method, params = (
                 "run.submit",

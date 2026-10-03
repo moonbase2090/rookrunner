@@ -67,6 +67,35 @@
     "valid": true
   },
   {
+    "name": "run.artifacts",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "limit": 20
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "artifact.read",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "artifact.read",
+      "params": {
+        "artifact_id": "00000000-0000-4000-8000-000000000004",
+        "offset": 0,
+        "limit": 1024
+      }
+    },
+    "valid": true
+  },
+  {
     "name": "run.cancel",
     "definition": "Request",
     "value": {
@@ -309,6 +338,40 @@
       "cleanup": "confirmed_no_external_resources"
     },
     "valid": false
+  },
+  {
+    "name": "artifacts response",
+    "definition": "run.artifacts.response",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "artifacts": [
+          {
+            "id": "00000000-0000-4000-8000-000000000004",
+            "path": "out/demo.txt",
+            "size": 5,
+            "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        ],
+        "next_cursor": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "artifact read response",
+    "definition": "artifact.read.response",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "data_base64": "aGVsbG8=",
+        "next_offset": 5,
+        "end_of_stream": true
+      }
+    },
+    "valid": true
   },
   {
     "name": "logs response",

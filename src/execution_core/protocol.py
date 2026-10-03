@@ -12,7 +12,16 @@ MAX_OFFSET = 2**63 - 1
 MAX_REQUEST_ID = 2**53 - 1
 MAX_JSON_DEPTH = 64
 TERMINAL = {"succeeded", "failed", "cancelled", "lost"}
-METHODS = ["worker.describe", "run.submit", "run.get", "run.list", "run.logs", "run.cancel"]
+METHODS = [
+    "worker.describe",
+    "run.submit",
+    "run.get",
+    "run.list",
+    "run.logs",
+    "run.artifacts",
+    "artifact.read",
+    "run.cancel",
+]
 ERROR_CODES = {
     "PARSE_ERROR": -32700,
     "INVALID_REQUEST": -32600,

@@ -459,6 +459,92 @@
       ],
       "additionalProperties": false
     },
+    "run.artifacts.request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "const": "run.artifacts"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\ud800-\\udfff]*$",
+              "maxLength": 128
+            },
+            "cursor": {
+              "$ref": "#/$defs/Cursor"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "run_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "artifact.read.request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "const": "artifact.read"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            }
+          },
+          "required": [
+            "artifact_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
     "Request": {
       "oneOf": [
         {
@@ -478,6 +564,12 @@
         },
         {
           "$ref": "#/$defs/run.cancel.request"
+        },
+        {
+          "$ref": "#/$defs/run.artifacts.request"
+        },
+        {
+          "$ref": "#/$defs/artifact.read.request"
         }
       ]
     },
@@ -1052,6 +1144,8 @@
             "run.get",
             "run.list",
             "run.logs",
+            "run.artifacts",
+            "artifact.read",
             "run.cancel"
           ]
         },
@@ -1175,6 +1269,85 @@
       "required": [
         "data_base64",
         "next_cursor",
+        "end_of_stream"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\ud800-\\udfff]*$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "size",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactsResult": {
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/ArtifactEntry"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "artifacts",
+        "next_cursor"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactReadResult": {
+      "type": "object",
+      "properties": {
+        "data_base64": {
+          "type": "string",
+          "maxLength": 87384,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "contentEncoding": "base64"
+        },
+        "next_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_of_stream": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "data_base64",
+        "next_offset",
         "end_of_stream"
       ],
       "additionalProperties": false
@@ -1608,6 +1781,60 @@
         }
       ]
     },
+    "run.artifacts.response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "result": {
+              "$ref": "#/$defs/ArtifactsResult"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
+    "artifact.read.response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "result": {
+              "$ref": "#/$defs/ArtifactReadResult"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
     "Response": {
       "oneOf": [
         {
@@ -1632,6 +1859,12 @@
                 },
                 {
                   "$ref": "#/$defs/LogsResult"
+                },
+                {
+                  "$ref": "#/$defs/ArtifactsResult"
+                },
+                {
+                  "$ref": "#/$defs/ArtifactReadResult"
                 }
               ]
             }

@@ -93,8 +93,9 @@ Implemented:
 
 - A user-owned Unix socket and SQLite state for one bound repository.
 - Protocol version 0 methods: `worker.describe`, `run.submit`, `run.get`,
-  `run.list`, `run.logs`, and `run.cancel`. Submit accepts only an explicit
-  `development` fixture. Fixture text is never executed.
+  `run.list`, `run.logs`, `run.artifacts`, `artifact.read`, and `run.cancel`.
+  Submit accepts only an explicit `development` fixture. Fixture text is never
+  executed.
 - Durable submission keys, bounded queue and log pages, cancellation races,
   and restart behavior that keeps queued fixtures and marks an interrupted
   active fixture `lost`.
@@ -118,8 +119,11 @@ Implemented:
   in one caller-pinned container. Success is `succeeded` and exit code 0. A
   nonzero step is `failed`. A setup failure is `failed`, with a null exit
   code and a structured error.
-- `run.artifacts` is rejected. There is no doctor command, MCP adapter,
-  dashboard, or packaging.
+- A finished workflow attempt publishes a manifest of the regular files it
+  wrote under its workspace. `run.artifacts` and `artifact.read` page that
+  manifest and its bytes. A workflow run with no such files returns an empty
+  manifest. Development fixtures still reject artifact requests. There is no
+  doctor command, MCP adapter, dashboard, or packaging.
 - Push and pull request checks run ruff and the unit test suite.
 
 Validation records live in [M1 completion](validation/m1-completion.md) and
@@ -135,7 +139,7 @@ Milestones are outcome gates, not dates. Detail and exit evidence are in the
 | --- | --- | --- |
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
-| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, and a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it are implemented. Artifact manifests are not. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it, and an artifact manifest of files a workflow attempt writes under its workspace are implemented. |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
 | M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
 
