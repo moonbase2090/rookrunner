@@ -67,8 +67,9 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 7)
+        self.assertEqual(plan["capability_version"], 8)
         self.assertNotIn("call", plan["job"])
+        self.assertEqual(plan["job"]["services"], [])
         self.assertIsNone(plan["job"]["strategy"])
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["needs"], [])
@@ -330,12 +331,14 @@ jobs:
     steps:
       - run: echo hi
 """,
-            "jobs.test.services": """\
+            "jobs.test.services.db.ports": """\
 jobs:
   test:
     services:
       db:
-        image: postgres
+        image: sha256:abababababababababababababababababababababababababababababababab
+        ports:
+          - 5432:5432
     steps:
       - run: echo hi
 """,
@@ -375,6 +378,118 @@ jobs:
                 self.assertEqual(raised.exception.field, field)
                 self.assertIn(field, str(raised.exception))
                 self.assertIn("capability is unsupported", str(raised.exception))
+
+    def test_service_image_env_and_command_are_stored(self):
+        pin = "sha256:" + "ab" * 32
+        named = "redis@sha256:" + "cd" * 32
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    services:
+      cache:
+        image: {pin}
+        env:
+          MODE: on
+        command: python -c "print(1)"
+        entrypoint: python
+      other:
+        image: {named}
+    steps:
+      - run: echo hi
+  plain:
+    steps:
+      - run: echo no
+"""
+        plan = self.plan(workflow)["plan"]["job"]
+        self.assertEqual(plan["services"][0]["id"], "cache")
+        self.assertEqual(plan["services"][0]["image"], pin)
+        self.assertEqual(plan["services"][0]["env"], {"MODE": "on"})
+        self.assertEqual(plan["services"][0]["command"], ["python", "-c", "print(1)"])
+        self.assertEqual(plan["services"][0]["entrypoint"], "python")
+        self.assertEqual(plan["services"][1]["id"], "other")
+        self.assertEqual(plan["services"][1]["image"], named)
+        self.assertNotIn("command", plan["services"][1])
+        selected = self.plan(workflow, "plain")["plan"]["job"]
+        self.assertEqual(selected["services"], [])
+
+    def test_unpinned_service_image_is_invalid(self):
+        for image in ("redis", "redis:7", ""):
+            with self.subTest(image=image):
+                workflow = f"""\
+on: push
+jobs:
+  build:
+    services:
+      cache:
+        image: "{image}"
+    steps:
+      - run: echo hi
+"""
+                with self.assertRaises(PlanError) as raised:
+                    self.plan(workflow)
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+                self.assertEqual(raised.exception.field, "jobs.build.services.cache.image")
+                self.assertIn("pinned by digest", str(raised.exception))
+
+    def test_service_hostname_and_unsupported_keys(self):
+        pin = "sha256:" + "ab" * 32
+        cases = {
+            "jobs.build.services.bad_name": f"""\
+on: push
+jobs:
+  build:
+    services:
+      bad_name:
+        image: {pin}
+    steps:
+      - run: echo hi
+""",
+            "jobs.build.services.cache.credentials": f"""\
+on: push
+jobs:
+  build:
+    services:
+      cache:
+        image: {pin}
+        credentials:
+          username: user
+    steps:
+      - run: echo hi
+""",
+            "jobs.build.services.cache.volumes": f"""\
+on: push
+jobs:
+  build:
+    services:
+      cache:
+        image: {pin}
+        volumes:
+          - /data
+    steps:
+      - run: echo hi
+""",
+            "jobs.build.services.cache.options": f"""\
+on: push
+jobs:
+  build:
+    services:
+      cache:
+        image: {pin}
+        options: --network host
+    steps:
+      - run: echo hi
+""",
+        }
+        for field, workflow in cases.items():
+            with self.subTest(field=field):
+                with self.assertRaises(PlanError) as raised:
+                    self.plan(workflow)
+                if field.endswith("bad_name"):
+                    self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+                else:
+                    self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+                self.assertEqual(raised.exception.field, field)
 
     def test_step_if_is_stored_and_not_evaluated(self):
         workflow = """\
@@ -718,7 +833,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 7)
+            self.assertEqual(first["plan"]["capability_version"], 8)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -1328,9 +1443,50 @@ class ReusableWorkflowTests(unittest.TestCase):
             b"on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
             "build",
         )["plan"]
-        self.assertEqual(plan["capability_version"], 7)
+        self.assertEqual(plan["capability_version"], 8)
         self.assertNotIn("call", plan["job"])
+        self.assertEqual(plan["job"]["services"], [])
         self.assertEqual(plan["workflow"]["on"], "workflow_call")
+
+    def test_called_job_stores_services_and_the_caller_cannot(self):
+        pin = "sha256:" + "ab" * 32
+        called = f"""\
+on: workflow_call
+jobs:
+  build:
+    services:
+      cache:
+        image: {pin}
+        env:
+          MODE: on
+    steps:
+      - run: echo hi
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": called}, "call")
+        self.assertNotIn("services", plan["job"])
+        inner = plan["job"]["call"]["jobs"][0]
+        self.assertEqual(inner["services"], [{"id": "cache", "image": pin, "env": {"MODE": "on"}}])
+        rejected = (
+            """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    services:
+      cache:
+        image: %s
+"""
+            % pin
+        )
+        error = self.reject(rejected, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(error.field, "jobs.call.services")
 
     def test_inputs_and_outputs_keep_their_types(self):
         called = """\

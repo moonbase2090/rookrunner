@@ -819,6 +819,9 @@ class Worker:
         marked does not replace the still-running record. Waiting for the
         container name uses the existing 60 second docker create timeout,
         not a new limit. The stop uses the grace in `_stop_container`.
+        The run thread closes the lease after service containers and the
+        owned network are gone. Waiting for that close reuses the 60 second
+        docker create timeout. It is not a new limit.
         """
 
         with self.guard:
@@ -836,6 +839,10 @@ class Worker:
         return self._stop_and_commit(current, lease)
 
     def _stop_and_commit(self, record, lease):
+        if not lease.removed():
+            lease.stop()
+        if lease.snapshot()[0] != "closed":
+            lease.wait_closed(60)
         if not lease.removed():
             lease.stop()
         if lease.removed():
@@ -983,7 +990,7 @@ class Worker:
             "backend": {"name": "workflow", "version": __version__},
             "compatibility_notes": [
                 "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
-                "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript actions, Docker actions, and services are not claimed.",
+                "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript and Docker actions are not claimed. Services do not receive the engine socket.",
             ],
             "accepted_at": now(),
             "started_at": None,
