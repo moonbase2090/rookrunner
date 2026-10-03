@@ -46,7 +46,8 @@ command already stores working-file bytes, modes, links, deletions, and
 explicitly included untracked files, and it rejects an input set that changes
 while it is being read. That snapshot is not yet a queued run. Workflow
 acceptance still has to bind a snapshot before execution. Git metadata for
-checkout actions is not captured, so those workflows are not supported.
+checkout actions is not captured. The allow-list is written and the copy
+is not implemented, so those workflows are not supported.
 
 **Unsupported behavior fails in the open.** Requested execution that this
 version cannot perform is rejected before work starts. The worker does not
