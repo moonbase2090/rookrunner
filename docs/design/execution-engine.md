@@ -82,7 +82,8 @@ Do not advertise expression positions other than step `if`, job `if`, job
 outputs, whole-string expressions in composite `env`, action output
 `value`, the calling step's `with`, and `workflow_call` input, default,
 and output expressions. Do not advertise JavaScript actions, Docker
-actions, remote `uses`, matrix expressions, or services. Local reusable
+actions, remote `uses`, or matrix expressions. Service containers are a
+digest-pinned subset and are not a describe capability. Local reusable
 workflows are called from the snapshot. Early rejection is temporary capability
 status, not a decision to abandon those features.
 
@@ -99,7 +100,7 @@ status, not a decision to abandon those features.
 | Strategies | Matrix expansion, include/exclude, fail-fast, max-parallel, concurrency | Implemented for a literal matrix. Include, exclude, fail-fast, and max-parallel follow the workflow syntax page. A matrix over 256 jobs is rejected. Combinations run one at a time in the one caller-pinned container. Matrix expressions and `continue-on-error` are not implemented. Not a GitHub-equivalence claim |
 | Reuse | Reusable workflows, typed inputs, outputs, nesting, explicit secret handling | Implemented for a local `workflow_call` read from the snapshot (`./` and `$/`). Inputs are boolean, number, or string. Nesting stops at ten workflows. Fifty unique called workflows is the maximum. Secrets are not passed. Remote reusable workflows are not implemented. Not a GitHub-equivalence claim |
 | Repository behavior | Sanitized Git metadata and checkout semantics consistent with identified source | Capture exists; Git/checkout execution unsupported |
-| Services and artifacts | Owned service containers, readiness, cache/artifact interfaces and cleanup | Not implemented |
+| Services and artifacts | Owned service containers, readiness, cache/artifact interfaces and cleanup | Service containers are implemented for a digest-pinned image, env, command, and entrypoint. The service joins an owned user-defined bridge network and is removed on completion, cancel, and restart. It does not receive the engine socket. `credentials`, `volumes`, `options`, and `ports` are not implemented. Cache beyond the existing artifact manifest is not implemented. Not a GitHub-equivalence claim |
 | Hosted capabilities | Token permissions, OIDC, environments/approvals, event delivery, runner labels/images | Requires explicit integration; no local equivalence claim |
 | Platforms | Linux first, then separately validated shell/OS/architecture implementations | No real workflow platform validated |
 

@@ -79,6 +79,13 @@ self-hosted runner
 A missing socket fails setup and creates no container. Host credential
 directories are not mounted. The container is not privileged. This is not a
 private-network, nested-daemon, or egress-policy implementation. A job may
+declare service containers. Each image must be digest-pinned. GitHub allows
+a tag. The runner creates a user-defined bridge network for that job and
+the service label is the hostname. The service container does not receive
+the engine socket, including when the job was started with
+`--docker-socket`. `credentials`, `volumes`, `options`, and `ports` create
+no run. `worker --network none` does not start service containers. Cancel
+and restart remove them and the network. A job may
 declare `strategy` with `fail-fast`, `max-parallel`, and a literal `matrix`.
 Include and exclude are expanded at plan time. `fail-fast` defaults to true.
 Combinations of that job run one at a time in the same container and
@@ -116,19 +123,20 @@ that same grace. The container's main process is a shell that exits on
 SIGINT or SIGTERM, so the grace returns as soon as the container stops.
 `sleep` keeps the container alive as a child of that shell. The run is
 recorded `cancelled` with `cancel_requested` true only
-after the container is gone. If the container is still present, the run is
-`lost`, with `cancel_requested` true, error kind `WORKER_INTERRUPTED`, and
-cleanup `unresolved`. A new workflow submission then returns
-`WORKER_NOT_READY` and a queued workflow job is not started. Development
-fixtures still run, and `worker.describe` `ready` stays the scheduler flag.
-That block is in memory and ends when this process stops. Restart removes a
-container recorded for the attempt, or records the attempt `lost` with
+after the container and its service containers are gone. If one is still
+present, the run is `lost`, with `cancel_requested` true, error kind
+`WORKER_INTERRUPTED`, and cleanup `unresolved`. A new workflow submission
+then returns `WORKER_NOT_READY` and a queued workflow job is not started.
+Development fixtures still run, and `worker.describe` `ready` stays the
+scheduler flag. That block is in memory and ends when this process stops.
+Restart removes a container recorded for the attempt, service containers
+labeled for it, and their network, or records the attempt `lost` with
 cleanup `unresolved` and `cancel_requested` false. The same submission key
 returns that run. It is not launched again. A queued workflow can start. A
 new attempt that would reuse the unresolved container name or attempt
 workspace is refused. The container name is not stored on the run record.
-A job matrix stays unsupported; GitHub's matrix
-limit is 256 jobs per workflow run. Those limits are documented at
+A job matrix is expanded at plan time. GitHub's matrix limit is 256 jobs
+per workflow run. Those limits are documented at
 https://docs.github.com/en/actions/reference/limits.
 `run.logs` pages the executed steps' stdout and stderr with the same 1–65536
 byte pages as development fixtures. `end_of_stream` is true only after the

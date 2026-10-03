@@ -3,7 +3,7 @@
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-18 are
+roadmap step 1 and the first executable subset. NS-1 through NS-19 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -22,6 +22,12 @@ The job keeps the caller user. The image must already contain the Docker
 client. GitHub requires that service to be installed and running for
 container-dependent work on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
+A job may declare service containers. The image must be digest-pinned.
+GitHub allows a tag or a registry name. Each service joins a user-defined
+bridge network created for that job, and its label is the hostname. The
+service container does not receive the engine socket. Cancel and restart
+remove the service containers and that network. `credentials`, `volumes`,
+`options`, and `ports` are still rejected.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -50,13 +56,15 @@ Acceptance criteria:
   digest of the plan bytes. Repeating the parse yields the same digest.
 - String keys such as `on` survive parsing. Duplicate YAML keys fail.
   Expression text is preserved and not evaluated.
-- `secrets`, service containers, and host or privileged execution fail
-  before a plan exists. The error names the field and says the capability
-  is unsupported. Unsupported is a current limit, not a decision to drop
-  the feature. Job `needs` is NS-14. Local composite `uses` is NS-16. A
-  job `strategy` matrix is NS-17. A local job `uses` of a reusable
-  workflow is NS-18. Remote `uses` is still rejected. An unknown
-  `strategy` key still fails before a plan exists.
+- `secrets` and host or privileged execution fail before a plan exists.
+  The error names the field and says the capability is unsupported.
+  Unsupported is a current limit, not a decision to drop the feature.
+  Job `needs` is NS-14. Local composite `uses` is NS-16. A job `strategy`
+  matrix is NS-17. A local job `uses` of a reusable workflow is NS-18.
+  A job `services` map with a digest-pinned image is NS-19. `credentials`,
+  `volumes`, `options`, and `ports` on a service still fail before a plan
+  exists. Remote `uses` is still rejected. An unknown `strategy` key still
+  fails before a plan exists.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
 - A workflow file larger than 500 KB produces no plan. The error is a
@@ -779,21 +787,69 @@ Acceptance criteria:
   cites the docs.
 - Secrets are not passed implicitly.
 
+**NS-19. Service containers.**
+
+Status: implemented.
+
+Capability version is 8. A concrete job may declare `services`. A caller
+job may not; a job inside the called workflow may. Each service has an
+`image` pinned by digest, the same pin as the job image. GitHub allows a
+Docker Hub name or a registry name, including a floating tag. This engine
+does not pull one. `env` is a string map. `command` replaces the image
+command and is split into arguments. `entrypoint` replaces the image
+entrypoint and stays one string. Expressions in those fields are not
+evaluated. `credentials`, `volumes`, `options`, and `ports` are
+unsupported and name the field. GitHub warns that `--network` is not
+supported in service `options`. This slice does not accept `options`.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+The service label is one hostname label. For a job that declares
+services, the runner creates a user-defined bridge network and connects
+the job container to it. The label is the service hostname. Containers
+on that network reach each other without a published host port. The
+default `bridge` network has no such DNS, so a job with no services stays
+on `bridge`. `worker --network none` does not start service containers.
+There is no separate numeric cap on how many services a job may declare.
+
+The service container does not receive the engine socket, the workspace,
+or privilege, including when the job was started with `--docker-socket`.
+It is ready when it is running. If the image defines a health check, it
+is ready when that check is healthy. If the container exits, or it is
+not ready before the job's `timeout-minutes` deadline, setup fails and
+steps do not run. The wait uses that deadline. There is no separate
+health timeout. Services start after the job's `if` is true and stop
+before the next job. Matrix combinations of one job share that start.
+GitHub would give each matrix job its own services. `job.services` is
+not a context, so no host port is recorded. This is not a
+GitHub-equivalence claim.
+
+Cancel stops the service containers and removes the network, then
+records the run only after that cleanup finishes. Restart removes a
+service container labeled for the owned job container, and the network
+named from that container, along with the job container. An ownership
+file that names only the job container still reconciles.
+
+Acceptance criteria:
+
+- Owned service containers become ready or fail setup.
+- Cancellation and crash cleanup remove them.
+- Service containers do not receive the engine socket.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-eighteen PRs. Each one updates the capability version, rejects anything it
+nineteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. Service containers do not receive the engine socket. |
 | NS-20 | Sanitized Git metadata | A written design lands before code. The following PR copies only the metadata that design allows, still excludes credentials and remote URLs, and proves a checkout fixture against the captured digest. Until that PR, checkout actions remain an explicit rejection. |
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-19 and NS-20 can follow that evidence. They are not required
-to say the first subset runs.
+restart. NS-20 can follow that evidence. It is not required to say the
+first subset runs.

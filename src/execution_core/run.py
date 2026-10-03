@@ -50,6 +50,22 @@ container-dependent jobs on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 Host credential directories are not mounted. The container is not
 privileged. This is not a private-network or egress-policy implementation.
+A job may declare service containers. Each image must be digest-pinned.
+GitHub allows a registry name or a tag
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+This engine does not pull a floating tag. For that job only, the runner
+creates a user-defined bridge network and the service label is the
+hostname. Containers on that network reach each other without a published
+host port. `credentials`, `volumes`, `options`, and `ports` are rejected.
+GitHub warns that `--network` is not supported in service `options`; this
+engine does not accept the key. The service container does not receive the
+engine socket, the workspace, or privilege. It is ready when it is running,
+or healthy when the image defines a health check. If it exits, or it is not
+ready before the job deadline, setup fails and steps do not run. The wait
+uses that deadline. There is no separate health timeout. Cancel and restart
+remove the service containers and the network. `network none` does not
+start them. `job.services` is not a context here, so a host port is not
+recorded. This is not a GitHub-equivalence claim.
 A job matrix runs in this same container, one combination at a time, on the
 same attempt workspace. `strategy.fail-fast` defaults to true and skips
 later combinations after one fails. `strategy.max-parallel` is recorded and
@@ -152,6 +168,9 @@ _NETWORKS = {DEFAULT_NETWORK, "none"}
 # permission error names the same path.
 # https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners
 _CONTAINER_SOCKET = "/var/run/docker.sock"
+# One DNS label. The service id is the hostname on the owned network.
+_SERVICE_ID = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+_NETWORK_NAME = re.compile(r"^rookrunner-net-[0-9a-f]{16}$")
 
 
 class _JobRuntime:
@@ -321,6 +340,7 @@ def _accept_jobs(jobs):
             _accept_call(job.get("call"))
         else:
             _accept_strategy(job.get("strategy"))
+            _accept_services(job.get("services"))
             steps = job.get("steps")
             if not isinstance(steps, list) or not steps:
                 _setup("plan is not accepted")
@@ -395,7 +415,7 @@ def _input_literal(value):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 7:
+    if not isinstance(plan, dict) or plan.get("capability_version") != 8:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     jobs = plan.get("jobs")
@@ -883,27 +903,241 @@ def _stop_container(docker, name):
     return code
 
 
-def release_owned_container(name, docker="docker"):
-    """Remove one recorded container. Return True only when it is gone.
+def _owned_network_name(job_name):
+    return "rookrunner-net-" + job_name[len("rookrunner-") :]
 
-    This does not list or remove any other container. A missing container is
-    already gone. Removal uses the cancellation grace in `_stop_container`.
+
+def _service_container_name(job_name, index):
+    return f"rookrunner-svc-{job_name[len('rookrunner-') :]}-{index}"
+
+
+def _labeled_service_ids(docker, job_name):
+    """Return service container ids labeled for this job, or None on failure."""
+
+    if not CONTAINER_NAME.fullmatch(job_name or ""):
+        return []
+    try:
+        code, stdout, _stderr = _invoke(
+            docker,
+            [
+                "ps",
+                "-aq",
+                "--filter",
+                f"label=rookrunner.owner={job_name}",
+                "--format",
+                "{{.ID}}",
+            ],
+            30,
+        )
+    except (RunError, _Timeout):
+        return None
+    if code != 0:
+        return None
+    return [line.strip() for line in stdout.decode("utf-8", "replace").splitlines() if line.strip()]
+
+
+def _network_exists(docker, network):
+    """Return whether the owned network is present. A Docker error is present."""
+
+    if not _NETWORK_NAME.fullmatch(network or ""):
+        return False
+    try:
+        code, _stdout, _stderr = _invoke(
+            docker, ["network", "inspect", "--format", "{{.Name}}", network], 30
+        )
+    except (RunError, _Timeout):
+        return True
+    return code == 0
+
+
+def _drop_network(docker, network):
+    """Remove the owned network. A network that is already gone is success."""
+
+    if not _NETWORK_NAME.fullmatch(network or ""):
+        return False
+    try:
+        if not _network_exists(docker, network):
+            return True
+        code, _stdout, _stderr = _invoke(docker, ["network", "rm", network], 60)
+    except (RunError, _Timeout):
+        return False
+    if code == 0:
+        return True
+    try:
+        return not _network_exists(docker, network)
+    except (RunError, _Timeout):
+        return False
+
+
+def _retire_services(docker, job_name, service_names, network_name, connected):
+    """Stop service containers and remove the owned network. Return 0 on success."""
+
+    code = 0
+    for service in service_names:
+        if _stop_container(docker, service) != 0:
+            code = 1
+    labeled = _labeled_service_ids(docker, job_name)
+    if labeled is None:
+        code = 1
+    else:
+        for service in labeled:
+            if _stop_container(docker, service) != 0:
+                code = 1
+    if network_name and _network_exists(docker, network_name):
+        if connected:
+            try:
+                _invoke(
+                    docker,
+                    ["network", "disconnect", "--force", network_name, job_name],
+                    60,
+                )
+            except (RunError, _Timeout):
+                code = 1
+        if not _drop_network(docker, network_name):
+            code = 1
+    return code
+
+
+def _service_create_args(service_name, network_name, service, job_name):
+    """Build `docker create` args. No socket, workspace, user, or privilege."""
+
+    args = [
+        "create",
+        "--name",
+        service_name,
+        "--network",
+        network_name,
+        "--network-alias",
+        service["id"],
+        "--hostname",
+        service["id"],
+        "--label",
+        f"rookrunner.owner={job_name}",
+    ]
+    for key in sorted(service.get("env") or {}):
+        args.extend(["--env", f"{key}={service['env'][key]}"])
+    if service.get("entrypoint"):
+        args.extend(["--entrypoint", service["entrypoint"]])
+    args.append(service["image"])
+    if service.get("command"):
+        args.extend(service["command"])
+    return args
+
+
+def _wait_until_service_ready(docker, service_name, deadline, owner):
+    """Return True when the service is ready. An exit or the deadline fails setup.
+
+    No health check means running is ready. A health check must report healthy.
+    The wait stops at the job deadline. That deadline is the existing
+    timeout-minutes bound. This is not a separate health timeout.
+    """
+
+    confirmed = False
+    while True:
+        if owner is not None and owner.cancelled():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _setup("service container did not become ready")
+        try:
+            code, stdout, _stderr = _invoke(
+                docker,
+                [
+                    "inspect",
+                    "--format",
+                    "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                    service_name,
+                ],
+                min(30, remaining),
+            )
+        except _Timeout:
+            _setup("service container did not become ready")
+        if code != 0:
+            _setup("service container setup failed")
+        parts = stdout.decode("utf-8", "replace").split()
+        status = parts[0] if parts else ""
+        health = parts[1] if len(parts) > 1 else "none"
+        if status in {"exited", "dead"}:
+            _setup("service container exited")
+        if health == "unhealthy":
+            _setup("service container did not become ready")
+        if status == "running" and health == "healthy":
+            return True
+        if status == "running" and health == "none":
+            # One extra look catches a process that exits as soon as it starts.
+            # The interval matches the cancellation poll in this module.
+            if confirmed:
+                return True
+            confirmed = True
+        else:
+            confirmed = False
+        time.sleep(min(0.2, remaining))
+
+
+def _start_one_service(docker, job_name, network_name, service, index, deadline, names, owner):
+    reference, digest = _pinned(service.get("image"))
+    _resolve_image(docker, reference, digest, deadline)
+    service_name = _service_container_name(job_name, index)
+    code, _stdout, _stderr = _invoke_within(
+        docker,
+        _service_create_args(service_name, network_name, service, job_name),
+        60,
+        deadline,
+    )
+    if code != 0:
+        _setup("service container setup failed")
+    names.append(service_name)
+    if owner is not None:
+        owner.note_service(service_name)
+    code, _stdout, _stderr = _invoke_within(docker, ["start", service_name], 60, deadline)
+    if code != 0:
+        _setup("service container setup failed")
+    return _wait_until_service_ready(docker, service_name, deadline, owner)
+
+
+def _create_service_network(docker, network_name, deadline):
+    code, _stdout, _stderr = _invoke_within(
+        docker,
+        ["network", "create", "--driver", "bridge", network_name],
+        60,
+        deadline,
+    )
+    if code != 0:
+        _setup("service container setup failed")
+
+
+def release_owned_container(name, docker="docker"):
+    """Remove the job container, its service containers, and its network.
+
+    Service containers carry the label `rookrunner.owner` set to the job
+    container name. The network is `rookrunner-net-` plus that name's suffix.
+    A missing container or network is already gone. A container with a
+    different owner is left in place. Removal of a container uses the
+    cancellation grace in `_stop_container`.
     """
 
     if not CONTAINER_NAME.fullmatch(name or ""):
         return False
     try:
         docker_bin = _docker_binary(docker)
-        stopped = _stop_container(docker_bin, name) == 0
+        if _retire_services(docker_bin, name, [], _owned_network_name(name), True) != 0:
+            return False
+        if _stop_container(docker_bin, name) != 0:
+            return False
+        if _container_running(docker_bin, name) is not None:
+            return False
+        labeled = _labeled_service_ids(docker_bin, name)
+        if labeled is None or labeled:
+            return False
+        if _network_exists(docker_bin, _owned_network_name(name)):
+            return False
     except (RunError, _Timeout, OSError):
         return False
-    if not stopped:
-        return False
-    return _container_running(docker_bin, name) is None
+    return True
 
 
 def owned_container_present(name, docker="docker"):
-    """Return whether the named owned container still exists.
+    """Return whether the job container, a service container, or its network remains.
 
     An invalid name is not inspected. A Docker failure is treated as present
     so a restart does not forget an unresolved container.
@@ -915,7 +1149,17 @@ def owned_container_present(name, docker="docker"):
         docker_bin = _docker_binary(docker)
     except RunError:
         return True
-    return _container_running(docker_bin, name) is not None
+    try:
+        if _container_running(docker_bin, name) is not None:
+            return True
+        labeled = _labeled_service_ids(docker_bin, name)
+        if labeled is None or labeled:
+            return True
+        if _network_exists(docker_bin, _owned_network_name(name)):
+            return True
+    except (RunError, _Timeout, OSError):
+        return True
+    return False
 
 
 def _container_name(owner):
@@ -944,6 +1188,9 @@ class ContainerLease:
         self.cancel = False
         self.reserve = None
         self.blocked_names = frozenset()
+        self.services = []
+        self.network = None
+        self._finished = threading.Event()
 
     def taken(self, name):
         return name in self.blocked_names
@@ -969,6 +1216,24 @@ class ContainerLease:
         with self._lock:
             self.phase = "closed"
             self._ready.set()
+            self._finished.set()
+
+    def note_service(self, name):
+        with self._lock:
+            self.services.append(name)
+
+    def note_network(self, network):
+        with self._lock:
+            self.network = network
+
+    def forget_services(self):
+        with self._lock:
+            self.services = []
+            self.network = None
+
+    def owned_extra(self):
+        with self._lock:
+            return list(self.services), self.network
 
     def cancelled(self):
         with self._lock:
@@ -986,23 +1251,92 @@ class ContainerLease:
     def wait_until_published(self, seconds):
         self._ready.wait(seconds)
 
+    def wait_closed(self, seconds):
+        """Wait until the run thread finishes cleanup, or until `seconds` elapses."""
+
+        deadline = time.monotonic() + seconds
+        while self.snapshot()[0] != "closed":
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._finished.wait(min(0.2, remaining))
+
     def removed(self):
         _phase, name, docker, _cancel = self.snapshot()
-        if not name or not docker:
-            return True
-        return _container_running(docker, name) is None
+        services, network = self.owned_extra()
+        if not docker:
+            return not services and network is None
+        if name and _container_running(docker, name) is not None:
+            return False
+        for service in services:
+            if _container_running(docker, service) is not None:
+                return False
+        if name:
+            labeled = _labeled_service_ids(docker, name)
+            if labeled is None or labeled:
+                return False
+            if _network_exists(docker, _owned_network_name(name)):
+                return False
+        if network and _network_exists(docker, network):
+            return False
+        return True
 
     def stop(self):
         _phase, name, docker, _cancel = self.snapshot()
-        if not name or not docker:
+        services, network = self.owned_extra()
+        if not docker:
             return 0
-        return _stop_container(docker, name)
+        code = 0
+        for service in services:
+            if _stop_container(docker, service) != 0:
+                code = 1
+        if name:
+            if _retire_services(docker, name, [], network or _owned_network_name(name), True) != 0:
+                code = 1
+            if _stop_container(docker, name) != 0:
+                code = 1
+        elif network and not _drop_network(docker, network):
+            code = 1
+        return code
 
 
 def _write_script(private, script_name, text):
     script = private / script_name
     script.write_bytes(text.encode("utf-8"))
     os.chmod(script, 0o600)
+
+
+def _accept_services(services):
+    if not isinstance(services, list):
+        _setup("plan is not accepted")
+    seen = set()
+    for item in services:
+        if not isinstance(item, dict):
+            _setup("plan is not accepted")
+        service_id = item.get("id")
+        image = item.get("image")
+        if (
+            not isinstance(service_id, str)
+            or not _SERVICE_ID.fullmatch(service_id)
+            or service_id in seen
+        ):
+            _setup("plan is not accepted")
+        seen.add(service_id)
+        if not isinstance(image, str) or not (
+            _DIGEST.fullmatch(image) or _REFERENCE.fullmatch(image)
+        ):
+            _setup("plan is not accepted")
+        _env_layer(item.get("env"))
+        if "command" in item:
+            command = item.get("command")
+            if not isinstance(command, list) or not command:
+                _setup("plan is not accepted")
+            if any(not isinstance(part, str) or part == "" or "\0" in part for part in command):
+                _setup("plan is not accepted")
+        if "entrypoint" in item:
+            entry = item.get("entrypoint")
+            if not isinstance(entry, str) or entry.strip() == "" or "\0" in entry or "\n" in entry:
+                _setup("plan is not accepted")
 
 
 def _accept_strategy(strategy):
@@ -1216,6 +1550,8 @@ def run_job(
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
     `docker_socket` is off unless the caller passes true or a socket path.
+    Service containers for an enabled job start before its steps and are
+    removed before the next job. They do not receive the engine socket.
     """
 
     if network not in _NETWORKS:
@@ -1238,6 +1574,7 @@ def run_job(
     outcome = None
     failure = None
     records = []
+    service_cleanup = 0
     try:
         resolved = _resolve_image(docker_bin, reference, digest, deadline)
         (private / "event.json").write_bytes(event_bytes)
@@ -1291,7 +1628,7 @@ def run_job(
                     records.append(_step_result(step, "skipped", None, "", "", None, inner["id"]))
 
         def _execute_jobs(job_list, level_workflow, inputs, path, *, reset_first):
-            nonlocal deadline, failed, output_bytes, graceful, outcome
+            nonlocal deadline, failed, output_bytes, graceful, outcome, service_cleanup
             results = {}
             jobs_by_id = {item["id"]: item for item in job_list}
             for job_index, job in enumerate(job_list):
@@ -1435,66 +1772,125 @@ def run_job(
                 job_failed = False
                 produced = {}
                 cancelled_run = False
-                for matrix, strategy_context in runs:
-                    if owner is not None and owner.cancelled():
-                        graceful = True
-                        outcome = _cancelled(resolved, reference, records)
-                        cancelled_run = True
-                        break
-                    if deadline - time.monotonic() <= 0:
-                        raise _JobDeadline()
-                    prior = []
-                    runtime = _JobRuntime()
-                    for step in job["steps"]:
+                service_names = []
+                service_network = None
+                connected = False
+                try:
+                    services = job.get("services") or []
+                    if services:
                         if deadline - time.monotonic() <= 0:
                             raise _JobDeadline()
-                        record = _consider_step(
+                        if network == "none":
+                            _setup("service containers are not started on network none")
+                        service_network = _owned_network_name(name)
+                        _create_service_network(docker_bin, service_network, deadline)
+                        if owner is not None:
+                            owner.note_network(service_network)
+                        code, _stdout, _stderr = _invoke_within(
                             docker_bin,
-                            name,
-                            step,
-                            level_workflow,
-                            job,
-                            event,
-                            workspace,
-                            bash_ok,
-                            step_timeout,
+                            ["network", "connect", service_network, name],
+                            60,
                             deadline,
-                            prior,
-                            owner is not None and owner.cancelled(),
-                            needs,
-                            scripts[(path + (job["id"],), step["index"])],
-                            runtime,
-                            commands,
-                            matrix=matrix,
-                            strategy=strategy_context,
-                            inputs=inputs,
                         )
-                        records.append(record)
-                        prior.append(record)
-                        if record["status"] == "failed":
-                            job_failed = True
-                            if failed is None:
-                                failed = record
-                    if publish:
-                        produced, output_bytes = _job_outputs(
-                            job,
-                            _expression_values(
-                                event,
-                                level_workflow,
-                                job,
-                                {"env": {}},
-                                prior,
-                                cancelled,
-                                needs,
-                                runtime,
-                                inputs=inputs,
-                                matrix=matrix,
-                                strategy=strategy_context,
-                            ),
-                            output_bytes,
+                        if code != 0:
+                            _setup("service container setup failed")
+                        connected = True
+                        for index, service in enumerate(services):
+                            if owner is not None and owner.cancelled():
+                                graceful = True
+                                outcome = _cancelled(resolved, reference, records)
+                                cancelled_run = True
+                                break
+                            ready = _start_one_service(
+                                docker_bin,
+                                name,
+                                service_network,
+                                service,
+                                index,
+                                deadline,
+                                service_names,
+                                owner,
+                            )
+                            if not ready:
+                                graceful = True
+                                outcome = _cancelled(resolved, reference, records)
+                                cancelled_run = True
+                                break
+                    if not cancelled_run:
+                        for matrix, strategy_context in runs:
+                            if owner is not None and owner.cancelled():
+                                graceful = True
+                                outcome = _cancelled(resolved, reference, records)
+                                cancelled_run = True
+                                break
+                            if deadline - time.monotonic() <= 0:
+                                raise _JobDeadline()
+                            prior = []
+                            runtime = _JobRuntime()
+                            for step in job["steps"]:
+                                if deadline - time.monotonic() <= 0:
+                                    raise _JobDeadline()
+                                record = _consider_step(
+                                    docker_bin,
+                                    name,
+                                    step,
+                                    level_workflow,
+                                    job,
+                                    event,
+                                    workspace,
+                                    bash_ok,
+                                    step_timeout,
+                                    deadline,
+                                    prior,
+                                    owner is not None and owner.cancelled(),
+                                    needs,
+                                    scripts[(path + (job["id"],), step["index"])],
+                                    runtime,
+                                    commands,
+                                    matrix=matrix,
+                                    strategy=strategy_context,
+                                    inputs=inputs,
+                                )
+                                records.append(record)
+                                prior.append(record)
+                                if record["status"] == "failed":
+                                    job_failed = True
+                                    if failed is None:
+                                        failed = record
+                            if owner is not None and owner.cancelled():
+                                graceful = True
+                                outcome = _cancelled(resolved, reference, records)
+                                cancelled_run = True
+                                break
+                            if publish:
+                                produced, output_bytes = _job_outputs(
+                                    job,
+                                    _expression_values(
+                                        event,
+                                        level_workflow,
+                                        job,
+                                        {"env": {}},
+                                        prior,
+                                        cancelled,
+                                        needs,
+                                        runtime,
+                                        inputs=inputs,
+                                        matrix=matrix,
+                                        strategy=strategy_context,
+                                    ),
+                                    output_bytes,
+                                )
+                            if job_failed and fail_fast:
+                                break
+                finally:
+                    if service_names or service_network is not None:
+                        retired = _retire_services(
+                            docker_bin, name, service_names, service_network, connected
                         )
-                    if job_failed and fail_fast:
-                        break
+                        if retired != 0:
+                            service_cleanup = retired
+                        elif owner is not None:
+                            owner.forget_services()
                 if cancelled_run:
                     return None
                 result_name = "failure" if job_failed else "success"
@@ -1519,8 +1915,6 @@ def run_job(
     except Exception as exc:
         failure = exc
     finally:
-        if owner is not None:
-            owner.closed()
         cleanup_code = 0
         if name is not None and (created or graceful):
             try:
@@ -1532,11 +1926,17 @@ def run_job(
                         cleanup_code = 0
             except (RunError, _Timeout):
                 cleanup_code = 1
+            if service_cleanup != 0:
+                retried = _retire_services(docker_bin, name, [], _owned_network_name(name), True)
+                if retried == 0:
+                    service_cleanup = 0
         shutil.rmtree(private, ignore_errors=True)
         shutil.rmtree(commands, ignore_errors=True)
+        if owner is not None:
+            owner.closed()
     if failure is not None:
         raise failure
-    if cleanup_code != 0:
+    if cleanup_code != 0 or service_cleanup != 0:
         _setup("container cleanup failed")
     return outcome
 

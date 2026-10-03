@@ -1,21 +1,25 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 7 records declared fields, including step and job
+run. Capability version 8 records declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
-snapshot, a literal job matrix, and a local reusable workflow. It checks
-that expressions can be parsed and does not evaluate them. Matrix `include`
-and `exclude` are expanded here. A matrix value that is itself an expression
-is rejected. A called workflow is read from the snapshot. A remote workflow
-reference is rejected. Secrets are not passed to a called workflow. A
-selected job includes the jobs it needs. A dependency that is not defined in
-the workflow is rejected. Anything this slice cannot describe is rejected.
+snapshot, a literal job matrix, a local reusable workflow, and service
+containers. It checks that expressions can be parsed and does not evaluate
+them. Matrix `include` and `exclude` are expanded here. A matrix value that
+is itself an expression is rejected. A called workflow is read from the
+snapshot. A remote workflow reference is rejected. Secrets are not passed
+to a called workflow. A service image must be pinned by digest. GitHub
+accepts a tag or registry name there. `credentials`, `volumes`, `options`,
+and `ports` are rejected. A selected job includes the jobs it needs. A
+dependency that is not defined in the workflow is rejected. Anything this
+slice cannot describe is rejected.
 """
 
 import hashlib
 import json
 import math
 import re
+import shlex
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -33,7 +37,7 @@ from .expr import (
 )
 from .protocol import canonical
 
-CAPABILITY_VERSION = 7
+CAPABILITY_VERSION = 8
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -89,10 +93,11 @@ REUSE_CONFIGURATIONS = (
 )
 # `workflow_call` is accepted only under `on`. `secrets` stays rejected, so
 # a called workflow does not receive secrets implicitly or by name.
+# `services` is accepted only on a concrete job. A caller job has no service
+# block of its own; the called workflow's jobs may.
 FORBIDDEN = {
     "matrix",
     "secrets",
-    "services",
     "privileged",
     "container",
 }
@@ -108,7 +113,25 @@ JOB_KEYS = {
     "env",
     "timeout-minutes",
     "strategy",
+    "services",
 }
+# jobs.<job_id>.services.<service_id>. `credentials` would carry a registry
+# login. `volumes` can bind a host path. `options` is passed to
+# `docker create`, and GitHub warns that `--network` is not supported there.
+# `ports` publishes a host port. Those four stay unsupported. A container
+# job reaches the service by its label on a user-defined bridge network.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+SERVICE_KEYS = {"image", "env", "command", "entrypoint"}
+# The service label is the hostname on that network. One DNS label, so the
+# name can be used as a hostname. This is not a count of services. GitHub
+# documents no service-count limit, and this planner adds none.
+_SERVICE_ID = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+# Same digest pin as a job image. GitHub allows a Docker Hub name or a
+# registry name, including a floating tag. This engine does not pull one.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+_SERVICE_IMAGE = re.compile(
+    r"^(?:sha256:[0-9a-f]{64}|[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64})$"
+)
 STRATEGY_KEYS = {"fail-fast", "max-parallel", "matrix"}
 # A job that calls a reusable workflow. GitHub also allows secrets, strategy,
 # concurrency, permissions, and cache-mode. Those stay unsupported. Secrets
@@ -506,6 +529,62 @@ class _Planner:
             key: self._string_scalar(value, _join(path, key)) for key, (_, value) in body.items()
         }
 
+    def _services(self, items, field):
+        """Record service containers. An omitted key is an empty list.
+
+        `image` is required and must be digest-pinned. `env` is a string map.
+        `command` replaces the image command and is split into arguments.
+        `entrypoint` replaces the image entrypoint and stays one string.
+        Expressions in these fields are not evaluated.
+        """
+
+        if "services" not in items:
+            return []
+        path = _join(field, "services")
+        body = self._mapping(items["services"][1], path)
+        services = []
+        for key, (_, value) in body.items():
+            child = _join(path, key)
+            if not _SERVICE_ID.fullmatch(key):
+                _invalid(f"{child} is not a service hostname", child)
+            spec = self._mapping(value, child)
+            self._allow(spec, child, SERVICE_KEYS)
+            image_field = _join(child, "image")
+            if "image" not in spec:
+                _invalid(f"{image_field} must be pinned by digest", image_field)
+            image = self._string_scalar(spec["image"][1], image_field)
+            if not _SERVICE_IMAGE.fullmatch(image):
+                _invalid(f"{image_field} must be pinned by digest", image_field)
+            recorded = {"id": key, "image": image, "env": self._env(spec, child)}
+            if "command" in spec:
+                recorded["command"] = self._service_command(
+                    spec["command"][1], _join(child, "command")
+                )
+            if "entrypoint" in spec:
+                recorded["entrypoint"] = self._service_entrypoint(
+                    spec["entrypoint"][1], _join(child, "entrypoint")
+                )
+            services.append(recorded)
+        return services
+
+    def _service_command(self, node, field):
+        text = self._string_scalar(node, field)
+        if text.strip() == "":
+            _invalid(f"{field} must be a command", field)
+        try:
+            parts = shlex.split(text)
+        except ValueError:
+            _invalid(f"{field} must be a command", field)
+        if not parts or any("\0" in part or part == "" for part in parts):
+            _invalid(f"{field} must be a command", field)
+        return parts
+
+    def _service_entrypoint(self, node, field):
+        text = self._string_scalar(node, field)
+        if text.strip() == "" or "\0" in text or "\n" in text:
+            _invalid(f"{field} must be an entrypoint", field)
+        return text
+
     def _runs_on(self, items, field):
         if "runs-on" not in items:
             return None
@@ -616,6 +695,7 @@ class _Planner:
             "outputs": self._outputs(job_body, job_field),
             "timeout_minutes": self._timeout_minutes(job_body, job_field),
             "strategy": self._strategy(job_body, job_field),
+            "services": self._services(job_body, job_field),
             "steps": self._steps(job_body, job_field),
         }
         condition = self._if_text(job_body, job_field, check_job_if)

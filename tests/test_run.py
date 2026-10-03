@@ -5,12 +5,14 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
 from execution_core.attempt import materialize_attempt
 from execution_core.plan import plan_snapshot, plan_workflow
 from execution_core.run import (
+    ContainerLease,
     RunError,
     _CallInputError,
     _OUTPUT_JOB_BYTES,
@@ -19,6 +21,8 @@ from execution_core.run import (
     _job_outputs,
     _read_utf8,
     _resolve_call_inputs,
+    owned_container_present,
+    release_owned_container,
     run_job,
 )
 from execution_core.snapshot import SourceCapture
@@ -672,6 +676,13 @@ class DockerRunTests(unittest.TestCase):
         )
         for container in names.stdout.split():
             subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+        networks = subprocess.run(
+            ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
+            capture_output=True,
+            text=True,
+        )
+        for network in networks.stdout.split():
+            subprocess.run(["docker", "network", "rm", network], capture_output=True)
         if self.previous is None:
             os.environ.pop("ROOKRUNNER_TEST_MARKER", None)
         else:
@@ -1555,3 +1566,341 @@ jobs:
         result, workspace = self._reusable("entry", workflow, {}, "build")
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual((workspace / "marker.txt").read_text(), "empty\n")
+
+    def _service_workflow(self, body):
+        return f"on: push\njobs:\n  build:\n{body}\n"
+
+    def _run_service(self, workflow, **kwargs):
+        root = self.root / "services"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            **kwargs,
+        )
+        return result, workspace
+
+    def test_service_is_reachable_by_its_label(self):
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      echo:
+        image: {self.image}
+        env:
+          ROLE: service
+        command: python -c "import http.server; http.server.ThreadingHTTPServer(('0.0.0.0', 8080), http.server.BaseHTTPRequestHandler).serve_forever()"
+    steps:
+      - run: |
+          python -c 'import socket,time
+          last=None
+          for _ in range(50):
+            try:
+              s=socket.create_connection(("echo", 8080), 2)
+              s.close()
+              raise SystemExit(0)
+            except OSError as exc:
+              last=exc
+              time.sleep(0.2)
+          raise SystemExit(last)'
+"""
+        )
+        result, _workspace = self._run_service(workflow)
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["steps"][0]["exit_code"], 0)
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        service = [call for call in creates if "--label" in call]
+        job = [call for call in creates if "--label" not in call]
+        self.assertEqual(len(job), 1)
+        self.assertEqual(len(service), 1)
+        self.assertEqual(job[0][job[0].index("--network") + 1], "bridge")
+        self.assertNotIn("--privileged", service[0])
+        self.assertNotIn("--user", service[0])
+        self.assertNotIn("/workspace", " ".join(service[0]))
+        self.assertNotIn("docker.sock", " ".join(service[0]))
+        self.assertIn("rookrunner.owner=" + job[0][job[0].index("--name") + 1], service[0])
+        self.assertEqual(service[0][service[0].index("--network-alias") + 1], "echo")
+        self.assertIn("--env", service[0])
+        self.assertIn("ROLE=service", service[0])
+        networks = [call for call in self._calls() if call[:2] == ["network", "create"]]
+        self.assertEqual(len(networks), 1)
+        self.assertEqual(networks[0][networks[0].index("--driver") + 1], "bridge")
+        self.assertTrue(networks[0][-1].startswith("rookrunner-net-"))
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(listed.stdout.strip(), "")
+        left = subprocess.run(
+            ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(left.stdout.strip(), "")
+
+    def test_skipped_job_does_not_start_a_service(self):
+        workflow = self._service_workflow(
+            f"""\
+    if: "${{{{ false }}}}"
+    services:
+      echo:
+        image: {self.image}
+        command: sleep infinity
+    steps:
+      - run: echo hi
+"""
+        )
+        result, _workspace = self._run_service(workflow)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["steps"][0]["status"], "skipped")
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(len(creates), 1)
+        self.assertNotIn("--label", creates[0])
+
+    def test_exited_service_fails_setup_before_steps(self):
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      gone:
+        image: {self.image}
+        command: python -c "import sys; sys.exit(1)"
+    steps:
+      - run: printf 'ran\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        )
+        root = self.root / "exited"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                snapshot,
+                digest,
+                workspace,
+                _plan(workflow),
+                self.image,
+                EVENT,
+                docker=str(self.docker),
+                step_timeout=60,
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("service container", str(raised.exception))
+        self.assertFalse((workspace / "marker.txt").exists())
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(listed.stdout.strip(), "")
+
+    def test_network_none_does_not_start_services(self):
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      echo:
+        image: {self.image}
+        command: sleep infinity
+    steps:
+      - run: printf 'ran\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        )
+        root = self.root / "offline-service"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                snapshot,
+                digest,
+                workspace,
+                _plan(workflow),
+                self.image,
+                EVENT,
+                docker=str(self.docker),
+                step_timeout=60,
+                network="none",
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("network none", str(raised.exception))
+        self.assertFalse((workspace / "marker.txt").exists())
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertTrue(creates)
+        self.assertTrue(all("--label" not in call for call in creates))
+
+    def test_service_does_not_receive_the_engine_socket(self):
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      echo:
+        image: {self.image}
+        command: sleep infinity
+    steps:
+      - run: |
+          python -c 'import json,socket
+          def get(path):
+            s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect("/var/run/docker.sock")
+            s.sendall(("GET "+path+" HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n").encode())
+            data=b""
+            while True:
+              chunk=s.recv(65536)
+              if not chunk:
+                break
+              data+=chunk
+            return json.loads(data.split(b"\\r\\n\\r\\n",1)[1])
+          rows=get("/containers/json?all=1")
+          found=False
+          for row in rows:
+            if any("rookrunner-svc-" in name for name in row.get("Names") or []):
+              found=True
+              info=get("/containers/"+row["Id"]+"/json")
+              mounts=info.get("Mounts") or []
+              if any(item.get("Destination")=="/var/run/docker.sock" for item in mounts):
+                raise SystemExit("socket")
+              if info.get("HostConfig",{{}}).get("Privileged"):
+                raise SystemExit("privileged")
+          raise SystemExit(0 if found else 2)'
+"""
+        )
+        result, _workspace = self._run_service(workflow, docker_socket=True)
+        self.assertEqual(result["status"], "succeeded", result)
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        job = next(call for call in creates if "--label" not in call)
+        service = next(call for call in creates if "--label" in call)
+        self.assertTrue(
+            any("destination=/var/run/docker.sock" in item for item in job),
+        )
+        self.assertFalse(any("docker.sock" in item for item in service))
+        self.assertNotIn("--privileged", service)
+
+    def test_cancel_removes_the_service_container(self):
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      echo:
+        image: {self.image}
+        command: sleep infinity
+    steps:
+      - run: sleep 30
+"""
+        )
+        root = self.root / "cancel-service"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        owner = ContainerLease()
+
+        def cancel_when_started():
+            for _ in range(100):
+                listed = subprocess.run(
+                    ["docker", "ps", "-aq", "--filter", "name=rookrunner-svc-"],
+                    capture_output=True,
+                    text=True,
+                )
+                if listed.stdout.strip():
+                    owner.request_cancel()
+                    owner.stop()
+                    return
+                time.sleep(0.1)
+
+        thread = threading.Thread(target=cancel_when_started)
+        thread.start()
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            owner=owner,
+        )
+        thread.join(40)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result["status"], "cancelled", result)
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(listed.stdout.strip(), "")
+        left = subprocess.run(
+            ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(left.stdout.strip(), "")
+
+    def test_release_removes_a_service_container_and_its_network(self):
+        suffix = os.urandom(8).hex()
+        name = "rookrunner-" + suffix
+        other = "rookrunner-" + os.urandom(8).hex()
+        network = "rookrunner-net-" + suffix
+        service = "rookrunner-svc-" + suffix + "-0"
+        subprocess.run(
+            ["docker", "network", "create", "--driver", "bridge", network],
+            check=True,
+            capture_output=True,
+        )
+        try:
+            subprocess.run(
+                [
+                    "docker",
+                    "create",
+                    "--name",
+                    service,
+                    "--network",
+                    network,
+                    "--label",
+                    f"rookrunner.owner={name}",
+                    self.image,
+                    "sleep",
+                    "infinity",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(["docker", "start", service], check=True, capture_output=True)
+            subprocess.run(
+                ["docker", "create", "--name", other, self.image, "sleep", "infinity"],
+                check=True,
+                capture_output=True,
+            )
+            self.assertTrue(owned_container_present(name))
+            self.assertTrue(release_owned_container(name))
+            self.assertFalse(owned_container_present(name))
+            left = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", f"name=^{service}$"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(left.stdout.strip(), "")
+            nets = subprocess.run(
+                ["docker", "network", "ls", "-q", "--filter", f"name=^{network}$"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(nets.stdout.strip(), "")
+            kept = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", f"name=^{other}$"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(kept.stdout.strip(), "")
+        finally:
+            subprocess.run(["docker", "rm", "-f", service, other], capture_output=True)
+            subprocess.run(["docker", "network", "rm", network], capture_output=True)
