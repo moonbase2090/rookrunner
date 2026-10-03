@@ -52,12 +52,19 @@ python3 -m execution_core --state "$PWD/.execution-state" list
 python3 -m execution_core --state "$PWD/.execution-state" get RUN_ID
 python3 -m execution_core --state "$PWD/.execution-state" logs RUN_ID --limit 1024
 python3 -m execution_core --state "$PWD/.execution-state" cancel RUN_ID
+python3 -m execution_core --state "$PWD/.execution-state" submit \
+  --key example-workflow --workflow .github/workflows/test.yml --job-id build \
+  --event '{}' --image rust@sha256:<64 lowercase hex digits>
+python3 -m execution_core --state "$PWD/.execution-state" follow RUN_ID
 ```
 
 Replace `RUN_ID` with the submission's `result.run_id`. Reuse a submission key to
-retry; use a new key for a new run. Commands return JSON. Successful submission
-only means acceptance: execution success requires `state=succeeded` and
-`exit_code=0` for the identified fixture digest. Stop the worker with Ctrl-C.
+retry; use a new key for a new run. Commands return JSON. A version 1 submit
+needs `--workflow`, `--job-id`, `--event`, and `--image`. `--backend development`
+may be included on that command and is not sent. `follow` prints one JSON
+envelope per state change and per nonempty log page, and exits zero only when
+the run is `succeeded` with exit code 0. `get` and `logs` stay one-shot.
+Successful submission only means acceptance. Stop the worker with Ctrl-C.
 State remains on disk for restart. It contains synthetic fixture input and output;
 do not place credentials in fixtures or commit state directories.
 

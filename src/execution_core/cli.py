@@ -3,10 +3,14 @@ from pathlib import Path
 import socket
 import sqlite3
 import sys
+import time
 
-from .protocol import MAX_MESSAGE, canonical, strict_json
+from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .worker import serve
 from .snapshot import CaptureError, SourceCapture
+
+# Pause while a followed run is still open. This is client pacing, not an Actions limit.
+POLL_SECONDS = 0.2
 
 
 def call(state, method, params):
@@ -39,6 +43,79 @@ def call(state, method, params):
         return reply
 
 
+def submit_params(parser, args):
+    workflow = (args.workflow, args.job_id, args.event, args.image)
+    if any(value is not None for value in workflow):
+        if any(value is None for value in workflow):
+            parser.error("workflow submit requires --workflow, --job-id, --event, and --image")
+        if args.exit_code is not None or args.delay_ms is not None or args.output is not None:
+            parser.error("fixture options cannot be combined with a workflow submit")
+        try:
+            event = strict_json(args.event)
+        except (ValueError, RecursionError, UnicodeError):
+            parser.error("--event must be one JSON value")
+        # Version 1 has no backend field. --backend is accepted so the
+        # fixture-shaped command can add the workflow flags.
+        return {
+            "version": 1,
+            "submission_key": args.key,
+            "workflow": args.workflow,
+            "job_id": args.job_id,
+            "event": event,
+            "image": args.image,
+        }
+    if args.backend is None:
+        parser.error("fixture submit requires --backend development")
+    return {
+        "version": 0,
+        "submission_key": args.key,
+        "backend": args.backend,
+        "fixture": {
+            "exit_code": 0 if args.exit_code is None else args.exit_code,
+            "delay_ms": 0 if args.delay_ms is None else args.delay_ms,
+            "output": "development fixture completed\n" if args.output is None else args.output,
+        },
+    }
+
+
+def follow_run(state, run_id):
+    """Print status and log pages until the run is terminal and its log is consumed."""
+
+    seen = None
+    cursor = None
+    while True:
+        reply = call(state, "run.get", {"run_id": run_id})
+        if "error" in reply:
+            return reply
+        state_name = reply["result"]["state"]
+        if state_name != seen:
+            print(canonical(reply), flush=True)
+            seen = state_name
+        params = {"run_id": run_id}
+        if cursor is not None:
+            params["cursor"] = cursor
+        while True:
+            page = call(state, "run.logs", params)
+            if "error" in page:
+                return page
+            result = page["result"]
+            if result.get("data_base64"):
+                print(canonical(page), flush=True)
+            cursor = result["next_cursor"]
+            params["cursor"] = cursor
+            if result["end_of_stream"]:
+                if seen not in TERMINAL:
+                    reply = call(state, "run.get", {"run_id": run_id})
+                    if "error" in reply:
+                        return reply
+                    if reply["result"]["state"] != seen:
+                        print(canonical(reply), flush=True)
+                return reply
+            if not result.get("data_base64"):
+                break
+        time.sleep(POLL_SECONDS)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rookrunner development execution contract")
     parser.add_argument("--state", required=True, help="private worker state directory")
@@ -62,12 +139,24 @@ def main():
     snapshot.add_argument("--repository", required=True)
     snapshot.add_argument("--workflow", required=True)
     snapshot.add_argument("--include", action="append", default=[])
-    submit = commands.add_parser("submit", help="submit a synthetic development fixture")
-    submit.add_argument("--backend", choices=["development"], required=True)
+    submit = commands.add_parser("submit", help="submit a development fixture or a workflow job")
+    submit.add_argument(
+        "--backend",
+        choices=["development"],
+        help="required for a development fixture; accepted and not sent for a workflow job",
+    )
     submit.add_argument("--key", required=True, help="persistent submission key; reuse to retry")
-    submit.add_argument("--exit-code", type=int, default=0)
-    submit.add_argument("--delay-ms", type=int, default=0)
-    submit.add_argument("--output", default="development fixture completed\n")
+    submit.add_argument("--exit-code", type=int)
+    submit.add_argument("--delay-ms", type=int)
+    submit.add_argument("--output")
+    submit.add_argument("--workflow", help="workflow path inside the worker's repository")
+    submit.add_argument("--job-id", help="job to run from that workflow")
+    submit.add_argument("--event", help="one JSON value stored as the version 1 event input")
+    submit.add_argument("--image", help="digest-pinned image id or name@sha256 pin")
+    follow = commands.add_parser(
+        "follow", help="poll status and log pages until the run is terminal"
+    )
+    follow.add_argument("run_id")
     for name in ("get", "cancel", "logs", "artifacts"):
         command = commands.add_parser(name)
         command.add_argument("run_id")
@@ -100,19 +189,15 @@ def main():
                 if getattr(args, name, None) is not None:
                     params[name] = getattr(args, name)
         elif args.command == "submit":
-            method, params = (
-                "run.submit",
-                {
-                    "version": 0,
-                    "submission_key": args.key,
-                    "backend": args.backend,
-                    "fixture": {
-                        "exit_code": args.exit_code,
-                        "delay_ms": args.delay_ms,
-                        "output": args.output,
-                    },
-                },
-            )
+            method, params = "run.submit", submit_params(parser, args)
+        elif args.command == "follow":
+            reply = follow_run(args.state, args.run_id)
+            if "error" in reply:
+                print(canonical(reply))
+                sys.exit(1)
+            record = reply["result"]
+            succeeded = record["state"] == "succeeded" and record["exit_code"] == 0
+            sys.exit(0 if succeeded else 1)
         else:
             method = "run." + args.command
             params = {"run_id": args.run_id} if hasattr(args, "run_id") else {}
