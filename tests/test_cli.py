@@ -130,6 +130,19 @@ class CliUsageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Worker(".", ".", network="host")
 
+    def test_worker_docker_socket_is_off_unless_requested(self):
+        result = run_cli("unused-state", "worker", "--repository", "unused-repo", "--docker-socket")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertNotIn("unrecognized arguments", result.stderr)
+        with tempfile.TemporaryDirectory(prefix="cli-socket-") as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            state = Path(directory) / "state"
+            self.assertIs(Worker(repo, state).docker_socket, False)
+            self.assertIs(Worker(repo, state, docker_socket=True).docker_socket, True)
+        with self.assertRaises(ValueError):
+            Worker(".", ".", docker_socket="on")
+
 
 class CliWorkerTests(unittest.TestCase):
     def setUp(self):

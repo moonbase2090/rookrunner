@@ -143,6 +143,18 @@ def main():
             "none turns that access off."
         ),
     )
+    worker.add_argument(
+        "--docker-socket",
+        action="store_true",
+        help=(
+            "bind-mount the host Docker engine socket into the job container. "
+            "The job keeps its user and is added to the groups that can open "
+            "that socket. GitHub requires an active Docker service for "
+            "container-dependent work on a self-hosted runner "
+            "(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners). "
+            "Off by default. Host credential directories stay unmounted."
+        ),
+    )
     commands.add_parser("describe")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
@@ -189,7 +201,13 @@ def main():
             print(canonical({"snapshot": result}))
             return
         if args.command == "worker":
-            serve(args.repository, args.state, args.disk_budget_bytes, args.network)
+            serve(
+                args.repository,
+                args.state,
+                args.disk_budget_bytes,
+                args.network,
+                args.docker_socket,
+            )
             return
         if args.command == "describe":
             method, params = "worker.describe", {}

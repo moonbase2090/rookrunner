@@ -5,7 +5,11 @@ or reads a workflow. Version 1 captures the repository, verifies that
 snapshot, plans one selected job, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
 caller-pinned container. That container uses Docker network `bridge` unless
-this worker was started with network `none`. Cancelling a running workflow
+this worker was started with network `none`. It mounts the Docker engine
+socket only when this worker was started with the docker socket flag. The
+job then keeps the caller uid and is added to the groups that can open
+that socket.
+Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
@@ -216,10 +220,15 @@ def _step_failure_message(outcome, image_ok):
 
 
 class Worker:
-    def __init__(self, repository, state, disk_budget=None, *, network=DEFAULT_NETWORK):
+    def __init__(
+        self, repository, state, disk_budget=None, *, network=DEFAULT_NETWORK, docker_socket=False
+    ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
+        if type(docker_socket) is not bool:
+            raise ValueError("docker socket must be a boolean")
         self.network = network
+        self.docker_socket = docker_socket
         if disk_budget is None:
             disk_budget = DEFAULT_DISK_BUDGET
         # bool is an int subclass. A flag is not a byte count.
@@ -711,6 +720,7 @@ class Worker:
             event,
             owner=owner,
             network=self.network,
+            docker_socket=self.docker_socket,
         )
 
     def _abandoned(self, run_id):
@@ -1384,8 +1394,8 @@ class Worker:
             self.close()
 
 
-def serve(repository, state, disk_budget=None, network=DEFAULT_NETWORK):
-    worker = Worker(repository, state, disk_budget, network=network)
+def serve(repository, state, disk_budget=None, network=DEFAULT_NETWORK, docker_socket=False):
+    worker = Worker(repository, state, disk_budget, network=network, docker_socket=docker_socket)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()

@@ -53,8 +53,10 @@ The runtime owns attempt workspaces, container/process identities, and lifecycle
 operations directly. It emits structured events to the worker rather than parsing
 another workflow engine's console output. Persist ownership before launch; reconcile
 interrupted ownership before accepting conflicting execution. Use disposable test
-environments for real execution checks, and never mount the Docker socket or host
-credentials into ordinary job containers by default.
+environments for real execution checks, and do not mount the Docker socket
+or host credentials into ordinary job containers unless the worker was
+started with `--docker-socket`. That flag exposes the host Docker service
+to the job. The job keeps the caller user. Host credentials stay unmounted.
 
 ## M2 implementation order
 

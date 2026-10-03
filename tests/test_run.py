@@ -473,6 +473,24 @@ class SetupTests(unittest.TestCase):
         self.assertIn("container network is not accepted", str(raised.exception))
         self.assertFalse(self.marker.exists())
 
+    def test_missing_docker_socket_is_rejected_before_docker(self):
+        plain = self.root / "not-a-socket"
+        plain.write_text("no\n")
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                self.plan,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.docker),
+                docker_socket=str(plain),
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertEqual(str(raised.exception), "Docker socket is not available")
+        self.assertFalse(self.marker.exists())
+
     def test_changed_workspace_is_not_a_step_exit(self):
         (self.workspace / "source.txt").write_text("changed\n")
         with self.assertRaises(RunError) as raised:
@@ -651,6 +669,51 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(creates[-1][creates[-1].index("--network") + 1], "none")
         rendered = "\n".join(repr(call) for call in self._calls())
         self.assertNotIn("docker.sock", rendered)
+
+    def test_docker_socket_reaches_the_engine(self):
+        probe = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: |
+          python -c 'import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5); s.connect("/var/run/docker.sock"); s.sendall(b"GET /version HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n"); data=s.recv(256); raise SystemExit(0 if data.startswith(b"HTTP/") else 1)'
+"""
+        root = self.root / "socket"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, probe)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(probe),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            docker_socket=True,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        create = creates[-1]
+        mounts = [
+            item
+            for item in create
+            if item.startswith("type=bind,source=") and "destination=/var/run/docker.sock" in item
+        ]
+        self.assertEqual(len(mounts), 1)
+        source = mounts[0].split("source=", 1)[1].split(",", 1)[0]
+        info = os.stat(source)
+        self.assertTrue(stat.S_ISSOCK(info.st_mode), "mounted source is not a socket")
+        self.assertEqual(create[create.index("--user") + 1], f"{os.getuid()}:{os.getgid()}")
+        groups = [create[index + 1] for index, item in enumerate(create) if item == "--group-add"]
+        expected = {"0"}
+        if info.st_gid != 0:
+            expected.add(str(info.st_gid))
+        self.assertEqual(set(groups), expected)
+        self.assertNotIn("--privileged", create)
+        rendered = "\n".join(repr(call) for call in self._calls())
+        self.assertNotIn(".ssh", rendered)
 
     def test_nonzero_step_stops_and_names_the_digest(self):
         fail_root = self.root / "fail"
