@@ -71,7 +71,8 @@
         "status": {
           "enum": [
             "succeeded",
-            "failed"
+            "failed",
+            "skipped"
           ]
         },
         "exit_code": {

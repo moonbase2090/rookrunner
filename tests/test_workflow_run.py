@@ -283,9 +283,10 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertIsNone(done["error"])
         self.assertEqual(done["input"]["image_digest"], self.image)
         self.assertEqual(done["input"]["digest"], submitted["input"]["digest"])
-        self.assertEqual([step["id"] for step in done["steps"]], ["one", "fail"])
+        self.assertEqual([step["id"] for step in done["steps"]], ["one", "fail", "after"])
         self.assertEqual(done["steps"][1]["name"], "fail step")
         self.assertEqual(done["steps"][1]["exit_code"], 3)
+        self.assertEqual(done["steps"][2]["status"], "skipped")
         self.assertEqual(self.log_bytes(done["run_id"], 3), b"before\n")
 
     def test_setup_failure_has_null_exit_and_structured_error(self):

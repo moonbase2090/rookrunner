@@ -65,7 +65,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 1)
+        self.assertEqual(plan["capability_version"], 2)
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["name"], "Build")
         self.assertEqual(plan["job"]["runs_on"], "ubuntu-latest")
@@ -364,13 +364,6 @@ jobs:
     steps:
       - run: echo there
 """,
-            "jobs.test.steps.0.if": """\
-jobs:
-  test:
-    steps:
-      - if: ${{ false }}
-        run: echo hi
-""",
         }
         for field, workflow in cases.items():
             with self.subTest(field=field):
@@ -380,6 +373,62 @@ jobs:
                 self.assertEqual(raised.exception.field, field)
                 self.assertIn(field, str(raised.exception))
                 self.assertIn("capability is unsupported", str(raised.exception))
+
+    def test_step_if_is_stored_and_not_evaluated(self):
+        workflow = """\
+jobs:
+  test:
+    steps:
+      - if: ${{ github.event.kind == 'local' }}
+        run: echo hi
+      - if: false
+        run: echo no
+"""
+        steps = plan_workflow(workflow.encode(), "test")["plan"]["job"]["steps"]
+        self.assertEqual(steps[0]["if"], "${{ github.event.kind == 'local' }}")
+        self.assertEqual(steps[0]["run"], "echo hi")
+        self.assertEqual(steps[1]["if"], "false")
+        self.assertNotIn("result", steps[0])
+
+    def test_unavailable_context_and_hashfiles_are_rejected(self):
+        secret = """\
+jobs:
+  test:
+    steps:
+      - if: secrets.NAME
+        run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(secret.encode(), "test")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.test.steps.0.if")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        hashed = """\
+jobs:
+  test:
+    steps:
+      - if: hashFiles('*.txt')
+        run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(hashed.encode(), "test")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.test.steps.0.if")
+        self.assertIn("hashFiles", str(raised.exception))
+        self.assertIn("capability is unsupported", str(raised.exception))
+
+    def test_job_if_stays_unsupported(self):
+        workflow = """\
+jobs:
+  test:
+    if: success()
+    steps:
+      - run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow.encode(), "test")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.test.if")
 
     def test_yaml_alias_is_rejected(self):
         workflow = """\

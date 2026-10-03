@@ -963,7 +963,7 @@ class Worker:
             "backend": {"name": "workflow", "version": __version__},
             "compatibility_notes": [
                 "One sequential run job in a caller-pinned container.",
-                "Expressions, actions, needs, secrets, matrices, and services are not claimed.",
+                "Step if is evaluated. Other expressions, actions, needs, secrets, matrices, and services are not claimed.",
             ],
             "accepted_at": now(),
             "started_at": None,

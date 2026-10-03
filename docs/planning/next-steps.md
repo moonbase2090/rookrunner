@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-12 are
+roadmap step 1 and the first executable subset. NS-1 through NS-13 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -106,17 +106,20 @@ Workflow env is overridden by job env, then by step env. The runner then
 sets `GITHUB_WORKSPACE` and `ROOKRUNNER_EVENT`. The event file is the
 caller's canonical JSON, not a GitHub event delivery. The container network
 is `none`. The Docker socket and host credentials are not mounted. A nonzero
-step stops the sequence. The result names that step, its exit code, and the
-image digest. Docker missing, an unresolvable digest, and a workspace or
-snapshot that fails verification raise `SETUP_FAILED` and are not exit 0.
+step fails the job. A later step runs only when its condition is true;
+otherwise it is skipped and does not run. The result names the first failed
+step, its exit code, and the image digest. Docker missing, an unresolvable
+digest, and a workspace or snapshot that fails verification raise
+`SETUP_FAILED` and are not exit 0.
 
 Acceptance criteria:
 
 - One job's `run` steps execute in order in one digest-identified container.
   Documented shell, env, and working-directory behavior for this subset is
   tested, not approximated.
-- Exit 0 is success. A later step's nonzero exit is failure and stops the
-  sequence. The result names the step, the exit code, and the image digest.
+- Exit 0 is success. A later step's nonzero exit is failure. Later steps
+  whose condition is false are skipped and do not run. The result names the
+  first failed step, the exit code, and the image digest.
 - The event input is an explicit local value supplied by the caller. It is
   not a GitHub event delivery.
 - Docker missing, a digest that will not resolve, or a workspace that fails
@@ -362,17 +365,55 @@ Acceptance criteria:
   an empty manifest, not a capability error. Development fixtures still
   report artifacts unsupported.
 
+**NS-13. Expression and context evaluator.**
+
+Status: implemented.
+
+Capability version is 2. The planner stores step `if` text and checks that
+it parses. It does not evaluate it. At runtime an owned parser evaluates
+that condition. Python `eval` is not used. An omitted `if` is `success()`.
+An `if` that does not call `success`, `failure`, `always`, or `cancelled`
+is `success()` combined with that expression. A false condition records the
+step `skipped` and does not run it. A failed step does not stop a later
+step whose condition is true. The first failed step remains the job failure.
+
+Contexts available on `jobs.<job_id>.steps.if` are `github`, `needs`,
+`strategy`, `matrix`, `job`, `runner`, `env`, `vars`, `steps`, and `inputs`
+(https://docs.github.com/en/actions/reference/workflows-and-actions/contexts).
+An unavailable context, including `secrets`, is an error. A missing property
+of an available context is an empty string. `github.event` is the
+caller-supplied event. Other `github` properties are not invented.
+`runner.os` is `Linux` because this subset runs in a Linux container.
+`needs`, `strategy`, `matrix`, `vars`, and `inputs` are empty objects.
+`steps.<id>.outcome` and `steps.<id>.conclusion` are `success`, `failure`,
+or `skipped`. `steps.<id>.outputs` is empty. `env` is the workflow, job,
+and step env map, and `${{ }}` in those values stays literal.
+
+Operators, types, and the functions used by this subset follow the
+expression reference
+(https://docs.github.com/en/actions/reference/workflows-and-actions/expressions).
+`hashFiles` is not implemented. Expressions in `run`, `env`, and `name`
+stay literal. Job `if`, `needs`, and matrices stay unsupported. This is not
+a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A dedicated evaluator implements the documented operators, types, and
+  functions used by the subset. Python `eval` is not used.
+- An unavailable context is an error. A missing property of an available
+  context is an empty string.
+- `if` on a step can skip it.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-twelve PRs. Each one updates the capability version, rejects anything it
+thirteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-13 | Expression and context evaluator | A dedicated evaluator implements the documented operators, types, and functions used by the subset. Python `eval` is not used. An unavailable context is an error. A missing property of an available context is an empty string. `if` on a step can skip it. |
 | NS-14 | Job `needs` and outputs | A selected job includes its dependency closure. Skip and failure propagation match the documented rules under test. A dependency outside the selection fails planning. Outputs that look like secrets are not copied into the next job. |
 | NS-15 | Environment files and workflow commands | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, and the documented commands apply to later steps. `add-mask` masks subsequent logs of that exact string. Deprecated `set-env` and `add-path` stay disabled. |
 | NS-16 | One action runtime | Composite, JavaScript, or Docker actions are added one runtime per PR. The action comes from the snapshot or from a recorded digest. A moving ref after acceptance does not change the run. |
@@ -384,5 +425,5 @@ GitHub-equivalent.
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-13 through NS-20 can follow that evidence. They are not required
+restart. NS-14 through NS-20 can follow that evidence. They are not required
 to say the first subset runs.

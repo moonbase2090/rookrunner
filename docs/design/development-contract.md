@@ -107,6 +107,15 @@ the plan and the limits page states no per-file or per-job count
 the attempt workspace under the configured disk budget. This is not an
 upload-artifact zip. The manifest is retained with the workspace until the
 state directory is removed. Pruning is not implemented.
+Step `if` is evaluated with the documented operators, types, and functions
+used by this subset
+(https://docs.github.com/en/actions/reference/workflows-and-actions/expressions).
+Contexts follow the availability table for `jobs.<job_id>.steps.if`
+(https://docs.github.com/en/actions/reference/workflows-and-actions/contexts).
+An unavailable context is an error. A missing property of an available
+context is an empty string. Text in `run` and `env` is not expanded.
+`hashFiles`, job `if`, `needs`, and `secrets` are not this slice. This is
+not a GitHub-equivalence claim.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,
