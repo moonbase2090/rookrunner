@@ -1057,3 +1057,141 @@ jobs:
         self.assertEqual(len(result["steps"]), 1)
         self.assertEqual(result["steps"][0]["status"], "failed")
         self.assertEqual((workspace / "after.txt").read_text(), "after\n")
+
+    def _matrix_job(self, workflow, job_id="build"):
+        root = self.root / job_id
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan_workflow(workflow.encode(), job_id)["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        return result, workspace
+
+    def test_fail_fast_skips_later_combinations(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    strategy:
+      matrix:
+        version: [1, 2]
+    steps:
+      - if: matrix.version == 1
+        run: printf 'one\\n' >> "$GITHUB_WORKSPACE/order.txt"
+      - if: matrix.version == 1
+        run: exit 1
+      - if: matrix.version == 2
+        run: printf 'two\\n' >> "$GITHUB_WORKSPACE/order.txt"
+"""
+        result, workspace = self._matrix_job(workflow)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual((workspace / "order.txt").read_text(), "one\n")
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["succeeded", "failed", "skipped"],
+        )
+
+    def test_fail_fast_false_runs_every_combination(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        version: [1, 2]
+    steps:
+      - if: matrix.version == 1
+        run: printf 'one\\n' >> "$GITHUB_WORKSPACE/order.txt"
+      - if: "${{ strategy.max-parallel == 1 && strategy.job-total == 2 }}"
+        run: printf 'cap\\n' >> "$GITHUB_WORKSPACE/order.txt"
+      - if: matrix.version == 1
+        run: exit 1
+      - if: matrix.version == 2
+        run: printf 'two\\n' >> "$GITHUB_WORKSPACE/order.txt"
+"""
+        result, workspace = self._matrix_job(workflow)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual((workspace / "order.txt").read_text(), "one\ncap\ncap\ntwo\n")
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            [
+                "succeeded",
+                "succeeded",
+                "failed",
+                "skipped",
+                "skipped",
+                "succeeded",
+                "skipped",
+                "succeeded",
+            ],
+        )
+
+    def test_combinations_run_in_order_under_max_parallel(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    strategy:
+      max-parallel: 2
+      matrix:
+        version: [1, 2]
+    steps:
+      - if: strategy.job-index == 0
+        run: printf 'zero\\n' >> "$GITHUB_WORKSPACE/order.txt"
+      - if: strategy.job-index == 1
+        run: printf 'one\\n' >> "$GITHUB_WORKSPACE/order.txt"
+      - if: strategy.fail-fast
+        run: printf 'fast\\n' >> "$GITHUB_WORKSPACE/order.txt"
+"""
+        result, workspace = self._matrix_job(workflow)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "order.txt").read_text(), "zero\nfast\none\nfast\n")
+
+    def test_matrix_job_outputs_are_not_copied_to_needs(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    strategy:
+      matrix:
+        version: [1]
+    outputs:
+      value: ${{ matrix.version }}
+    steps:
+      - run: printf 'built\\n' >> "$GITHUB_WORKSPACE/order.txt"
+  report:
+    needs: build
+    steps:
+      - if: "${{ needs.build.outputs.value == '' }}"
+        run: printf 'empty\\n' >> "$GITHUB_WORKSPACE/order.txt"
+"""
+        result, workspace = self._matrix_job(workflow, "report")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "order.txt").read_text(), "built\nempty\n")
+
+    def test_excluded_matrix_runs_no_steps(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    strategy:
+      matrix:
+        version: [1]
+        exclude:
+          - version: 1
+    steps:
+      - run: printf 'ran\\n' > "$GITHUB_WORKSPACE/order.txt"
+"""
+        result, workspace = self._matrix_job(workflow)
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["steps"], [])
+        self.assertFalse((workspace / "order.txt").exists())

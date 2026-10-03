@@ -22,8 +22,9 @@ and stdout workflow commands apply to later steps in the same job. The
 selected job runs after the jobs it needs, one at a time, in one
 caller-pinned container and one attempt workspace. Workflow `run` and `env`
 text stay literal. Local composite actions with `run` steps are read from
-the snapshot. `hashFiles`, matrices, JavaScript actions, Docker actions, and
-a secret store stay unsupported. This is not a GitHub-equivalence claim.
+the snapshot. A literal job matrix is expanded. `hashFiles`, matrix
+expressions, JavaScript actions, Docker actions, and a secret store stay
+unsupported. This is not a GitHub-equivalence claim.
 The rest of this plan is not.
 
 ## Execution path
@@ -79,8 +80,8 @@ to the job. The job keeps the caller user. Host credentials stay unmounted.
 Do not advertise expression positions other than step `if`, job `if`, job
 outputs, and whole-string expressions in composite `env`, action output
 `value`, and the calling step's `with`. Do not advertise JavaScript
-actions, Docker actions, remote `uses`, matrices, services, or reusable
-workflows while building this path. Early rejection is temporary capability
+actions, Docker actions, remote `uses`, matrix expressions, services, or
+reusable workflows while building this path. Early rejection is temporary capability
 status, not a decision to abandon those features.
 
 ## Compatibility expansion
@@ -93,7 +94,7 @@ status, not a decision to abandon those features.
 | Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Implemented for the selected job's `needs` closure. Jobs run one at a time in one container and one workspace. A dependency outside the workflow fails planning. An output expression that reads `secrets` is omitted. Not a GitHub-equivalence claim |
 | Runtime communication | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, state files, workflow commands and masking | Implemented for the three files and documented stdout commands, including `add-mask`, for later steps in the same job. `set-env` and `add-path` are disabled. State files and job summaries are not. Not a GitHub-equivalence claim |
 | Action types | Composite, JavaScript, and Docker actions; inputs/outputs; setup/main/post lifecycle | Implemented for local composite actions whose steps are `run` steps, loaded from the snapshot (`./` and `$/`). The plan records a digest of the parsed action and the run executes that plan. JavaScript and Docker actions are not implemented. Nested `uses` is not implemented. Not a GitHub-equivalence claim |
-| Strategies | Matrix expansion, include/exclude, fail-fast, max-parallel, concurrency | Not implemented |
+| Strategies | Matrix expansion, include/exclude, fail-fast, max-parallel, concurrency | Implemented for a literal matrix. Include, exclude, fail-fast, and max-parallel follow the workflow syntax page. A matrix over 256 jobs is rejected. Combinations run one at a time in the one caller-pinned container. Matrix expressions and `continue-on-error` are not implemented. Not a GitHub-equivalence claim |
 | Reuse | Reusable workflows, typed inputs, outputs, nesting, explicit secret handling | Not implemented |
 | Repository behavior | Sanitized Git metadata and checkout semantics consistent with identified source | Capture exists; Git/checkout execution unsupported |
 | Services and artifacts | Owned service containers, readiness, cache/artifact interfaces and cleanup | Not implemented |

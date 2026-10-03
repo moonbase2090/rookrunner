@@ -163,10 +163,11 @@ Expressions in workflow `run` and `env` stay literal. A composite `run`
 stays literal. Environment files and workflow commands for later steps in
 the same job are implemented. Local composite actions from the snapshot are
 implemented. The differences are in the [next steps](planning/next-steps.md).
-JavaScript actions, Docker actions, matrices, reusable workflows, and
-services are later increments of the same engine.
-They are not promised in the first slice, and they are not permanently
-excluded.
+JavaScript actions, Docker actions, reusable workflows, and
+services are later increments of the same engine. Those later increments
+are not promised in the first slice, and they are not permanently
+excluded. A literal job matrix, with include, exclude, fail-fast, and
+max-parallel, runs one combination at a time in the same container.
 
 ## First usable release
 
@@ -203,7 +204,7 @@ demonstrates. It is not a waiver.
 | P06 | Bound output consumption | Clients page logs by cursor; large output does not require loading the entire log | Met for development logs and for workflow step stdout and stderr. Pages are 1–65536 bytes. A page contains only the requested slice. |
 | P07 | Cancel owned execution | Cancellation stops backend processes and owned containers, then records confirmed cleanup or an unresolved outcome | Development fixtures own no processes or containers. Their cancellation is recorded. Cancelling a queued workflow run does not start a container. Cancelling a running workflow run stops the owned container, then records `cancelled` with `cancel_requested` true after the container is gone. If the container remains, the run is `lost` with cleanup `unresolved` and a new workflow attempt is refused until this process stops. A job or step timeout still stops the owned container and records the timeout result. Restart removes a leftover owned container, or records that attempt `lost` with cleanup `unresolved` and does not reuse its container or workspace. |
 | P08 | Recover after restart | Accepted queued work remains discoverable; interrupted work cannot silently become successful or execute twice | Met for the development backend and for a workflow attempt. Queued work remains and can start. An interrupted attempt becomes `lost` and is not run again. The same submission key returns that run. A second worker cannot take the state directory. |
-| P09 | Explain compatibility | Unsupported requested features produce explicit capability errors or recorded limitations before execution | The planner rejects unsupported workflow fields by name before a plan exists. A workflow file larger than 500 KB is a capability error and creates no run. A step `timeout-minutes` above 360 minutes is a capability error and creates no run. Version 1 submission of those fields creates no run. `run_job` rejects an unsupported shell instead of reporting exit 0. `worker.describe` advertises `workflow.job` and does not advertise JavaScript or Docker actions, secrets, matrices, or services. Development command, secret, and artifact requests are rejected. |
+| P09 | Explain compatibility | Unsupported requested features produce explicit capability errors or recorded limitations before execution | The planner rejects unsupported workflow fields by name before a plan exists. A workflow file larger than 500 KB is a capability error and creates no run. A step `timeout-minutes` above 360 minutes is a capability error and creates no run. Version 1 submission of those fields creates no run. `run_job` rejects an unsupported shell instead of reporting exit 0. `worker.describe` advertises `workflow.job` and does not advertise JavaScript or Docker actions, secrets, or services. A job matrix is expanded, with the differences recorded in the next steps. Development command, secret, and artifact requests are rejected. |
 | P10 | Protect local access | Other OS users cannot submit through the socket; secrets are excluded from automatic source capture | State directory mode 0700 and socket mode 0600 are tested. Capture excludes known credential paths and ignores an explicit include of those paths. This is not universal secret detection. |
 | P11 | Serve agents and humans consistently | CLI and MCP observe the same run identifiers, states, logs, and errors | CLI JSON only. MCP is not implemented. |
 | P12 | Preserve execution evidence | Result identifies source/workflow digests, engine version, image identity, timing, and exit status | A development result identifies the fixture digest, backend name and version `0.0.1`, timestamps, and exit status. An executed workflow job records the snapshot, manifest, workflow, plan, and image digests, per-step records, and an exit status. A setup failure records those digests, a null exit code, and a structured error. |
