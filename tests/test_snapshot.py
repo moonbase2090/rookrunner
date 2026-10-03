@@ -353,10 +353,18 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(metadata["git_object_format"], manifest["git_object_format"])
         self.assertEqual(metadata["head"], "refs/heads/main")
         self.assertFalse((files / ".git").exists())
+        planned = plan_workflow(
+            b"name: fixture\non: push\njobs:\n  build:\n    steps:\n"
+            b"      - uses: actions/checkout@v4\n",
+            "build",
+        )["plan"]
+        step = planned["job"]["steps"][0]
+        self.assertEqual(step["checkout"], "captured")
+        self.assertNotIn("action_path", step)
         with self.assertRaises(PlanError) as raised:
             plan_workflow(
                 b"name: fixture\non: push\njobs:\n  build:\n    steps:\n"
-                b"      - uses: actions/checkout@v4\n",
+                b"      - uses: actions/checkout@v7\n",
                 "build",
             )
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")

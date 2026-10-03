@@ -6,12 +6,14 @@ import unittest
 from unittest.mock import patch
 
 from execution_core.plan import (
+    CAPABILITY_VERSION,
     DEFAULT_JOB_TIMEOUT_MINUTES,
     MAX_CALLED_WORKFLOWS,
     MAX_JOB_TIMEOUT_MINUTES,
     MAX_STEP_TIMEOUT_MINUTES,
     MAX_WORKFLOW_BYTES,
     MAX_WORKFLOW_LEVELS,
+    STEP_KEYS,
     PlanError,
     plan_snapshot,
     plan_workflow,
@@ -67,7 +69,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 8)
+        self.assertEqual(plan["capability_version"], 9)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertIsNone(plan["job"]["strategy"])
@@ -293,7 +295,7 @@ jobs:
 jobs:
   test:
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 """,
             "jobs.test.uses": """\
 jobs:
@@ -833,7 +835,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 8)
+            self.assertEqual(first["plan"]["capability_version"], 9)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -1443,7 +1445,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             b"on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
             "build",
         )["plan"]
-        self.assertEqual(plan["capability_version"], 8)
+        self.assertEqual(plan["capability_version"], 9)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertEqual(plan["workflow"]["on"], "workflow_call")
@@ -1898,6 +1900,143 @@ def write_snapshot(root, workflow, files):
         path.write_text(text)
     (base / "manifest.json").write_text(json.dumps({"workflow": ".github/workflows/test.yml"}))
     return base
+
+
+class CheckoutPlanTests(unittest.TestCase):
+    def plan(self, workflow, job_id="build"):
+        return plan_workflow(workflow.encode(), job_id)["plan"]
+
+    def reject(self, workflow, job_id="build"):
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow.encode(), job_id)
+        return raised.exception
+
+    def test_owned_checkout_records_captured_files(self):
+        self.assertEqual(CAPABILITY_VERSION, 9)
+        self.assertNotIn("checkout", STEP_KEYS)
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: co
+        name: checkout
+        if: github.sha == ''
+        shell: not-a-shell
+        working-directory: missing-dir
+        timeout-minutes: 1
+        env:
+          MODE: kept
+        uses: actions/checkout@v4
+"""
+        plan = self.plan(workflow)
+        self.assertEqual(plan["capability_version"], 9)
+        step = plan["job"]["steps"][0]
+        self.assertEqual(step["uses"], "actions/checkout@v4")
+        self.assertEqual(step["checkout"], "captured")
+        self.assertEqual(step["id"], "co")
+        self.assertEqual(step["name"], "checkout")
+        self.assertEqual(step["if"], "github.sha == ''")
+        self.assertEqual(step["shell"], "not-a-shell")
+        self.assertEqual(step["working_directory"], "missing-dir")
+        self.assertEqual(step["timeout_minutes"], 1)
+        self.assertEqual(step["env"], {"MODE": "kept"})
+        self.assertNotIn("with", step)
+        for absent in ("action_path", "action_digest", "steps", "inputs", "outputs", "run"):
+            self.assertNotIn(absent, step)
+
+    def test_false_checkout_flags_are_stored(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: false
+"""
+        step = self.plan(workflow)["job"]["steps"][0]
+        self.assertEqual(step["with"], {"persist-credentials": False, "clean": False})
+        self.assertEqual(step["checkout"], "captured")
+        self.assertNotIn("action_path", step)
+
+    def test_rejected_checkout_inputs_name_the_field(self):
+        keys = [
+            "token",
+            "ssh-key",
+            "ssh-known-hosts",
+            "ssh-strict",
+            "ssh-user",
+            "repository",
+            "ref",
+            "path",
+            "fetch-depth",
+            "fetch-tags",
+            "submodules",
+            "lfs",
+            "sparse-checkout",
+            "sparse-checkout-cone-mode",
+            "filter",
+            "set-safe-directory",
+            "github-server-url",
+            "show-progress",
+        ]
+        cases = [("clean", "true"), ("persist-credentials", "true")]
+        cases.extend((key, "ignored") for key in keys)
+        for key, value in cases:
+            field = f"jobs.build.steps.0.with.{key}"
+            workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          {key}: {value}
+"""
+            with self.subTest(field=field):
+                error = self.reject(workflow)
+                self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+                self.assertEqual(error.field, field)
+                self.assertIn(field, str(error))
+
+    def test_non_boolean_checkout_flag_is_invalid(self):
+        for value in ('"false"', "0", "yes"):
+            workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: {value}
+"""
+            with self.subTest(value=value):
+                error = self.reject(workflow)
+                self.assertEqual(error.kind, "WORKFLOW_INVALID")
+                self.assertEqual(error.field, "jobs.build.steps.0.with.clean")
+                self.assertIn("must be a boolean", str(error))
+
+    def test_other_checkout_uses_stay_rejected(self):
+        for uses in (
+            "actions/checkout",
+            "actions/checkout@v3",
+            "actions/checkout@v5",
+            "actions/checkout@v7",
+            "actions/setup-node@v4",
+        ):
+            workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: {uses}
+"""
+            with self.subTest(uses=uses):
+                error = self.reject(workflow)
+                self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+                self.assertEqual(error.field, "jobs.build.steps.0.uses")
 
 
 if __name__ == "__main__":

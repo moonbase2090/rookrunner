@@ -106,6 +106,16 @@ job deadline; the step timeout is not a shared budget across inner steps.
 This is not a GitHub-equivalence claim.
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 
+`uses: actions/checkout@v4` is an owned checkout of the files already in
+the workspace. The plan stores `checkout` as `captured`. The step does not
+start a process, does not modify the workspace, does not create `.git`,
+does not read `git.json`, and does not contact a network. It succeeds with
+exit code 0 and publishes no outputs. `clean: false` and
+`persist-credentials: false` are the only accepted `with` values. Omitting
+either key does not mean the upstream default of true
+(https://github.com/actions/checkout). This is not a GitHub-equivalence
+claim.
+
 The job deadline is `timeout-minutes` on the plan (default 360). It starts
 when `run_job` starts and covers setup and steps. Reaching it stops the owned
 container and returns status `cancelled`. A step `timeout-minutes` fails that
@@ -347,7 +357,9 @@ def _accept_jobs(jobs):
             for index, step in enumerate(steps):
                 if not isinstance(step, dict) or step.get("index") != index:
                     _setup("plan is not accepted")
-                if "uses" in step:
+                if step.get("checkout") == "captured":
+                    _accept_checkout(step)
+                elif "uses" in step:
                     _accept_composite(step)
                 elif not isinstance(step.get("run"), str) or "\0" in step["run"]:
                     _setup("plan is not accepted")
@@ -415,7 +427,9 @@ def _input_literal(value):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 8:
+    # One accepted capability version. A plan from the previous version is
+    # rejected here and is not migrated.
+    if not isinstance(plan, dict) or plan.get("capability_version") != 9:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     jobs = plan.get("jobs")
@@ -468,6 +482,31 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
         reserved.update(extra_reserved)
     merged.update(reserved)
     return [(key, merged[key]) for key in sorted(merged)]
+
+
+def _accept_checkout(step):
+    """Accept an owned checkout. It has no action path and no inner steps."""
+
+    if step.get("uses") != "actions/checkout@v4" or step.get("checkout") != "captured":
+        _setup("plan is not accepted")
+    for key in ("run", "action_path", "action_digest", "steps", "inputs", "outputs"):
+        if key in step:
+            _setup("plan is not accepted")
+    if "with" in step:
+        raw = step.get("with")
+        if not isinstance(raw, dict):
+            _setup("plan is not accepted")
+        for key, value in raw.items():
+            if key not in {"clean", "persist-credentials"} or value is not False:
+                _setup("plan is not accepted")
+    _env_layer(step.get("env"))
+    for key in ("id", "name", "shell", "working_directory", "if"):
+        value = step.get(key)
+        if value is not None and (not isinstance(value, str) or "\0" in value):
+            _setup("plan is not accepted")
+    timeout = step.get("timeout_minutes")
+    if timeout is not None and type(timeout) is not int:
+        _setup("plan is not accepted")
 
 
 def _accept_composite(step):
@@ -1474,7 +1513,7 @@ def _resolve_call_inputs(slots, passed_values, default_values_for):
 
 
 def _iter_concrete(job, parent_path):
-    """Yield `(job, step)` for every run or composite step under `job`."""
+    """Yield `(job, step)` for every concrete step under `job`."""
 
     if "call" in job:
         nested = parent_path + (job["id"],)
@@ -1500,6 +1539,9 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
             _write_job_scripts(planned["call"]["jobs"], planned_path, private, scripts, counter)
             continue
         for step in planned["steps"]:
+            if step.get("checkout") == "captured":
+                scripts[(planned_path, step["index"])] = None
+                continue
             if "uses" in step:
                 names = []
                 for inner in step["steps"]:
@@ -2180,6 +2222,8 @@ def _consider_step(
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     if not enabled:
         return _step_result(step, "skipped", None, "", "", None, job_id)
+    if step.get("checkout") == "captured":
+        return _step_result(step, "succeeded", 0, "", "", None, job_id)
     if "uses" in step:
         return _run_composite(
             docker,

@@ -1,11 +1,13 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 8 records declared fields, including step and job
+run. Capability version 9 records declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
-snapshot, a literal job matrix, a local reusable workflow, and service
-containers. It checks that expressions can be parsed and does not evaluate
-them. Matrix `include` and `exclude` are expanded here. A matrix value that
+snapshot, a literal job matrix, a local reusable workflow, service
+containers, and an owned checkout of the captured files for
+`uses: actions/checkout@v4`. That checkout does not fetch a ref, replace
+those files, or persist a credential. It checks that expressions can be
+parsed and does not evaluate them. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
 snapshot. A remote workflow reference is rejected. Secrets are not passed
 to a called workflow. A service image must be pinned by digest. GitHub
@@ -37,7 +39,7 @@ from .expr import (
 )
 from .protocol import canonical
 
-CAPABILITY_VERSION = 8
+CAPABILITY_VERSION = 9
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -158,6 +160,12 @@ STEP_KEYS = {
     "uses",
     "with",
 }
+# Owned checkout of files already in the workspace. This does not read an
+# action file, fetch a ref, or run the JavaScript action. An omitted `clean`
+# or `persist-credentials` does not mean the upstream default of true.
+# https://github.com/actions/checkout
+CHECKOUT_USES = "actions/checkout@v4"
+CHECKOUT_WITH = {"clean", "persist-credentials"}
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
 # Local composite metadata only. JavaScript and Docker runtimes are rejected.
@@ -1288,14 +1296,17 @@ class _Planner:
             else:
                 uses_field = _join(step_field, "uses")
                 uses_text = self._string_scalar(body["uses"][1], uses_field)
-                action = self._composite(uses_text, uses_field)
-                recorded["uses"] = uses_text
-                recorded["action_path"] = action["path"]
-                recorded["action_digest"] = action["digest"]
-                recorded["with"] = self._action_with(body, step_field, action["inputs"])
-                recorded["inputs"] = action["inputs"]
-                recorded["outputs"] = action["outputs"]
-                recorded["steps"] = action["steps"]
+                if uses_text == CHECKOUT_USES:
+                    recorded.update(self._checkout(body, step_field))
+                else:
+                    action = self._composite(uses_text, uses_field)
+                    recorded["uses"] = uses_text
+                    recorded["action_path"] = action["path"]
+                    recorded["action_digest"] = action["digest"]
+                    recorded["with"] = self._action_with(body, step_field, action["inputs"])
+                    recorded["inputs"] = action["inputs"]
+                    recorded["outputs"] = action["outputs"]
+                    recorded["steps"] = action["steps"]
             condition = self._if_text(body, step_field, check_step_if)
             if condition is not None:
                 recorded["if"] = condition
@@ -1325,6 +1336,31 @@ class _Planner:
         if type(value) is not bool:
             _invalid(f"{field} must be a boolean", field)
         return value
+
+    def _checkout(self, body, step_field):
+        """Record an owned checkout of the captured files.
+
+        `actions/checkout` fetches a ref and, by default, persists a
+        credential and resets the work tree
+        (https://github.com/actions/checkout). This step does neither. An
+        omitted key does not mean the upstream default of true.
+        """
+
+        recorded = {"uses": CHECKOUT_USES, "checkout": "captured"}
+        if "with" not in body:
+            return recorded
+        path = _join(step_field, "with")
+        items = self._mapping(body["with"][1], path, allow_uses=True, forbid=False)
+        accepted = {}
+        for key, (_, value) in items.items():
+            field = _join(path, key)
+            if key not in CHECKOUT_WITH:
+                _unsupported(field)
+            if self._bool_scalar(value, field) is not False:
+                _unsupported(field)
+            accepted[key] = False
+        recorded["with"] = accepted
+        return recorded
 
     def _uses_relative(self, text, field):
         """Accept `./path` and `$/path`. Anything else stays unsupported.

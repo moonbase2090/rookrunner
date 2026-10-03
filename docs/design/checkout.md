@@ -1,10 +1,9 @@
 # Checkout of captured files
 
-Status: design, 2026-10-03. This document does not accept a checkout
-action. The following PR may accept one `uses` string as an owned step
-that does not replace the captured files. Until that PR,
-`uses: actions/checkout@v4` stays `CAPABILITY_UNSUPPORTED`. This is not
-a GitHub-equivalence claim.
+Status: accepted, 2026-10-03. The planner accepts
+`uses: actions/checkout@v4` as an owned step that does not replace the
+captured files. It does not read an action file, fetch a ref, or run the
+JavaScript action. This is not a GitHub-equivalence claim.
 
 The workspace already holds the captured working files before the first
 step. Those bytes include dirty files and explicitly included untracked
@@ -13,7 +12,7 @@ token and resets the work tree
 (https://github.com/actions/checkout). That reset would drop the
 captured dirty bytes. This engine does not do that.
 
-## What the following PR may accept
+## What is accepted
 
 The only accepted `uses` string is `actions/checkout@v4`. The planner
 records it as an owned checkout of the captured files. It does not read
@@ -48,8 +47,8 @@ Every other `uses` string stays rejected. That includes
 Local composite `./` and `$/` uses are unchanged.
 
 The step may still carry the existing step keys: `id`, `name`, `if`,
-`shell`, `working-directory`, `env`, and `timeout-minutes`. The
-following PR adds no step key. A false `if` skips the step. `shell`,
+`shell`, `working-directory`, `env`, and `timeout-minutes`. This
+acceptance adds no step key. A false `if` skips the step. `shell`,
 `env`, `working-directory`, and `timeout-minutes` do not start a
 process, because the step does no work.
 
@@ -57,10 +56,9 @@ process, because the step does no work.
 
 The plan stores `uses` as `actions/checkout@v4` and `checkout` as
 `captured`. It does not store an action path, an action digest, or
-inner steps. The capability version becomes 9. The runner accepts only
-that version, as it accepts only version 8 today. Every plan digest
-changes because the version field changes. This design does not bump
-the version.
+inner steps. The capability version is 9. The runner accepts only that
+version. In-flight plans from version 8 are not migrated. Every plan
+digest changes because the version field changes.
 
 When the step runs, the runner does not start a process, does not
 modify the workspace, does not create `.git`, does not read `git.json`,
@@ -73,7 +71,7 @@ added.
 `github.sha`, `github.ref`, `github.actor`, `github.repository`, and
 `github.token` stay uninvented. No `GITHUB_TOKEN` is created.
 
-## Proof for the following PR
+## Proof
 
 1. A first step `uses: actions/checkout@v4` leaves a captured dirty
    file in place. A later `run` step still sees those bytes. The

@@ -169,7 +169,7 @@ class WorkflowSubmitTests(unittest.TestCase):
             described["capabilities"],
             ["development.fixture", "run.cancel", "run.logs", "workflow.job"],
         )
-        for name in ("uses", "secrets", "matrix", "services", "actions"):
+        for name in ("uses", "secrets", "matrix", "services", "actions", "checkout"):
             self.assertNotIn(name, described["capabilities"])
 
     def test_acceptance_binds_digests_and_ignores_later_checkout_edits(self):
@@ -281,6 +281,108 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assert_fault(reply, "CAPABILITY_UNSUPPORTED", -32000)
         self.assertIn("360", reply["error"]["message"])
         self.assertIn("workflow-syntax", reply["error"]["message"])
+        self.assertEqual(self.rpc("run.list", {})["runs"], [])
+        snaps = self.state / "snapshots"
+        self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
+
+    def test_rejected_checkout_creates_no_run(self):
+        self.write_workflows()
+        rejected = {
+            "clean.yml": (
+                "clean: true",
+                "jobs.build.steps.0.with.clean",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "persist.yml": (
+                "persist-credentials: true",
+                "jobs.build.steps.0.with.persist-credentials",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "token.yml": (
+                "token: ignored",
+                "jobs.build.steps.0.with.token",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "repository.yml": (
+                "repository: example/name",
+                "jobs.build.steps.0.with.repository",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "ref.yml": (
+                "ref: main",
+                "jobs.build.steps.0.with.ref",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "fetch-depth.yml": (
+                "fetch-depth: 1",
+                "jobs.build.steps.0.with.fetch-depth",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "ssh-key.yml": (
+                "ssh-key: ignored",
+                "jobs.build.steps.0.with.ssh-key",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "submodules.yml": (
+                "submodules: true",
+                "jobs.build.steps.0.with.submodules",
+                "CAPABILITY_UNSUPPORTED",
+            ),
+            "text.yml": (
+                'clean: "false"',
+                "jobs.build.steps.0.with.clean",
+                "INVALID_PARAMS",
+            ),
+        }
+        uses = {
+            "v7.yml": "actions/checkout@v7",
+            "bare.yml": "actions/checkout",
+        }
+        for name, (body, field, kind) in rejected.items():
+            path = self.repo / ".github" / "workflows" / name
+            path.write_text(
+                "on: push\njobs:\n  build:\n    steps:\n"
+                f"      - uses: actions/checkout@v4\n        with:\n          {body}\n"
+            )
+        for name, reference in uses.items():
+            path = self.repo / ".github" / "workflows" / name
+            path.write_text(f"on: push\njobs:\n  build:\n    steps:\n      - uses: {reference}\n")
+        self.git("add", ".github/workflows")
+        self.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "checkout rejections",
+        )
+        for name, (_body, field, kind) in rejected.items():
+            with self.subTest(name=name):
+                reply = call(
+                    self.state,
+                    "run.submit",
+                    self.params(
+                        workflow=f".github/workflows/{name}",
+                        submission_key=name,
+                    ),
+                )
+                self.assert_fault(
+                    reply, kind, -32000 if kind == "CAPABILITY_UNSUPPORTED" else -32602
+                )
+                self.assertIn(field, reply["error"]["message"])
+        for name in uses:
+            with self.subTest(name=name):
+                reply = call(
+                    self.state,
+                    "run.submit",
+                    self.params(
+                        workflow=f".github/workflows/{name}",
+                        submission_key=name,
+                    ),
+                )
+                self.assert_fault(reply, "CAPABILITY_UNSUPPORTED", -32000)
+                self.assertIn("jobs.build.steps.0.uses", reply["error"]["message"])
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
         snaps = self.state / "snapshots"
         self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
