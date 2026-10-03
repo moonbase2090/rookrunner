@@ -9,7 +9,7 @@ import time
 import unittest
 
 from execution_core.attempt import materialize_attempt
-from execution_core.plan import plan_workflow
+from execution_core.plan import plan_snapshot, plan_workflow
 from execution_core.run import (
     RunError,
     _OUTPUT_JOB_BYTES,
@@ -213,6 +213,91 @@ jobs:
           printf '%s' "$ACTION_STATE" > "$GITHUB_WORKSPACE/cross.txt"
           printf '%s\\n' mask-token
 """
+COMPOSITE = """\
+on: push
+jobs:
+  build:
+    steps:
+      - name: mutate
+        run: |
+          python -c 'from pathlib import Path; p = Path("/workspace/.github/actions/hello/action.yml"); p.write_text(p.read_text().replace("PLANNED", "MUTATED"))'
+      - id: hello
+        uses: ./.github/actions/hello
+        with:
+          who: ${{ 'Mona' }}
+      - id: later
+        if: steps.hello.outputs.tone == 'loud'
+        run: |
+          printf '%s\\n' "$FROM_ACTION" > "$GITHUB_WORKSPACE/from-action.txt"
+          printf '%s\\n' loud > "$GITHUB_WORKSPACE/tone.txt"
+          printf '%s' "$GITHUB_ACTION_PATH" > "$GITHUB_WORKSPACE/outer-action-path.txt"
+"""
+COMPOSITE_ACTION = """\
+name: Hello
+description: Say hello
+inputs:
+  who:
+    description: Who to greet
+    required: false
+    deprecationMessage: who is old
+  title:
+    description: Title
+    required: true
+    default: Dr
+outputs:
+  tone:
+    description: How loud
+    value: ${{ steps.say.outputs.tone }}
+runs:
+  using: composite
+  steps:
+    - id: say
+      shell: bash
+      env:
+        WHO: ${{ inputs.who }}
+        LITERAL: hello ${{ inputs.who }}
+        TITLE: ${{ inputs.title }}
+      run: |
+        printf '%s\\n' PLANNED > "$GITHUB_WORKSPACE/marker.txt"
+        printf '%s\\n' "$WHO" > "$GITHUB_WORKSPACE/who.txt"
+        printf '%s\\n' "$TITLE" > "$GITHUB_WORKSPACE/title.txt"
+        printf '%s\\n' "$LITERAL" > "$GITHUB_WORKSPACE/literal-env.txt"
+        printf '%s\\n' '${{ inputs.who }}' > "$GITHUB_WORKSPACE/literal.txt"
+        printf '%s\\n' "$GITHUB_ACTION_PATH" > "$GITHUB_WORKSPACE/action-path.txt"
+        printf '%s' "$INPUT_WHO" > "$GITHUB_WORKSPACE/input-env.txt"
+        echo "tone=loud" >> "$GITHUB_OUTPUT"
+        echo "FROM_ACTION=yes" >> "$GITHUB_ENV"
+    - id: next
+      if: steps.say.outputs.tone == 'loud'
+      shell: bash
+      run: printf '%s\\n' next > "$GITHUB_WORKSPACE/next.txt"
+    - id: skip
+      if: false
+      shell: bash
+      run: printf '%s\\n' skipped > "$GITHUB_WORKSPACE/skipped.txt"
+"""
+COMPOSITE_FAIL = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: boom
+        uses: ./.github/actions/fail
+"""
+COMPOSITE_FAIL_ACTION = """\
+name: Fail
+description: Fail then continue
+runs:
+  using: composite
+  steps:
+    - id: fail
+      shell: bash
+      run: exit 2
+    - id: after
+      if: always()
+      shell: bash
+      run: printf '%s\\n' after > "$GITHUB_WORKSPACE/after.txt"
+"""
 FAILED_ENV = """\
 on: push
 jobs:
@@ -233,12 +318,16 @@ def _git(repo, *args):
     subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
 
 
-def _capture(root, workflow_text):
+def _capture(root, workflow_text, extra=None):
     repo = root / "repo"
     repo.mkdir()
     workflow = repo / ".github" / "workflows" / "test.yml"
     workflow.parent.mkdir(parents=True)
     workflow.write_text(workflow_text)
+    for rel, text in (extra or {}).items():
+        path = repo.joinpath(*rel.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
     (repo / "source.txt").write_text("original\n")
     (repo / "link.txt").symlink_to("source.txt")
     app = repo / "app"
@@ -794,3 +883,76 @@ jobs:
             text=True,
         )
         self.assertEqual(listed.stdout.strip(), "")
+
+    def test_local_composite_uses_the_planned_action(self):
+        root = self.root / "composite"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(
+            root,
+            COMPOSITE,
+            {".github/actions/hello/action.yml": COMPOSITE_ACTION},
+        )
+        plan = plan_snapshot(snapshot, "build")["plan"]
+        self.assertIn("PLANNED", plan["job"]["steps"][1]["steps"][0]["run"])
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan,
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual([step["id"] for step in result["steps"]], [None, "hello", "later"])
+        self.assertEqual(result["steps"][1]["stdout"], "who is old\n")
+        self.assertEqual((workspace / "marker.txt").read_text(), "PLANNED\n")
+        self.assertIn(
+            "MUTATED",
+            (workspace / ".github" / "actions" / "hello" / "action.yml").read_text(),
+        )
+        self.assertIn(
+            "PLANNED",
+            (snapshot / "files" / ".github" / "actions" / "hello" / "action.yml").read_text(),
+        )
+        self.assertEqual((workspace / "who.txt").read_text(), "Mona\n")
+        self.assertEqual((workspace / "title.txt").read_text(), "Dr\n")
+        self.assertEqual((workspace / "literal.txt").read_text(), "${{ inputs.who }}\n")
+        self.assertEqual((workspace / "literal-env.txt").read_text(), "hello ${{ inputs.who }}\n")
+        self.assertEqual(
+            (workspace / "action-path.txt").read_text(),
+            "/workspace/.github/actions/hello\n",
+        )
+        self.assertEqual((workspace / "input-env.txt").read_text(), "")
+        self.assertEqual((workspace / "next.txt").read_text(), "next\n")
+        self.assertFalse((workspace / "skipped.txt").exists())
+        self.assertEqual((workspace / "from-action.txt").read_text(), "yes\n")
+        self.assertEqual((workspace / "tone.txt").read_text(), "loud\n")
+        self.assertEqual((workspace / "outer-action-path.txt").read_text(), "")
+
+    def test_failed_composite_step_still_runs_always(self):
+        root = self.root / "composite-fail"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(
+            root,
+            COMPOSITE_FAIL,
+            {".github/actions/fail/action.yml": COMPOSITE_FAIL_ACTION},
+        )
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan_snapshot(snapshot, "build")["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 2)
+        self.assertEqual(result["failed_step"]["id"], "boom")
+        self.assertEqual(len(result["steps"]), 1)
+        self.assertEqual(result["steps"][0]["status"], "failed")
+        self.assertEqual((workspace / "after.txt").read_text(), "after\n")

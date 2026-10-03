@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-15 are
+roadmap step 1 and the first executable subset. NS-1 through NS-16 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -46,7 +46,8 @@ Acceptance criteria:
   reusable workflow calls, and host or privileged execution fail before a
   plan exists. The error names the field and says the capability is
   unsupported. Unsupported is a current limit, not a decision to drop the
-  feature. Job `needs` is NS-14.
+  feature. Job `needs` is NS-14. Local composite `uses` is NS-16. Remote
+  `uses` is still rejected.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
 - A workflow file larger than 500 KB produces no plan. The error is a
@@ -555,17 +556,88 @@ Acceptance criteria:
 - `add-mask` masks subsequent logs of that string. `set-env` and `add-path`
   do not change the next step.
 
+**NS-16. Local composite actions.**
+
+Status: implemented.
+
+Capability version is 5. One runtime is in this PR: a local composite
+action whose steps are `run` steps. The action file is `action.yml`, or
+`action.yaml` when `action.yml` is absent. It is read from the snapshot
+while planning, not from the network and not again at runtime. `uses` may
+be `./path` or `$/path`. `$/` is the same-repository form. The snapshot is
+those bytes, so a moving ref cannot change the run. The plan stores the
+inner steps and a digest of the parsed action (path, name, description,
+inputs, outputs, and inner steps). `run_job` executes that plan. Remote
+`owner/repo@ref`, `docker://`, JavaScript `node20` and `node24`, and
+Docker `runs.using: docker` stay unsupported and name the field. Nested
+`uses` inside a composite stays unsupported. A symlink for the action
+directory or either metadata filename is rejected and is not followed.
+
+`name` and `description` are required. `author` and `branding` are
+ignored. Inputs and outputs use the documented id rule: a letter or `_`,
+then alphanumeric characters, `-`, or `_`. `required: true` does not fail
+a missing input. A missing `with` value uses `default` when it is a
+string, otherwise an empty string. Defaults are not evaluated. `with`
+values must be strings. An unknown `with` key is invalid. A
+`deprecationMessage` on an input that appears in `with` is plain text at
+the start of that step's stdout. It is not a `::warning::` annotation.
+
+Workflow `run` and YAML `env` stay literal. Composite `run` stays literal
+too, including `${{ github.action_path }}` written in the script. The
+script reads `$GITHUB_ACTION_PATH` or an env value. A whole-string
+`${{ }}` is evaluated in composite step `env`, action output `value`, and
+the calling step's `with`. Mixed text stays literal. Inside the action,
+`inputs` is the resolved map, `steps` is that action's steps, and
+`github.action_path` is the container path of the action directory
+(`/workspace` for `./`, otherwise `/workspace/<path>`). Workflow steps
+outside the action do not get `github.action_path` or `GITHUB_ACTION_PATH`.
+`github.sha`, `github.actor`, and `github.token` are not invented.
+
+Inner steps run in the same container and workspace. One protocol step is
+recorded for the calling step. Inner stdout and stderr are concatenated.
+Skipped inner steps add nothing. The step fails if any inner step fails.
+The exit code is the first failed inner step's code. All skipped inner
+steps still succeed with exit 0. Later inner steps run when their `if` is
+true. Action outputs are evaluated even after an inner failure. A missing
+property is an empty string. Outputs are published on the calling step id
+only. Inner `GITHUB_OUTPUT` is not visible as `steps.<inner-id>` on the
+workflow. Inner `GITHUB_ENV`, PATH prefixes, and masks apply to later
+inner steps and later workflow steps. `INPUT_*` and `STATE_*` are not set.
+`GITHUB_STEP_SUMMARY`, `GITHUB_STATE`, and `GITHUB_ARTIFACTS` are not set.
+
+Each inner exec uses the calling step's `timeout-minutes` and the job
+deadline. The step timeout is not split across inner steps. The metadata
+page documents no byte cap and no nesting limit for an action file, so
+this slice adds neither. Composite outputs are not given a second size
+cap. Job outputs that read them still use the existing 1 MB per job and
+50 MB per run, measured as 1024-based UTF-16-LE bytes. The metadata page
+states the same 1 MB and 50 MB figures and says size is approximated with
+UTF-16. It does not define MB.
+
+Checkout and `actions/checkout` stay rejected. Git metadata is NS-20.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A local composite action from the snapshot runs in the caller-pinned
+  container. A later edit of that action file in the workspace does not
+  change the planned script.
+- A remote `uses`, a JavaScript action, and a Docker action produce no plan.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-fifteen PRs. Each one updates the capability version, rejects anything it
+sixteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-16 | One action runtime | Composite, JavaScript, or Docker actions are added one runtime per PR. The action comes from the snapshot or from a recorded digest. A moving ref after acceptance does not change the run. |
 | NS-17 | Matrix | Include, exclude, fail-fast, and max-parallel are tested. Unsupported matrix keys fail at plan time. |
 | NS-18 | Reusable workflows | `workflow_call` inputs and outputs type-check. Nesting over the documented limit fails. Secrets are not passed implicitly. |
 | NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. The Docker socket is not mounted. |
@@ -574,5 +646,5 @@ GitHub-equivalent.
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-16 through NS-20 can follow that evidence. They are not required
+restart. NS-17 through NS-20 can follow that evidence. They are not required
 to say the first subset runs.

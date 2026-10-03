@@ -113,7 +113,10 @@ operators, types, and functions used by this subset
 Contexts follow the availability table
 (https://docs.github.com/en/actions/reference/workflows-and-actions/contexts).
 An unavailable context is an error. A missing property of an available
-context is an empty string. Text in `run` and `env` is not expanded.
+context is an empty string. Text in workflow `run` and YAML `env` is not
+expanded. A composite `run` stays literal. A whole-string expression in a
+composite step `env` value, an action output `value`, or the calling
+step's `with` is evaluated. Mixed `${{ }}` stays literal.
 Job outputs have no special functions in that table, so status functions and
 `hashFiles` are not accepted there. `hashFiles` is not implemented. The
 selected job runs after the jobs it needs, one at a time, in one
@@ -138,9 +141,11 @@ The writing step does not see its own env or PATH update. `GITHUB_*` and
 that job. The commands page says a masked value cannot be set as an output,
 and its example writes the value to `GITHUB_OUTPUT` and reads it back. This
 subset follows the example: the output is kept and the log is masked. A
-later job does not inherit the mask. `run` and YAML `env` text stay literal.
-State files, job summaries, and action inputs are not implemented. This is
-not a GitHub-equivalence claim.
+later job does not inherit the mask. Workflow `run` and YAML `env` text stay
+literal. A local composite action reads inputs from `with` and the `inputs`
+context. `INPUT_*` is not set. `github.action_path` and `GITHUB_ACTION_PATH`
+are set only for steps inside that action. State files and job summaries are
+not implemented. This is not a GitHub-equivalence claim.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,

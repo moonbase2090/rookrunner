@@ -65,7 +65,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 4)
+        self.assertEqual(plan["capability_version"], 5)
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["needs"], [])
         self.assertEqual(plan["job"]["outputs"], {})
@@ -669,6 +669,378 @@ jobs:
             manifest = json.loads((snapshot / "manifest.json").read_text())
             self.assertEqual(manifest["workflow"], ".github/workflows/test.yml")
             self.assertFalse((root / "state" / "worker.sock").exists())
+
+    def test_local_composite_expands_from_the_snapshot(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: hello
+        uses: ./.github/actions/hello
+        with:
+          who: ${{ 'Mona' }}
+"""
+        action = """\
+name: Hello
+description: Say hello
+inputs:
+  who:
+    description: Who
+    required: true
+    default: ${{ 'Octocat' }}
+    deprecationMessage: who is old
+outputs:
+  tone:
+    description: Tone
+    value: ${{ steps.say.outputs.tone }}
+  note:
+    description: Note
+    value: hello
+runs:
+  using: composite
+  steps:
+    - id: say
+      shell: bash
+      env:
+        WHO: ${{ inputs.who }}
+      run: printf '%s' '${{ inputs.who }}'
+"""
+        with tempfile.TemporaryDirectory(prefix="plan-action-") as temp:
+            snapshot = write_snapshot(temp, workflow, {".github/actions/hello/action.yml": action})
+            first = plan_snapshot(snapshot, "build")
+            second = plan_snapshot(snapshot, "build")
+            self.assertEqual(first, second)
+            step = first["plan"]["job"]["steps"][0]
+            self.assertEqual(first["plan"]["capability_version"], 5)
+            self.assertEqual(step["uses"], "./.github/actions/hello")
+            self.assertEqual(step["action_path"], ".github/actions/hello")
+            self.assertEqual(len(step["action_digest"]), 64)
+            self.assertEqual(step["with"], {"who": "${{ 'Mona' }}"})
+            self.assertTrue(step["inputs"]["who"]["required"])
+            self.assertEqual(step["inputs"]["who"]["default"], "${{ 'Octocat' }}")
+            self.assertEqual(step["inputs"]["who"]["deprecation_message"], "who is old")
+            inner = step["steps"][0]
+            self.assertEqual(inner["env"]["WHO"], "${{ inputs.who }}")
+            self.assertIn("${{ inputs.who }}", inner["run"])
+            self.assertEqual(step["outputs"]["note"]["value"], "hello")
+            self.assertNotIn("run", step)
+            dollar = workflow.replace("./.github/actions/hello", "$/.github/actions/hello")
+            other = write_snapshot(
+                Path(temp) / "dollar",
+                dollar,
+                {".github/actions/hello/action.yml": action},
+            )
+            dollar_step = plan_snapshot(other, "build")["plan"]["job"]["steps"][0]
+            self.assertEqual(dollar_step["action_digest"], step["action_digest"])
+            self.assertEqual(dollar_step["steps"][0]["run"], inner["run"])
+            changed = action.replace("printf", "echo")
+            (snapshot / "files" / ".github" / "actions" / "hello" / "action.yml").write_text(
+                changed
+            )
+            again = plan_snapshot(snapshot, "build")["plan"]["job"]["steps"][0]
+            self.assertNotEqual(again["action_digest"], step["action_digest"])
+            self.assertIn("echo", again["steps"][0]["run"])
+
+    def test_local_uses_without_a_snapshot_root_is_unsupported(self):
+        workflow = """\
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/hello
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow.encode(), "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.build.steps.0.uses")
+
+    def test_required_input_without_with_still_plans(self):
+        workflow = """\
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/hello
+"""
+        action = """\
+name: Hello
+description: Say hello
+inputs:
+  who:
+    description: Who
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi
+"""
+        with tempfile.TemporaryDirectory(prefix="plan-default-") as temp:
+            snapshot = write_snapshot(temp, workflow, {".github/actions/hello/action.yml": action})
+            step = plan_snapshot(snapshot, "build")["plan"]["job"]["steps"][0]
+        self.assertEqual(step["with"], {})
+        self.assertTrue(step["inputs"]["who"]["required"])
+        self.assertNotIn("default", step["inputs"]["who"])
+
+    def test_action_yml_is_preferred_over_action_yaml(self):
+        workflow = """\
+jobs:
+  build:
+    steps:
+      - uses: ./.github/actions/hello
+"""
+        yml = """\
+name: Hello
+description: From yml
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: printf yml
+"""
+        yaml_text = """\
+name: Hello
+description: From yaml
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: printf yaml
+"""
+        with tempfile.TemporaryDirectory(prefix="plan-names-") as temp:
+            snapshot = write_snapshot(
+                temp,
+                workflow,
+                {
+                    ".github/actions/hello/action.yml": yml,
+                    ".github/actions/hello/action.yaml": yaml_text,
+                },
+            )
+            step = plan_snapshot(snapshot, "build")["plan"]["job"]["steps"][0]
+        self.assertEqual(step["steps"][0]["run"], "printf yml")
+
+    def test_composite_rejections(self):
+        cases = {
+            "docker-uses": (
+                "jobs:\n  test:\n    steps:\n      - uses: docker://alpine:3.8\n",
+                {},
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses",
+            ),
+            "escape": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./../outside\n",
+                {},
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.uses",
+            ),
+            "node20": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Js
+description: JavaScript
+runs:
+  using: node20
+  main: index.js
+"""
+                },
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses.runs.using",
+            ),
+            "docker-runtime": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Box
+description: Docker
+runs:
+  using: docker
+  image: Dockerfile
+"""
+                },
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses.runs.using",
+            ),
+            "nested": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: Nested
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/other
+"""
+                },
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses.runs.steps.0.uses",
+            ),
+            "continue": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: Continue
+runs:
+  using: composite
+  steps:
+    - run: echo hi
+      shell: bash
+      continue-on-error: true
+"""
+                },
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses.runs.steps.0.continue-on-error",
+            ),
+            "missing-shell": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: No shell
+runs:
+  using: composite
+  steps:
+    - run: echo hi
+"""
+                },
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.uses.runs.steps.0.shell",
+            ),
+            "missing-file": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {},
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.uses",
+            ),
+            "unknown-with": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n        with:\n          missing: Mona\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: Inputs
+inputs:
+  who:
+    description: Who
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi
+"""
+                },
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.with.missing",
+            ),
+            "bool-with": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n        with:\n          who: true\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: Inputs
+inputs:
+  who:
+    description: Who
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi
+"""
+                },
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.with.who",
+            ),
+            "duplicate-id": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Hello
+description: Duplicate
+runs:
+  using: composite
+  steps:
+    - id: say
+      shell: bash
+      run: echo one
+    - id: say
+      shell: bash
+      run: echo two
+"""
+                },
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0.uses.runs.steps.1",
+            ),
+            "both": (
+                "jobs:\n  test:\n    steps:\n      - run: echo hi\n        uses: ./.github/actions/hello\n",
+                {},
+                "WORKFLOW_INVALID",
+                "jobs.test.steps.0",
+            ),
+        }
+        for name, (workflow, files, kind, field) in cases.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory(prefix="plan-reject-") as temp:
+                    snapshot = write_snapshot(temp, workflow, files)
+                    with self.assertRaises(PlanError) as raised:
+                        plan_snapshot(snapshot, "test" if "test:" in workflow else "build")
+                self.assertEqual(raised.exception.kind, kind)
+                self.assertEqual(raised.exception.field, field)
+
+    def test_action_symlink_is_rejected(self):
+        workflow = """\
+jobs:
+  test:
+    steps:
+      - uses: ./.github/actions/hello
+"""
+        action = """\
+name: Hello
+description: Linked
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo hi
+"""
+        with tempfile.TemporaryDirectory(prefix="plan-link-") as temp:
+            root = Path(temp)
+            snapshot = write_snapshot(root / "file", workflow, {})
+            files = snapshot / "files"
+            real = files / "real.yml"
+            real.write_text(action)
+            action_dir = files / ".github" / "actions" / "hello"
+            action_dir.mkdir(parents=True)
+            (action_dir / "action.yml").symlink_to(real)
+            with self.assertRaises(PlanError) as raised:
+                plan_snapshot(snapshot, "test")
+            self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+            self.assertIn("not a regular file", str(raised.exception))
+            directory = write_snapshot(root / "dir", workflow, {})
+            real_dir = directory / "files" / "real-action"
+            real_dir.mkdir()
+            (real_dir / "action.yml").write_text(action)
+            link_parent = directory / "files" / ".github" / "actions"
+            link_parent.mkdir(parents=True)
+            (link_parent / "hello").symlink_to(real_dir, target_is_directory=True)
+            with self.assertRaises(PlanError) as raised:
+                plan_snapshot(directory, "test")
+            self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+            self.assertIn("not a regular file", str(raised.exception))
+
+
+def write_snapshot(root, workflow, files):
+    base = Path(root)
+    file_root = base / "files"
+    workflow_path = file_root / ".github" / "workflows" / "test.yml"
+    workflow_path.parent.mkdir(parents=True, exist_ok=True)
+    workflow_path.write_text(workflow)
+    for rel, text in files.items():
+        path = file_root.joinpath(*rel.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (base / "manifest.json").write_text(json.dumps({"workflow": ".github/workflows/test.yml"}))
+    return base
 
 
 if __name__ == "__main__":
