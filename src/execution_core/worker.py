@@ -982,8 +982,8 @@ class Worker:
             },
             "backend": {"name": "workflow", "version": __version__},
             "compatibility_notes": [
-                "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations share that container and run one at a time.",
-                "Step if, job needs, job outputs, environment files, local composite actions, and job matrices are evaluated. JavaScript actions, Docker actions, secrets, and services are not claimed.",
+                "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
+                "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript actions, Docker actions, and services are not claimed.",
             ],
             "accepted_at": now(),
             "started_at": None,

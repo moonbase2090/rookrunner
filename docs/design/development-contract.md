@@ -87,7 +87,15 @@ no numeric ceiling for `max-parallel`. A matrix that would generate more
 than 256 jobs creates no run
 (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
 An unknown `strategy` key creates no run. A matrix expression is not
-evaluated. Unsupported workflow
+evaluated. A job may call a local reusable workflow with `uses` of
+`./.github/workflows/<file>.yml` or the same `$/` path. Inputs are
+`boolean`, `number`, or `string`. Secrets are not passed, including
+`secrets: inherit`. A call chain longer than ten workflows creates no run
+(https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#nesting-reusable-workflows).
+More than 50 unique called workflows creates no run
+(https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#limitations-of-reusable-workflows).
+Exactly ten levels and exactly 50 unique workflows are accepted. Remote
+reusable workflows are still rejected. Unsupported workflow
 fields and invalid YAML create no run. A workflow file larger than 500 KB
 creates no run; that rejection is a capability error. The job time bound is
 `timeout-minutes`, default 360 minutes, and a value above 5 days is a

@@ -7,9 +7,11 @@ from unittest.mock import patch
 
 from execution_core.plan import (
     DEFAULT_JOB_TIMEOUT_MINUTES,
+    MAX_CALLED_WORKFLOWS,
     MAX_JOB_TIMEOUT_MINUTES,
     MAX_STEP_TIMEOUT_MINUTES,
     MAX_WORKFLOW_BYTES,
+    MAX_WORKFLOW_LEVELS,
     PlanError,
     plan_snapshot,
     plan_workflow,
@@ -65,7 +67,8 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 6)
+        self.assertEqual(plan["capability_version"], 7)
+        self.assertNotIn("call", plan["job"])
         self.assertIsNone(plan["job"]["strategy"])
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["needs"], [])
@@ -352,9 +355,12 @@ jobs:
     steps:
       - run: echo hi
 """,
-            "on.workflow_call": """\
+            "on.workflow_call.secrets": """\
 on:
   workflow_call:
+    secrets:
+      token:
+        required: true
 jobs:
   test:
     steps:
@@ -712,7 +718,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 6)
+            self.assertEqual(first["plan"]["capability_version"], 7)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -1280,6 +1286,448 @@ jobs:
             self.plan(workflow)
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
         self.assertEqual(raised.exception.field, "jobs.other.strategy.fast")
+
+
+_CALLED = """\
+on: workflow_call
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+
+_REUSE_HOWTO = (
+    "https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows"
+    "#nesting-reusable-workflows"
+)
+_REUSE_LIMITS = (
+    "https://docs.github.com/en/actions/reference/workflows-and-actions/"
+    "reusing-workflow-configurations#limitations-of-reusable-workflows"
+)
+
+
+class ReusableWorkflowTests(unittest.TestCase):
+    def plan_files(self, workflow, files, job_id="build"):
+        with tempfile.TemporaryDirectory(prefix="plan-reuse-") as temp:
+            snapshot = write_snapshot(temp, workflow, files)
+            return plan_snapshot(snapshot, job_id)["plan"]
+
+    def reject(self, workflow, files, job_id="build"):
+        with tempfile.TemporaryDirectory(prefix="plan-reuse-") as temp:
+            snapshot = write_snapshot(temp, workflow, files)
+            with self.assertRaises(PlanError) as raised:
+                plan_snapshot(snapshot, job_id)
+            return raised.exception
+
+    def test_documented_limits_match_the_cited_pages(self):
+        self.assertEqual(MAX_WORKFLOW_LEVELS, 10)
+        self.assertEqual(MAX_CALLED_WORKFLOWS, 50)
+
+    def test_workflow_call_trigger_plans_a_normal_job(self):
+        plan = plan_workflow(
+            b"on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
+            "build",
+        )["plan"]
+        self.assertEqual(plan["capability_version"], 7)
+        self.assertNotIn("call", plan["job"])
+        self.assertEqual(plan["workflow"]["on"], "workflow_call")
+
+    def test_inputs_and_outputs_keep_their_types(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      username:
+        description: Name
+        required: true
+        type: string
+      count:
+        required: true
+        type: number
+        default: 2
+      flag:
+        required: false
+        type: boolean
+        default: false
+      note:
+        type: string
+    outputs:
+      word:
+        description: Word
+        value: ${{ jobs.build.outputs.word }}
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    with:
+      username: ada
+      count: 2
+      flag: true
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": called}, "call")
+        slots = {item["name"]: item for item in plan["job"]["call"]["inputs"]}
+        self.assertEqual(slots["username"]["passed"], {"literal": "ada"})
+        self.assertEqual(slots["username"]["type"], "string")
+        self.assertTrue(slots["username"]["required"])
+        self.assertEqual(slots["count"]["passed"], {"literal": 2})
+        self.assertIsInstance(slots["count"]["passed"]["literal"], int)
+        self.assertNotIsInstance(slots["count"]["passed"]["literal"], bool)
+        self.assertEqual(slots["count"]["default"], {"literal": 2})
+        self.assertIs(slots["flag"]["passed"]["literal"], True)
+        self.assertEqual(slots["flag"]["default"], {"literal": False})
+        self.assertIsNone(slots["note"]["passed"])
+        self.assertIsNone(slots["note"]["default"])
+        self.assertFalse(slots["note"]["required"])
+        self.assertEqual(
+            plan["job"]["call"]["outputs"],
+            {"word": "${{ jobs.build.outputs.word }}"},
+        )
+        self.assertEqual(plan["job"]["call"]["path"], ".github/workflows/called.yml")
+        self.assertNotIn("steps", plan["job"])
+
+    def test_dollar_form_uses_the_same_snapshot_path(self):
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: $/.github/workflows/called.yml
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": _CALLED}, "call")
+        self.assertEqual(plan["job"]["call"]["path"], ".github/workflows/called.yml")
+
+    def test_wrong_literal_type_is_invalid(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      flag:
+        required: true
+        type: boolean
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    with:
+      flag: "true"
+"""
+        error = self.reject(workflow, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("must be a boolean", str(error))
+
+    def test_unknown_and_missing_inputs_are_invalid(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      username:
+        required: true
+        type: string
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        files = {".github/workflows/called.yml": called}
+        unknown = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    with:
+      username: ada
+      extra: no
+"""
+        error = self.reject(unknown, files, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("input is not defined", str(error))
+        missing = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        error = self.reject(missing, files, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("is required", str(error))
+
+    def test_choice_is_not_a_workflow_call_input_type(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      color:
+        type: choice
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        workflow = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+        error = self.reject(workflow, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("boolean, number, or string", str(error))
+
+    def test_output_requires_an_expression_without_secrets(self):
+        missing = """\
+on:
+  workflow_call:
+    outputs:
+      word:
+        description: Word
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        workflow = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+        error = self.reject(workflow, {".github/workflows/called.yml": missing}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("value is required", str(error))
+        secret = """\
+on:
+  workflow_call:
+    outputs:
+      word:
+        value: ${{ secrets.TOKEN }}
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        error = self.reject(workflow, {".github/workflows/called.yml": secret}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("context is not available", str(error))
+
+    def test_with_expression_can_read_needs_and_not_secrets(self):
+        workflow = """\
+on: push
+jobs:
+  first:
+    outputs:
+      name: ${{ 'ada' }}
+    steps:
+      - run: echo hi
+  call:
+    needs: first
+    uses: ./.github/workflows/called.yml
+    with:
+      username: ${{ needs.first.outputs.name }}
+"""
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      username:
+        required: true
+        type: string
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": called}, "call")
+        slot = plan["job"]["call"]["inputs"][0]
+        self.assertEqual(slot["passed"], {"expression": "${{ needs.first.outputs.name }}"})
+        rejected = workflow.replace("needs.first.outputs.name", "secrets.TOKEN")
+        error = self.reject(rejected, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("context is not available", str(error))
+
+    def test_secrets_inherit_is_unsupported(self):
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    secrets: inherit
+"""
+        error = self.reject(workflow, {".github/workflows/called.yml": _CALLED}, "call")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(error.field, "jobs.call.secrets")
+        self.assertIn("capability is unsupported", str(error))
+
+    def test_caller_strategy_and_steps_are_unsupported(self):
+        strategy = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    strategy:
+      matrix:
+        version: [1]
+"""
+        error = self.reject(strategy, {".github/workflows/called.yml": _CALLED}, "call")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(error.field, "jobs.call.strategy")
+        steps = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    steps:
+      - run: echo hi
+"""
+        error = self.reject(steps, {".github/workflows/called.yml": _CALLED}, "call")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(error.field, "jobs.call.steps")
+
+    def test_caller_env_is_not_copied_into_the_called_workflow(self):
+        workflow = """\
+on: push
+env:
+  FOO: from-caller
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        called = """\
+on: workflow_call
+env:
+  BAR: from-called
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(plan["workflow"]["env"], {"FOO": "from-caller"})
+        self.assertEqual(plan["job"]["call"]["workflow"]["env"], {"BAR": "from-called"})
+
+    def test_same_file_called_twice_is_one_workflow(self):
+        workflow = """\
+on: push
+jobs:
+  first:
+    uses: ./.github/workflows/called.yml
+  second:
+    needs: first
+    uses: ./.github/workflows/called.yml
+"""
+        plan = self.plan_files(workflow, {".github/workflows/called.yml": _CALLED}, "second")
+        self.assertEqual([job["id"] for job in plan["jobs"]], ["first", "second"])
+        self.assertIsNot(plan["jobs"][0]["call"], plan["jobs"][1]["call"])
+
+    def test_subdirectory_expression_and_missing_trigger_are_invalid(self):
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/nested/called.yml
+"""
+        error = self.reject(workflow, {}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("reusable workflow path is not accepted", str(error))
+        expressed = """\
+on: push
+jobs:
+  call:
+    uses: "${{ './.github/workflows/called.yml' }}"
+"""
+        error = self.reject(expressed, {".github/workflows/called.yml": _CALLED}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("expression is not accepted", str(error))
+        pushed = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: echo hi
+"""
+        caller = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+        error = self.reject(caller, {".github/workflows/called.yml": pushed}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("workflow_call is required", str(error))
+
+    def test_a_cycle_is_invalid(self):
+        called = """\
+on: workflow_call
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        workflow = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+        error = self.reject(workflow, {".github/workflows/called.yml": called}, "call")
+        self.assertEqual(error.kind, "WORKFLOW_INVALID")
+        self.assertIn("loop", str(error))
+
+    def test_ten_levels_are_accepted_and_eleven_cites_the_docs(self):
+        workflow, files = _chain(10)
+        plan = self.plan_files(workflow, files, "call")
+        current = plan["job"]
+        depth = 1
+        while "call" in current:
+            current = current["call"]["jobs"][0]
+            depth += 1
+        self.assertEqual(depth, 10)
+        self.assertEqual(current["steps"][0]["run"], "echo hi")
+        workflow, files = _chain(11)
+        error = self.reject(workflow, files, "call")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("10", str(error))
+        self.assertIn(_REUSE_HOWTO, str(error))
+
+    def test_fifty_unique_workflows_are_accepted_and_fifty_one_cites_the_docs(self):
+        workflow, files = _wide(50, duplicate=True)
+        plan = self.plan_files(workflow, files, "twice")
+        self.assertEqual(plan["job"]["id"], "twice")
+        workflow, files = _wide(51, duplicate=False)
+        error = self.reject(workflow, files, "j1")
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("50", str(error))
+        self.assertIn(_REUSE_LIMITS, str(error))
+
+
+def _chain(levels):
+    """Return a caller plus called files that form `levels` workflows."""
+
+    files = {}
+    for level in range(2, levels + 1):
+        if level == levels:
+            body = "on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n"
+        else:
+            body = (
+                "on: workflow_call\njobs:\n  call:\n"
+                f"    uses: ./.github/workflows/w{level + 1}.yml\n"
+            )
+        files[f".github/workflows/w{level}.yml"] = body
+    workflow = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/w2.yml\n"
+    return workflow, files
+
+
+def _wide(unique, duplicate):
+    """Return `unique` called files. One file is called twice when requested."""
+
+    files = {}
+    lines = ["on: push", "jobs:"]
+    count = unique - 1 if duplicate else unique
+    for index in range(1, count + 1):
+        name = f"w{index}.yml"
+        files[f".github/workflows/{name}"] = _CALLED
+        lines.append(f"  j{index}:")
+        lines.append(f"    uses: ./.github/workflows/{name}")
+    if duplicate:
+        files[".github/workflows/extra.yml"] = _CALLED
+        lines.extend(
+            [
+                "  again:",
+                "    uses: ./.github/workflows/extra.yml",
+                "  twice:",
+                "    uses: ./.github/workflows/extra.yml",
+            ]
+        )
+    return "\n".join(lines) + "\n", files
 
 
 def write_snapshot(root, workflow, files):

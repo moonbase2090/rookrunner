@@ -12,11 +12,13 @@ from execution_core.attempt import materialize_attempt
 from execution_core.plan import plan_snapshot, plan_workflow
 from execution_core.run import (
     RunError,
+    _CallInputError,
     _OUTPUT_JOB_BYTES,
     _OUTPUT_RUN_BYTES,
     _exec_limit,
     _job_outputs,
     _read_utf8,
+    _resolve_call_inputs,
     run_job,
 )
 from execution_core.snapshot import SourceCapture
@@ -391,6 +393,95 @@ class OutputLimitTests(unittest.TestCase):
         blocked, same = _job_outputs({"outputs": {"kind": "'local'"}}, {}, _OUTPUT_RUN_BYTES)
         self.assertEqual(blocked, {})
         self.assertEqual(same, _OUTPUT_RUN_BYTES)
+
+
+class CallInputTests(unittest.TestCase):
+    def test_omitted_inputs_use_documented_defaults(self):
+        slots = [
+            {
+                "name": "flag",
+                "type": "boolean",
+                "required": False,
+                "default": None,
+                "passed": None,
+            },
+            {
+                "name": "count",
+                "type": "number",
+                "required": False,
+                "default": None,
+                "passed": None,
+            },
+            {
+                "name": "name",
+                "type": "string",
+                "required": False,
+                "default": None,
+                "passed": None,
+            },
+            {
+                "name": "title",
+                "type": "string",
+                "required": False,
+                "default": {"literal": "Dr"},
+                "passed": None,
+            },
+            {
+                "name": "who",
+                "type": "string",
+                "required": True,
+                "default": None,
+                "passed": {"literal": "ada"},
+            },
+            {
+                "name": "echo",
+                "type": "string",
+                "required": False,
+                "default": {"expression": "${{ inputs.who }}"},
+                "passed": None,
+            },
+            {
+                "name": "other",
+                "type": "string",
+                "required": False,
+                "default": {"expression": "${{ inputs.echo }}"},
+                "passed": None,
+            },
+        ]
+        bound = _resolve_call_inputs(slots, {}, lambda explicit: {"inputs": explicit})
+        self.assertIs(bound["flag"], False)
+        self.assertIs(bound["count"], 0)
+        self.assertEqual(bound["name"], "")
+        self.assertEqual(bound["title"], "Dr")
+        self.assertEqual(bound["who"], "ada")
+        self.assertEqual(bound["echo"], "ada")
+        self.assertEqual(bound["other"], "")
+
+    def test_expression_result_must_match_the_declared_type(self):
+        slots = [
+            {
+                "name": "flag",
+                "type": "boolean",
+                "required": True,
+                "default": None,
+                "passed": {"expression": "${{ 'true' }}"},
+            }
+        ]
+        with self.assertRaises(_CallInputError) as raised:
+            _resolve_call_inputs(slots, {}, lambda explicit: {"inputs": explicit})
+        self.assertIn("boolean", str(raised.exception))
+        number = [
+            {
+                "name": "count",
+                "type": "number",
+                "required": True,
+                "default": None,
+                "passed": {"expression": "${{ 2 }}"},
+            }
+        ]
+        bound = _resolve_call_inputs(number, {}, lambda explicit: {"inputs": explicit})
+        self.assertEqual(bound["count"], 2)
+        self.assertIsInstance(bound["count"], int)
 
 
 class CommandFileTests(unittest.TestCase):
@@ -1195,3 +1286,272 @@ jobs:
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["steps"], [])
         self.assertFalse((workspace / "order.txt").exists())
+
+    def _reusable(self, name, workflow, extra, job_id):
+        root = self.root / name
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow, extra)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan_snapshot(snapshot, job_id)["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        return result, workspace
+
+    def test_called_workflow_sees_typed_inputs(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      username:
+        required: true
+        type: string
+      count:
+        required: true
+        type: number
+      flag:
+        required: true
+        type: boolean
+      optional_flag:
+        type: boolean
+      optional_count:
+        type: number
+      optional_name:
+        type: string
+jobs:
+  build:
+    steps:
+      - if: "${{ inputs.username == 'ada' && inputs.count == 2 && inputs.flag == true && inputs.optional_flag == false && inputs.optional_count == 0 && inputs.optional_name == '' }}"
+        run: printf 'typed\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    with:
+      username: ada
+      count: 2
+      flag: true
+"""
+        result, workspace = self._reusable(
+            "typed",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "call",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "typed\n")
+
+    def test_workflow_output_reaches_the_caller_needs(self):
+        called = """\
+on:
+  workflow_call:
+    outputs:
+      word:
+        value: ${{ jobs.build.outputs.word }}
+jobs:
+  build:
+    outputs:
+      word: ${{ steps.say.outputs.word }}
+    steps:
+      - id: say
+        run: echo "word=hi" >> "$GITHUB_OUTPUT"
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+  report:
+    needs: call
+    steps:
+      - if: "${{ needs.call.outputs.word == 'hi' }}"
+        run: printf 'seen\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        result, workspace = self._reusable(
+            "outputs",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "report",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "seen\n")
+
+    def test_caller_env_does_not_enter_the_called_workflow(self):
+        called = """\
+on: workflow_call
+env:
+  FOO: from-called
+jobs:
+  build:
+    steps:
+      - run: printf '%s %s\\n' "$FOO" "$ONLY_CALLER" > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        workflow = """\
+on: push
+env:
+  FOO: from-caller
+  ONLY_CALLER: from-caller
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        result, workspace = self._reusable(
+            "env",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "call",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "from-called \n")
+
+    def test_nested_reusable_workflow_runs(self):
+        inner = """\
+on: workflow_call
+jobs:
+  build:
+    steps:
+      - run: printf 'nested\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        middle = """\
+on: workflow_call
+jobs:
+  call:
+    uses: ./.github/workflows/inner.yml
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/middle.yml
+"""
+        result, workspace = self._reusable(
+            "nested",
+            workflow,
+            {
+                ".github/workflows/middle.yml": middle,
+                ".github/workflows/inner.yml": inner,
+            },
+            "call",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "nested\n")
+
+    def test_with_expression_reads_an_earlier_output(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      username:
+        required: true
+        type: string
+jobs:
+  build:
+    steps:
+      - if: "${{ inputs.username == 'ada' }}"
+        run: printf 'ada\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        workflow = """\
+on: push
+jobs:
+  first:
+    outputs:
+      name: ${{ steps.say.outputs.name }}
+    steps:
+      - id: say
+        run: echo "name=ada" >> "$GITHUB_OUTPUT"
+  call:
+    needs: first
+    uses: ./.github/workflows/called.yml
+    with:
+      username: ${{ needs.first.outputs.name }}
+"""
+        result, workspace = self._reusable(
+            "passed",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "call",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "ada\n")
+
+    def test_false_caller_if_skips_the_called_workflow(self):
+        called = """\
+on: workflow_call
+jobs:
+  build:
+    steps:
+      - run: printf 'ran\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    if: "${{ false }}"
+    uses: ./.github/workflows/called.yml
+"""
+        result, workspace = self._reusable(
+            "skipped",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "call",
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["steps"][0]["status"], "skipped")
+        self.assertFalse((workspace / "marker.txt").exists())
+
+    def test_runtime_input_type_mismatch_fails_the_run(self):
+        called = """\
+on:
+  workflow_call:
+    inputs:
+      flag:
+        required: true
+        type: boolean
+jobs:
+  build:
+    steps:
+      - run: printf 'ran\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        workflow = """\
+on: push
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+    with:
+      flag: ${{ 'true' }}
+"""
+        result, workspace = self._reusable(
+            "mismatch",
+            workflow,
+            {".github/workflows/called.yml": called},
+            "call",
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["steps"][0]["status"], "failed")
+        self.assertIn("boolean", result["steps"][0]["error"])
+        self.assertFalse((workspace / "marker.txt").exists())
+
+    def test_entry_workflow_call_defaults_are_not_applied(self):
+        workflow = """\
+on:
+  workflow_call:
+    inputs:
+      name:
+        type: string
+        default: ada
+jobs:
+  build:
+    steps:
+      - if: "${{ inputs.name == '' }}"
+        run: printf 'empty\\n' > "$GITHUB_WORKSPACE/marker.txt"
+"""
+        result, workspace = self._reusable("entry", workflow, {}, "build")
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "marker.txt").read_text(), "empty\n")

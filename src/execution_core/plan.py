@@ -1,13 +1,15 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 6 records declared fields, including step and job
+run. Capability version 7 records declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
-snapshot, and a literal job matrix. It checks that expressions can be parsed
-and does not evaluate them. Matrix `include` and `exclude` are expanded
-here. A matrix value that is itself an expression is rejected. A selected
-job includes the jobs it needs. A dependency that is not defined in the
-workflow is rejected. Anything this slice cannot describe is rejected.
+snapshot, a literal job matrix, and a local reusable workflow. It checks
+that expressions can be parsed and does not evaluate them. Matrix `include`
+and `exclude` are expanded here. A matrix value that is itself an expression
+is rejected. A called workflow is read from the snapshot. A remote workflow
+reference is rejected. Secrets are not passed to a called workflow. A
+selected job includes the jobs it needs. A dependency that is not defined in
+the workflow is rejected. Anything this slice cannot describe is rejected.
 """
 
 import hashlib
@@ -20,10 +22,18 @@ import yaml
 from yaml.constructor import SafeConstructor
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
-from .expr import ExprError, check_job_if, check_job_output, check_step_if
+from .expr import (
+    ExprError,
+    check_call_default,
+    check_call_output,
+    check_call_with,
+    check_job_if,
+    check_job_output,
+    check_step_if,
+)
 from .protocol import canonical
 
-CAPABILITY_VERSION = 6
+CAPABILITY_VERSION = 7
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -64,13 +74,27 @@ SCALAR_TAGS = {
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 # https://docs.github.com/en/actions/reference/limits
 MAX_MATRIX_JOBS = 256
+# The top-level caller workflow plus up to nine called workflows is ten
+# levels. Exactly ten is allowed. An eleventh level does not start a run.
+# https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#nesting-reusable-workflows
+MAX_WORKFLOW_LEVELS = 10
+REUSE_WORKFLOWS = "https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows"
+# Unique reusable workflows called from the top-level workflow file,
+# including nested trees. Exactly 50 is allowed.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#limitations-of-reusable-workflows
+MAX_CALLED_WORKFLOWS = 50
+REUSE_CONFIGURATIONS = (
+    "https://docs.github.com/en/actions/reference/workflows-and-actions/"
+    "reusing-workflow-configurations"
+)
+# `workflow_call` is accepted only under `on`. `secrets` stays rejected, so
+# a called workflow does not receive secrets implicitly or by name.
 FORBIDDEN = {
     "matrix",
     "secrets",
     "services",
     "privileged",
     "container",
-    "workflow_call",
 }
 WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
 JOB_KEYS = {
@@ -86,6 +110,19 @@ JOB_KEYS = {
     "strategy",
 }
 STRATEGY_KEYS = {"fail-fast", "max-parallel", "matrix"}
+# A job that calls a reusable workflow. GitHub also allows secrets, strategy,
+# concurrency, permissions, and cache-mode. Those stay unsupported. Secrets
+# are not passed, including `secrets: inherit`.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#supported-keywords-for-jobs-that-call-a-reusable-workflow
+CALL_JOB_KEYS = {"name", "uses", "with", "needs", "if"}
+CALL_TRIGGER_KEYS = {"inputs", "outputs"}
+CALL_INPUT_KEYS = {"description", "required", "default", "type"}
+CALL_OUTPUT_KEYS = {"description", "value"}
+CALL_INPUT_TYPES = {"boolean", "number", "string"}
+# Same-repository reusable workflows live directly in `.github/workflows`.
+# Subdirectories are not supported.
+# https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows
+_CALLED_WORKFLOW = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 STEP_KEYS = {
     "id",
     "name",
@@ -292,9 +329,12 @@ def _expand_matrix(axes, excludes, includes, path):
 
 class _Planner:
     def __init__(self, action_root=None):
-        self.seen = set()
+        self.seen_stack = [set()]
         self.constructor = SafeConstructor()
         self.action_root = None if action_root is None else Path(action_root)
+        self.call_stack = []
+        self.called_workflows = set()
+        self.workflow_level = 1
 
     def plan(self, workflow, job_id):
         if not isinstance(job_id, str) or job_id == "":
@@ -305,7 +345,7 @@ class _Planner:
         workflow_plan = {
             "location": _location(root),
             "name": self._optional_string(body, "", "name"),
-            "on": self._data(body["on"][1], "on", 1) if "on" in body else None,
+            "on": self._on(body) if "on" in body else None,
             "defaults": self._defaults(body, ""),
             "env": self._env(body, ""),
         }
@@ -351,12 +391,22 @@ class _Planner:
         return node
 
     def _enter(self, node, field):
+        seen = self.seen_stack[-1]
         identity = id(node)
-        if identity in self.seen:
+        if identity in seen:
             _invalid(f"{field or 'workflow'}: YAML aliases are not accepted", field or None)
-        self.seen.add(identity)
+        seen.add(identity)
 
-    def _mapping(self, node, field, *, allow_uses=False, allow_strategy=False, forbid=True):
+    def _mapping(
+        self,
+        node,
+        field,
+        *,
+        allow_uses=False,
+        allow_strategy=False,
+        allow_workflow_call=False,
+        forbid=True,
+    ):
         self._enter(node, field)
         if not isinstance(node, MappingNode) or node.tag != "tag:yaml.org,2002:map":
             _invalid(f"{field or 'workflow'} must be a mapping", field or None)
@@ -372,6 +422,8 @@ class _Planner:
             if key == "uses" and not allow_uses:
                 _unsupported(path)
             if forbid and key == "strategy" and not allow_strategy:
+                _unsupported(path)
+            if forbid and key == "workflow_call" and not allow_workflow_call:
                 _unsupported(path)
             if forbid and key in FORBIDDEN:
                 _unsupported(path)
@@ -548,7 +600,10 @@ class _Planner:
     def _job(self, jobs, job_id):
         job_node = jobs[job_id][1]
         job_field = f"jobs.{job_id}"
-        job_body = self._mapping(job_node, job_field, allow_strategy=True)
+        job_body = self._mapping(job_node, job_field, allow_uses=True, allow_strategy=True)
+        if "uses" in job_body:
+            self._allow(job_body, job_field, CALL_JOB_KEYS)
+            return self._reusable_job(job_body, job_node, job_field, job_id)
         self._allow(job_body, job_field, JOB_KEYS)
         recorded = {
             "id": job_id,
@@ -567,6 +622,358 @@ class _Planner:
         if condition is not None:
             recorded["if"] = condition
         return recorded
+
+    def _on(self, body):
+        return self._on_data(body["on"][1], "on")
+
+    def _on_data(self, node, field):
+        """Store `on`. `workflow_call` is allowed here and nowhere else."""
+
+        if isinstance(node, MappingNode):
+            items = self._mapping(node, field, allow_workflow_call=True)
+            values = {}
+            for key, (_, value) in items.items():
+                child = _join(field, key)
+                if key == "workflow_call":
+                    values[key] = self._workflow_call_data(value, child)
+                else:
+                    values[key] = self._data(value, child, 1)
+            return values
+        return self._data(node, field, 1)
+
+    def _workflow_call_data(self, node, field):
+        if isinstance(node, ScalarNode) and node.tag == "tag:yaml.org,2002:null":
+            self._enter(node, field)
+            return None
+        spec = self._workflow_call_spec(node, field)
+        stored = {"inputs": {}, "outputs": {}}
+        for item in spec["inputs"]:
+            entry = {"type": item["type"], "required": item["required"]}
+            if item["default"] is not None:
+                entry["default"] = item["default"]
+            stored["inputs"][item["name"]] = entry
+        for name, expression in spec["outputs"].items():
+            stored["outputs"][name] = expression
+        return stored
+
+    def _reusable_job(self, items, node, field, job_id):
+        uses_field = _join(field, "uses")
+        relative = self._reusable_path(items["uses"][1], uses_field)
+        passed = self._call_with(items, field)
+        loaded = self._load_reusable(relative, uses_field)
+        known = {item["name"]: item for item in loaded["inputs"]}
+        for name in passed:
+            if name not in known:
+                _invalid(
+                    f"{_join(field, 'with')}.{name}: input is not defined", f"{field}.with.{name}"
+                )
+        inputs = []
+        for item in loaded["inputs"]:
+            recorded = {
+                "name": item["name"],
+                "type": item["type"],
+                "required": item["required"],
+                "default": item["default"],
+                "passed": passed.get(item["name"]),
+            }
+            if recorded["passed"] is None and item["required"]:
+                _invalid(f"{field}.with.{item['name']} is required", f"{field}.with.{item['name']}")
+            if recorded["passed"] is not None and "literal" in recorded["passed"]:
+                self._require_input_type(
+                    item["type"], recorded["passed"]["literal"], f"{field}.with.{item['name']}"
+                )
+            if item["default"] is not None and "literal" in item["default"]:
+                self._require_input_type(
+                    item["type"],
+                    item["default"]["literal"],
+                    f"{uses_field}.inputs.{item['name']}.default",
+                )
+            inputs.append(recorded)
+        recorded = {
+            "id": job_id,
+            "location": _location(node),
+            "name": self._optional_string(items, field, "name"),
+            "needs": self._needs(items, field, job_id),
+            "outputs": {},
+            "call": {
+                "path": relative,
+                "inputs": inputs,
+                "outputs": loaded["outputs"],
+                "workflow": loaded["workflow"],
+                "jobs": loaded["jobs"],
+            },
+        }
+        condition = self._if_text(items, field, check_job_if)
+        if condition is not None:
+            recorded["if"] = condition
+        return recorded
+
+    def _reusable_path(self, node, field):
+        text = self._string_scalar(node, field)
+        if "${{" in text:
+            _invalid(f"{field}: expression is not accepted", field)
+        relative = self._uses_relative(text, field)
+        if not _CALLED_WORKFLOW.fullmatch(relative):
+            _invalid(f"{field}: reusable workflow path is not accepted", field)
+        return relative
+
+    def _call_with(self, items, field):
+        if "with" not in items:
+            return {}
+        path = _join(field, "with")
+        body = self._mapping(items["with"][1], path, forbid=False)
+        passed = {}
+        for key, (_, value) in body.items():
+            if key.strip() == "" or "\0" in key:
+                _invalid(f"{path}: input is not defined", path)
+            passed[key] = self._passed_input(value, _join(path, key))
+        return passed
+
+    def _passed_input(self, node, field):
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            self._enter(node, field)
+            self._check_expression(node.value, field, check_call_with)
+            return {"expression": node.value}
+        if not isinstance(node, ScalarNode):
+            self._enter(node, field)
+            _invalid(f"{field} must match the input type", field)
+        return {"literal": self._typed_scalar(node, field)}
+
+    def _load_reusable(self, relative, field):
+        """Read one called workflow from the snapshot and plan every job in it."""
+
+        if self.workflow_level + 1 > MAX_WORKFLOW_LEVELS:
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"{field}: a workflow can connect a maximum of {MAX_WORKFLOW_LEVELS} levels "
+                f"({REUSE_WORKFLOWS}#nesting-reusable-workflows)",
+                field,
+            )
+        if relative in self.call_stack:
+            _invalid(f"{field}: reusable workflow loop", field)
+        if (
+            relative not in self.called_workflows
+            and len(self.called_workflows) >= MAX_CALLED_WORKFLOWS
+        ):
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"{field}: a workflow can call a maximum of {MAX_CALLED_WORKFLOWS} unique "
+                f"reusable workflows ({REUSE_CONFIGURATIONS}#limitations-of-reusable-workflows)",
+                field,
+            )
+        self.called_workflows.add(relative)
+        self.call_stack.append(relative)
+        self.workflow_level += 1
+        # Each document has its own node set. A later parse can reuse the
+        # id of a node from a document that has already been released.
+        self.seen_stack.append(set())
+        try:
+            return self._parse_reusable(relative, field)
+        finally:
+            self.seen_stack.pop()
+            self.workflow_level -= 1
+            self.call_stack.pop()
+
+    def _parse_reusable(self, relative, field):
+        payload = self._workflow_bytes(relative, field)
+        root = self._root(payload)
+        body = self._mapping(root, "")
+        self._allow(body, "", WORKFLOW_KEYS)
+        if "on" not in body:
+            _invalid(f"{field}: workflow_call is required", field)
+        spec = self._called_trigger(body["on"][1], "on")
+        if "jobs" not in body:
+            _invalid(f"{field}: no jobs", field)
+        jobs = self._mapping(body["jobs"][1], "jobs")
+        if not jobs:
+            _invalid(f"{field}: no jobs", field)
+        parsed = {key: self._job(jobs, key) for key in jobs}
+        planned = [parsed[key] for key in self._order_all(parsed)]
+        return {
+            "inputs": spec["inputs"],
+            "outputs": spec["outputs"],
+            "workflow": {
+                "name": self._optional_string(body, "", "name"),
+                "env": self._env(body, ""),
+                "defaults": self._defaults(body, ""),
+            },
+            "jobs": planned,
+        }
+
+    def _called_trigger(self, node, field):
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG:
+            self._enter(node, field)
+            if node.value != "workflow_call":
+                _invalid(f"{field}: workflow_call is required", field)
+            return {"inputs": [], "outputs": {}}
+        if isinstance(node, SequenceNode):
+            self._enter(node, field)
+            names = []
+            for index, child in enumerate(node.value):
+                names.append(self._string_scalar(child, _join(field, index)))
+            if "workflow_call" not in names:
+                _invalid(f"{field}: workflow_call is required", field)
+            return {"inputs": [], "outputs": {}}
+        if not isinstance(node, MappingNode):
+            self._enter(node, field)
+            _invalid(f"{field}: workflow_call is required", field)
+        items = self._mapping(node, field, allow_workflow_call=True)
+        if "workflow_call" not in items:
+            _invalid(f"{field}: workflow_call is required", field)
+        for key, (_, value) in items.items():
+            if key != "workflow_call":
+                self._data(value, _join(field, key), 1)
+        return self._workflow_call_spec(items["workflow_call"][1], _join(field, "workflow_call"))
+
+    def _workflow_call_spec(self, node, field):
+        if isinstance(node, ScalarNode) and node.tag == "tag:yaml.org,2002:null":
+            self._enter(node, field)
+            return {"inputs": [], "outputs": {}}
+        if not isinstance(node, MappingNode):
+            self._enter(node, field)
+            _invalid(f"{field} must be a mapping", field)
+        body = self._mapping(node, field)
+        self._allow(body, field, CALL_TRIGGER_KEYS)
+        return {
+            "inputs": self._call_inputs(body, field),
+            "outputs": self._call_outputs(body, field),
+        }
+
+    def _call_inputs(self, items, field):
+        if "inputs" not in items:
+            return []
+        path = _join(field, "inputs")
+        body = self._mapping(items["inputs"][1], path, forbid=False)
+        recorded = []
+        for key, (_, value) in body.items():
+            if key.strip() == "" or "\0" in key:
+                _invalid(f"{path}: input is not accepted", path)
+            item_field = _join(path, key)
+            if not isinstance(value, MappingNode):
+                _invalid(f"{item_field} must be a mapping", item_field)
+            spec = self._mapping(value, item_field, forbid=False)
+            self._allow(spec, item_field, CALL_INPUT_KEYS)
+            if "type" not in spec:
+                _invalid(f"{item_field}.type is required", f"{item_field}.type")
+            kind = self._string_scalar(spec["type"][1], _join(item_field, "type"))
+            if kind not in CALL_INPUT_TYPES:
+                _invalid(
+                    f"{item_field}.type must be boolean, number, or string",
+                    f"{item_field}.type",
+                )
+            required = False
+            if "required" in spec:
+                required = self._bool_scalar(spec["required"][1], _join(item_field, "required"))
+            if "description" in spec:
+                self._string_scalar(spec["description"][1], _join(item_field, "description"))
+            default = None
+            if "default" in spec:
+                default = self._input_default(spec["default"][1], _join(item_field, "default"))
+            recorded.append({"name": key, "type": kind, "required": required, "default": default})
+        return recorded
+
+    def _input_default(self, node, field):
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            self._enter(node, field)
+            self._check_expression(node.value, field, check_call_default)
+            return {"expression": node.value}
+        if not isinstance(node, ScalarNode):
+            self._enter(node, field)
+            _invalid(f"{field} must match the input type", field)
+        return {"literal": self._typed_scalar(node, field)}
+
+    def _call_outputs(self, items, field):
+        if "outputs" not in items:
+            return {}
+        path = _join(field, "outputs")
+        body = self._mapping(items["outputs"][1], path, forbid=False)
+        recorded = {}
+        for key, (_, value) in body.items():
+            if key.strip() == "" or "\0" in key:
+                _invalid(f"{path}: output is not accepted", path)
+            item_field = _join(path, key)
+            if not isinstance(value, MappingNode):
+                _invalid(f"{item_field} must be a mapping", item_field)
+            spec = self._mapping(value, item_field, forbid=False)
+            self._allow(spec, item_field, CALL_OUTPUT_KEYS)
+            if "description" in spec:
+                self._string_scalar(spec["description"][1], _join(item_field, "description"))
+            if "value" not in spec:
+                _invalid(f"{item_field}.value is required", f"{item_field}.value")
+            value_field = _join(item_field, "value")
+            text = self._string_scalar(spec["value"][1], value_field)
+            if not _whole_expression(text):
+                _invalid(f"{value_field}: expression is not accepted", value_field)
+            self._check_expression(text, value_field, check_call_output)
+            recorded[key] = text
+        return recorded
+
+    def _require_input_type(self, kind, value, field):
+        """Reject a literal that is not the declared workflow_call input type.
+
+        The syntax page allows boolean, number, or string. A boolean is not a
+        number. An omitted default is applied at runtime: false, 0, or "".
+        https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+        """
+
+        if kind == "boolean" and type(value) is bool:
+            return
+        if kind == "number" and type(value) is int:
+            return
+        if kind == "number" and type(value) is float and math.isfinite(value):
+            return
+        if kind == "string" and isinstance(value, str):
+            return
+        _invalid(f"{field} must be a {kind}", field)
+
+    def _workflow_bytes(self, relative, field):
+        if self.action_root is None:
+            _unsupported(field)
+        current = self.action_root
+        if current.is_symlink():
+            _invalid(f"{field}: workflow file is missing", field)
+        for part in relative.split("/"):
+            current = current / part
+            if current.is_symlink():
+                _invalid(f"{field}: workflow file is missing", field)
+        if not current.is_file():
+            _invalid(f"{field}: workflow file is missing", field)
+        try:
+            payload = current.read_bytes()
+        except OSError:
+            _invalid(f"{field}: workflow file is missing", field)
+        if len(payload) > MAX_WORKFLOW_BYTES:
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"workflow file exceeds 500 KB per file ({GITHUB_ACTIONS_LIMITS})",
+                field,
+            )
+        return payload
+
+    def _order_all(self, parsed):
+        """Return every job in the called workflow, needs first."""
+
+        for job_id, job in parsed.items():
+            for need in job["needs"]:
+                if need not in parsed or need == job_id:
+                    _invalid(
+                        f"jobs.{job_id}.needs: dependency is outside the selection",
+                        f"jobs.{job_id}.needs",
+                    )
+        order = []
+        pending = set(parsed)
+        while pending:
+            ready = [
+                job_id
+                for job_id in parsed
+                if job_id in pending
+                and all(need not in pending for need in parsed[job_id]["needs"])
+            ]
+            if not ready:
+                _invalid("jobs: dependency cycle", "jobs")
+            order.append(ready[0])
+            pending.remove(ready[0])
+        return order
 
     def _strategy(self, items, field):
         if "strategy" not in items:
@@ -881,7 +1288,14 @@ class _Planner:
         directory = self._action_directory(relative, field)
         payload = self._action_bytes(directory, field)
         node = self._action_node(payload, field)
-        body = self._mapping(node, field)
+        self.seen_stack.append(set())
+        try:
+            body = self._mapping(node, field)
+            return self._composite_body(body, field, relative)
+        finally:
+            self.seen_stack.pop()
+
+    def _composite_body(self, body, field, relative):
         self._allow(body, field, ACTION_KEYS)
         name = self._required_text(body, field, "name")
         description = self._required_text(body, field, "description")
