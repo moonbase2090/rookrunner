@@ -8,8 +8,10 @@ implemented. NS-20 records the sanitized Git metadata allow-list, and
 NS-21 copies it. NS-22 is the written design for an owned checkout of
 those captured files. NS-23 accepts `uses: actions/checkout@v4` as that
 checkout. It does not replace captured files, persist a credential, or
-create `.git`. Other checkout inputs stay rejected. Copying Git objects,
-synthesizing a commit, and filling the `github` context are not started.
+create `.git`. Other checkout inputs stay rejected. NS-24 designs a
+copy of the trees and blobs of the captured base commit and does not
+copy them. Synthesizing a commit, creating a `.git` directory, and
+filling the `github` context are not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -19,7 +21,9 @@ step 2's Git-dependent and checkout verification does not. Sanitized Git
 metadata is copied to a sibling `git.json`. Credentials and remote URLs
 stay excluded. An owned checkout accepts `uses: actions/checkout@v4`
 and does not replace those files, persist a credential, or create
-`.git`. Other checkout inputs stay rejected. The act pin stays historical.
+`.git`. Other checkout inputs stay rejected. Copying the trees and
+blobs of the captured base commit is designed and is not implemented.
+The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -949,12 +953,41 @@ Acceptance criteria:
 - The workspace has no `.git` and no `git.json` after the step.
 - A workflow of only `run` steps still runs.
 
+**NS-24. Copy the captured base tree.**
+
+Status: designed. The design is
+[copy of the captured base tree](../design/git-objects.md). This slice
+does not copy objects.
+
+When `base_commit` names a commit, the following PR may copy that
+commit's root tree and the trees and blobs reachable from it. An unborn
+repository stores nothing. Commit objects, remotes, credentials, and
+the `.git` directory stay excluded. An excluded path in that tree
+stores no objects, and capture still succeeds. The copied blobs are
+committed bytes. Captured files stay the dirty working bytes. The
+capability version stays 9.
+
+https://git-scm.com/docs/git-ls-tree
+https://git-scm.com/docs/git-cat-file
+https://git-scm.com/docs/git
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A written design names the objects a later PR may copy.
+- That design does not copy commit objects, remotes, credentials, or
+  the `.git` directory.
+- Synthesizing a commit, creating a `.git` directory, and filling the
+  `github` context remain unstarted.
+
 ## After the first path
 
-Copying Git objects, synthesizing a commit, creating a `.git` directory,
-and filling the `github` context are not started. A later `run` step
-still has no Git repository. None of this work is authorized to call the
-result GitHub-equivalent.
+Copying the trees and blobs of the captured base commit is designed in
+NS-24 and is not implemented. Synthesizing a commit, creating a `.git`
+directory, and filling the `github` context are not started. A later
+`run` step still has no Git repository. None of this work is authorized
+to call the result GitHub-equivalent.
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,

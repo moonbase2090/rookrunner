@@ -143,7 +143,9 @@ and reports no metadata digest.
 
 ## Out of scope
 
-Copying objects, synthesizing a commit, filling the `github` context,
-and publishing a GitHub-equivalence claim are later work. Each of those
-still needs its own design. The owned checkout in [checkout](checkout.md)
-does not authorize them.
+Copying the trees and blobs of the captured base commit is designed in
+[git objects](git-objects.md) and is not implemented. Synthesizing a
+commit, filling the `github` context, and publishing a
+GitHub-equivalence claim are later work. Each of those still needs its
+own design. The owned checkout in [checkout](checkout.md) does not
+authorize them.
