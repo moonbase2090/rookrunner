@@ -12,11 +12,27 @@ A custom shell is accepted only when the command is bash or sh and `{0}` is
 its own argument. This is the Linux runner default, not the GitHub `container`
 job default of sh. The `container` key remains unsupported.
 
-Workflow env is overridden by job env, then by step env. The runner then sets
-`GITHUB_WORKSPACE` and `ROOKRUNNER_EVENT`, so those two names stay pointed at
-this attempt. `ROOKRUNNER_EVENT` is a read-only file holding the caller event
-as canonical JSON. It is not a GitHub event delivery. No other GitHub context
-is invented. `runs-on` does not select an image.
+Workflow env is overridden by job env, then by `GITHUB_ENV` written by an
+earlier step of the same job, then by step env. `GITHUB_PATH` from earlier
+steps is prepended to the step's `PATH` when that step sets `PATH`, and
+otherwise to the container `PATH`. The runner then sets `GITHUB_WORKSPACE`,
+`ROOKRUNNER_EVENT`, `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH`, so
+those names stay pointed at this attempt. `ROOKRUNNER_EVENT` is a read-only
+file holding the caller event as canonical JSON. It is not a GitHub event
+delivery. No other GitHub context is invented. `runs-on` does not select an
+image.
+
+`GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` are per-step files. A write
+applies to later steps in the same job, including a later step whose `if` is
+true after a failed step. It does not apply when the step is skipped, fails
+before exec, or times out, and it does not carry into the next job. Stdout
+workflow commands can mask later log text in that job. `set-env` and
+`add-path` are ignored. stderr is captured apart from stdout, so the whole
+step stderr is masked with every mask registered while reading that step's
+stdout. The workflow commands page says a masked value cannot be set as an
+output, and its example writes that value to `GITHUB_OUTPUT` and reads it
+back. This subset follows the example: the output is kept, and logs of that
+value in the same job are masked. A later job does not inherit the mask.
 
 The container is created with network `none`. The Docker socket and host
 credential directories are not mounted. Step `if` and job `if` are evaluated.
@@ -50,6 +66,8 @@ import tempfile
 import threading
 import time
 
+from .commands import ENV_NAME as _ENV_NAME
+from .commands import mask_text, parse_env, parse_output, parse_path, process_stdout
 from .expr import ExprError, evaluate, job_is_enabled, mentions_context, step_is_enabled
 from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
 from .protocol import canonical
@@ -66,7 +84,6 @@ _CANCEL_SIGTERM_SECONDS = 2.5
 CONTAINER_NAME = re.compile(r"^rookrunner-[0-9a-f]{16}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
-_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FILE_MODES = {"100644": 0o644, "100755": 0o755}
 # jobs.<job_id>.outputs: 1 MB per job and 50 MB for the workflow run.
 # The syntax page does not define MB as 1000 or 1024. These checks use
@@ -75,10 +92,32 @@ _FILE_MODES = {"100644": 0o644, "100755": 0o755}
 _OUTPUT_JOB_BYTES = 1024 * 1024
 _OUTPUT_RUN_BYTES = 50 * 1024 * 1024
 _INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
-_RESERVED_ENV = {
-    "GITHUB_WORKSPACE": "/workspace",
-    "ROOKRUNNER_EVENT": "/run/rookrunner/event.json",
-}
+
+
+class _JobRuntime:
+    """Env, PATH prefixes, step outputs, and masks for one job.
+
+    The next job gets a new instance. The container and workspace are shared.
+    """
+
+    def __init__(self):
+        self.env = {}
+        self.paths = []
+        self.outputs = {}
+        self.masks = []
+        self.base_path = None
+
+
+def _reserved_env(script_name):
+    """Names a step cannot replace. The three command files are per step."""
+
+    return {
+        "GITHUB_WORKSPACE": "/workspace",
+        "ROOKRUNNER_EVENT": "/run/rookrunner/event.json",
+        "GITHUB_ENV": f"/run/rookrunner-cmd/{script_name}-env",
+        "GITHUB_OUTPUT": f"/run/rookrunner-cmd/{script_name}-output",
+        "GITHUB_PATH": f"/run/rookrunner-cmd/{script_name}-path",
+    }
 
 
 class RunError(Exception):
@@ -198,7 +237,7 @@ def _docker_binary(docker):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 3:
+    if not isinstance(plan, dict) or plan.get("capability_version") != 4:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     jobs = plan.get("jobs")
@@ -263,12 +302,16 @@ def _defaults(body):
     return shell, working
 
 
-def _merged_env(workflow, job, step):
+def _merged_env(workflow, job, step, runtime, script_name, path_value):
     merged = {}
     merged.update(_env_layer(workflow.get("env")))
     merged.update(_env_layer(job.get("env")))
+    if runtime is not None:
+        merged.update(runtime.env)
     merged.update(_env_layer(step.get("env")))
-    merged.update(_RESERVED_ENV)
+    if path_value is not None:
+        merged["PATH"] = path_value
+    merged.update(_reserved_env(script_name))
     return [(key, merged[key]) for key in sorted(merged)]
 
 
@@ -469,7 +512,7 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     return reference, digest, workflow, jobs, encoded, workspace
 
 
-def _create_args(name, workspace, private, reference):
+def _create_args(name, workspace, private, commands, reference):
     return [
         "create",
         "--name",
@@ -486,6 +529,8 @@ def _create_args(name, workspace, private, reference):
         f"type=bind,source={workspace},destination=/workspace",
         "--mount",
         f"type=bind,source={private},destination=/run/rookrunner,readonly",
+        "--mount",
+        f"type=bind,source={commands},destination=/run/rookrunner-cmd",
         reference,
         "-c",
         # PID 1 ignores SIGINT and SIGTERM unless it installs a handler.
@@ -760,6 +805,8 @@ def run_job(
     docker_bin = _docker_binary(docker)
     private = Path(tempfile.mkdtemp(prefix="rookrunner-run-"))
     os.chmod(private, 0o700)
+    commands = Path(tempfile.mkdtemp(prefix="rookrunner-cmd-"))
+    os.chmod(commands, 0o700)
     name = None
     created = False
     graceful = False
@@ -780,13 +827,17 @@ def run_job(
                 script = private / script_name
                 script.write_bytes(step["run"].encode("utf-8"))
                 os.chmod(script, 0o600)
-        if "," in os.fspath(private):
-            _setup("workspace path is not accepted")
+        for label in (private, commands):
+            if "," in os.fspath(label) or "\n" in os.fspath(label):
+                _setup("workspace path is not accepted")
         name = _container_name(owner)
         if owner is not None and not owner.begin(docker_bin, name):
             _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(
-            docker_bin, _create_args(name, workspace, private, reference), 60, deadline
+            docker_bin,
+            _create_args(name, workspace, private, commands, reference),
+            60,
+            deadline,
         )
         if code != 0:
             _setup("container setup failed")
@@ -845,6 +896,7 @@ def run_job(
                 results[job["id"]] = {"result": "skipped", "outputs": {}}
                 continue
             prior = []
+            runtime = _JobRuntime()
             job_failed = False
             for step in job["steps"]:
                 if deadline - time.monotonic() <= 0:
@@ -864,6 +916,8 @@ def run_job(
                     owner is not None and owner.cancelled(),
                     needs,
                     scripts[(job["id"], step["index"])],
+                    runtime,
+                    commands,
                 )
                 records.append(record)
                 prior.append(record)
@@ -874,7 +928,9 @@ def run_job(
             result_name = "failure" if job_failed else "success"
             produced, output_bytes = _job_outputs(
                 job,
-                _expression_values(event, workflow, job, {"env": {}}, prior, cancelled, needs),
+                _expression_values(
+                    event, workflow, job, {"env": {}}, prior, cancelled, needs, runtime
+                ),
                 output_bytes,
             )
             results[job["id"]] = {"result": result_name, "outputs": produced}
@@ -906,6 +962,7 @@ def run_job(
             except (RunError, _Timeout):
                 cleanup_code = 1
         shutil.rmtree(private, ignore_errors=True)
+        shutil.rmtree(commands, ignore_errors=True)
     if failure is not None:
         raise failure
     if cleanup_code != 0:
@@ -948,16 +1005,20 @@ def _cancelled(image_digest, reference, records):
     }
 
 
-def _expression_values(event, workflow, job, step, prior, cancelled, needs=None):
+def _expression_values(event, workflow, job, step, prior, cancelled, needs=None, runtime=None):
     """Contexts for one step `if`. Missing properties stay missing.
 
-    `env` is the workflow, job, and step env map. Values that contain
-    `${{ }}` are not expanded. `steps.<id>.outputs` stays empty.
+    `env` is the workflow env, the job env, `GITHUB_ENV` from earlier steps
+    in this job, then this step's env. Values that contain `${{ }}` are not
+    expanded. `steps.<id>.outputs` is what earlier steps wrote to
+    `GITHUB_OUTPUT`. The command-file paths are not part of this map.
     """
 
     env = {}
     env.update(_env_layer(workflow.get("env")))
     env.update(_env_layer(job.get("env")))
+    if runtime is not None:
+        env.update(runtime.env)
     env.update(_env_layer(step.get("env")))
     steps = {}
     for record in prior:
@@ -965,7 +1026,10 @@ def _expression_values(event, workflow, job, step, prior, cancelled, needs=None)
         conclusion = _conclusion(record.get("status"))
         if not isinstance(step_id, str) or step_id == "" or conclusion is None:
             continue
-        steps[step_id] = {"outcome": conclusion, "conclusion": conclusion, "outputs": {}}
+        outputs = {}
+        if runtime is not None:
+            outputs = dict(runtime.outputs.get(step_id, {}))
+        steps[step_id] = {"outcome": conclusion, "conclusion": conclusion, "outputs": outputs}
     if cancelled or any(record.get("status") == "failed" for record in prior):
         job_status = "cancelled" if cancelled else "failure"
     else:
@@ -1089,12 +1153,14 @@ def _consider_step(
     cancelled,
     needs,
     script_name,
+    runtime,
+    commands,
 ):
     job_id = job.get("id")
     try:
         enabled = step_is_enabled(
             step.get("if"),
-            _expression_values(event, workflow, job, step, prior, cancelled, needs),
+            _expression_values(event, workflow, job, step, prior, cancelled, needs, runtime),
             prior,
             cancelled,
         )
@@ -1114,6 +1180,8 @@ def _consider_step(
         deadline,
         script_name,
         job_id,
+        runtime,
+        commands,
     )
 
 
@@ -1129,6 +1197,8 @@ def _run_step(
     deadline,
     script_name,
     job_id,
+    runtime,
+    commands,
 ):
     shell = _chosen_shell(step, job, workflow)
     relative = _chosen_directory(step, job, workflow)
@@ -1147,8 +1217,16 @@ def _run_step(
             "working-directory is not inside the workspace",
             job_id,
         )
+    files = _command_files(commands, script_name)
+    try:
+        for path in files.values():
+            path.write_bytes(b"")
+            os.chmod(path, 0o644)
+    except OSError as exc:
+        _setup("container setup failed", exc)
+    path_value = _path_overlay(docker, name, step, runtime, deadline)
     env_args = []
-    for key, value in _merged_env(workflow, job, step):
+    for key, value in _merged_env(workflow, job, step, runtime, script_name, path_value):
         env_args.extend(["--env", f"{key}={value}"])
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -1162,11 +1240,93 @@ def _run_step(
         )
     except _Timeout:
         # The docker client is gone. Partial stdout and stderr from that call
-        # are discarded. The caller stops the container.
+        # are discarded. Command files from this step are not applied.
         message = "job timed out" if job_bound else "step timed out"
         record = _step_result(step, "failed", None, "", "", message, job_id)
         if job_bound:
             raise _JobDeadline(record) from None
         raise _StepTimedOut(record) from None
+    stdout_text = _text(stdout)
+    stderr_text = _text(stderr)
+    logged = process_stdout(stdout_text, runtime.masks)
+    logged_err = mask_text(stderr_text, runtime.masks)
+    _apply_command_files(runtime, step, files)
     status = "succeeded" if code == 0 else "failed"
-    return _step_result(step, status, code, _text(stdout), _text(stderr), None, job_id)
+    return _step_result(step, status, code, logged, logged_err, None, job_id)
+
+
+def _command_files(commands, script_name):
+    return {
+        "env": commands / f"{script_name}-env",
+        "output": commands / f"{script_name}-output",
+        "path": commands / f"{script_name}-path",
+    }
+
+
+def _path_overlay(docker, name, step, runtime, deadline):
+    """Prepend `GITHUB_PATH` entries. An empty file does not replace `PATH`."""
+
+    if runtime is None or not runtime.paths:
+        return None
+    raw = step.get("env")
+    if isinstance(raw, dict) and "PATH" in raw:
+        base = raw["PATH"]
+        if not isinstance(base, str) or "\0" in base:
+            _setup("environment value is not accepted")
+    else:
+        if runtime.base_path is None:
+            runtime.base_path = _probe_path(docker, name, deadline)
+        base = runtime.base_path
+    front = ":".join(reversed(runtime.paths))
+    if base:
+        return front + ":" + base
+    return front
+
+
+def _probe_path(docker, name, deadline):
+    """Read the container `PATH`. A failed probe uses an empty base."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return ""
+    try:
+        code, stdout, _stderr = _invoke(
+            docker,
+            ["exec", name, "sh", "-c", 'printf %s "$PATH"'],
+            min(30, remaining),
+        )
+    except _Timeout:
+        return ""
+    if code != 0:
+        return ""
+    text = _text(stdout)
+    if "\0" in text:
+        return ""
+    return text
+
+
+def _apply_command_files(runtime, step, files):
+    """Apply command files after exec. A missing or non-UTF-8 file is ignored."""
+
+    env_text = _read_utf8(files["env"])
+    if env_text is not None:
+        runtime.env.update(parse_env(env_text))
+    output_text = _read_utf8(files["output"])
+    if output_text is not None:
+        step_id = step.get("id")
+        if isinstance(step_id, str) and step_id:
+            runtime.outputs[step_id] = parse_output(output_text)
+    path_text = _read_utf8(files["path"])
+    if path_text is not None:
+        runtime.paths.extend(parse_path(path_text))
+
+
+def _read_utf8(path):
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeError:
+        return None

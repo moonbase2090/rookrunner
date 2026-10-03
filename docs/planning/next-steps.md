@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-14 are
+roadmap step 1 and the first executable subset. NS-1 through NS-15 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -387,8 +387,8 @@ caller-supplied event. Other `github` properties are not invented.
 `strategy`, `matrix`, `vars`, and `inputs` are empty objects. `needs` is
 empty until a job dependency supplies it (NS-14).
 `steps.<id>.outcome` and `steps.<id>.conclusion` are `success`, `failure`,
-or `skipped`. `steps.<id>.outputs` is empty. `env` is the workflow, job,
-and step env map, and `${{ }}` in those values stays literal.
+or `skipped`. `steps.<id>.outputs` is empty until NS-15. `env` is the
+workflow, job, and step env map, and `${{ }}` in those values stays literal.
 
 Operators, types, and the functions used by this subset follow the
 expression reference
@@ -453,7 +453,7 @@ Job output expressions may use `github`, `needs`, `strategy`, `matrix`,
 lists no special functions for the key, and a listed function is available
 only where it is named, so `success`, `failure`, `always`, `cancelled`, and
 `hashFiles` are not accepted there. Ordinary functions, including `case`,
-are. `steps.<id>.outputs` stays empty. `GITHUB_OUTPUT` is not implemented.
+are. `steps.<id>.outputs` is filled from `GITHUB_OUTPUT` in NS-15.
 `run` and `env` text stay literal.
 
 Outputs are strings. Null is an empty string. A boolean is `true` or
@@ -484,17 +484,87 @@ Acceptance criteria:
 - A dependency outside the selection fails planning.
 - An output expression that reads `secrets` is not copied into the next job.
 
+**NS-15. Environment files and workflow commands.**
+
+Status: implemented.
+
+Capability version is 4. The plan shape is unchanged. `GITHUB_ENV`,
+`GITHUB_OUTPUT`, and `GITHUB_PATH` are per-step files on a writable mount.
+The script directory stays read-only. A step that runs writes those files.
+The write applies at the next step in the same job. The writing step does
+not see its own env or PATH update. A failed step's files still apply, so
+a later step whose `if` is true can read them. A skipped step, a step that
+fails before exec, and a timed-out exec do not apply. The next job starts
+with empty env, PATH prefixes, step outputs, and masks. The container and
+workspace are still shared.
+
+Env precedence for the process is workflow env, job env, earlier
+`GITHUB_ENV`, then step env. `GITHUB_PATH` is prepended after that, to the
+step's `PATH` when the step sets it, and otherwise to the container `PATH`.
+An empty path file does not replace `PATH`. `GITHUB_WORKSPACE`,
+`ROOKRUNNER_EVENT`, and the three file paths are set last and cannot be
+replaced. `env` in an expression uses the same layers except the file paths
+and the PATH prefix. `${{ }}` inside `run` and YAML `env` values stays
+literal, including `env: SELECTED_COLOR: ${{ steps.color.outputs.SELECTED_COLOR }}`.
+Read a step output with `steps.<id>.outputs` or a job output expression.
+
+An env name matches the existing name rule. `GITHUB_*` and `RUNNER_*` are
+ignored, as is `NODE_OPTIONS`. `CI` may be set. Names are case sensitive.
+`ROOKRUNNER_*` is reserved here and is not a GitHub name. A line containing
+`<<` is a heredoc. The body is joined with newlines and has no trailing
+newline. An unclosed heredoc is not stored. A value containing NUL is not
+stored. Invalid names are skipped and do not fail the step. Percent-escapes
+stay literal. The workflow commands page does not specify a decoding table.
+Output names follow the property rule, so `secret-number` is a name. A step
+without an `id` can write `GITHUB_OUTPUT`, and nothing can retrieve it. A
+missing or non-UTF-8 command file is ignored. No separate step-output byte
+cap is added. Job outputs stay at the documented 1 MB and 50 MB totals.
+
+Stdout commands use the documented `::` form. Only complete lines are
+commands. `add-mask` registers the exact string and each whitespace-separated
+word, and later log text in that job replaces the longest match with `***`.
+The command line is not logged. A line before the command stays unmasked.
+stderr is not ordered against stdout, so the whole step stderr is masked
+with the masks registered while reading that step's stdout. Masks do not
+cross jobs, and workspace files are not masked. The page says a masked value
+cannot be set as an output, and the same page's example writes that value to
+`GITHUB_OUTPUT` and reads `steps.<id>.outputs`. This subset follows the
+example: the output is kept, and logs of that value in the job are masked.
+A later job does not inherit the mask.
+
+`stop-commands` uses a non-empty token. While it is stopped, command-shaped
+lines stay literal. `::{token}::` resumes, compared exactly. `set-env` and
+`add-path` are consumed and not applied. `debug` is dropped. This subset has
+no `ACTIONS_STEP_DEBUG` secret. `notice`, `warning`, and `error` log the
+message text and do not create an annotation. `group` logs its title.
+`endgroup` is dropped. Logs are not collapsible. `echo` is dropped. An
+unknown command, including `set-output`, stays in the log. `GITHUB_STEP_SUMMARY`,
+`GITHUB_STATE`, `GITHUB_ARTIFACTS`, and action `INPUT_` / `STATE_` variables
+are not set.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
+https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` apply to later steps in
+  the same job and do not apply to the writing step.
+- `add-mask` masks subsequent logs of that string. `set-env` and `add-path`
+  do not change the next step.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-fourteen PRs. Each one updates the capability version, rejects anything it
+fifteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-15 | Environment files and workflow commands | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, and the documented commands apply to later steps. `add-mask` masks subsequent logs of that exact string. Deprecated `set-env` and `add-path` stay disabled. |
 | NS-16 | One action runtime | Composite, JavaScript, or Docker actions are added one runtime per PR. The action comes from the snapshot or from a recorded digest. A moving ref after acceptance does not change the run. |
 | NS-17 | Matrix | Include, exclude, fail-fast, and max-parallel are tested. Unsupported matrix keys fail at plan time. |
 | NS-18 | Reusable workflows | `workflow_call` inputs and outputs type-check. Nesting over the documented limit fails. Secrets are not passed implicitly. |
@@ -504,5 +574,5 @@ GitHub-equivalent.
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-15 through NS-20 can follow that evidence. They are not required
+restart. NS-16 through NS-20 can follow that evidence. They are not required
 to say the first subset runs.
