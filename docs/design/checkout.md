@@ -89,7 +89,9 @@ added.
 
 ## Out of scope
 
-Copying Git objects, synthesizing a commit, creating a `.git`
-directory, fetching, persisting a credential, and filling the `github`
-context each need their own design. A later `run` step still has no
-Git repository. This design does not authorize those behaviors.
+Copying the trees and blobs of the captured base commit is designed in
+[git objects](git-objects.md) and is not implemented. Synthesizing a
+commit, creating a `.git` directory, fetching, persisting a credential,
+and filling the `github` context each need their own design. A later
+`run` step still has no Git repository. This design does not authorize
+those behaviors.

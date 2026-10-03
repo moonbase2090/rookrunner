@@ -78,7 +78,9 @@ materialized LFS data is not silently treated as supported LFS behavior.
 Git commands inspect index/tree/attribute metadata. Inherited Git redirection
 variables and global/system configuration are disabled, as are hooks, fsmonitor,
 optional index locks, prompts, and lazy fetching. No local `.git` configuration,
-objects, credentials, hooks, or remote URLs are copied. A later Git command
+objects, credentials, hooks, or remote URLs are copied. Copying the trees
+and blobs of the captured base commit is designed in
+[git objects](git-objects.md) and is not implemented. A later Git command
 inside the workspace still has no repository. `uses: actions/checkout@v4`
 is an owned checkout of the captured files and does not fetch or replace
 them. Other checkout actions stay rejected. The
