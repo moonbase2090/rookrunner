@@ -81,7 +81,8 @@ optional index locks, prompts, and lazy fetching. No local `.git` configuration,
 objects, credentials, hooks, or remote URLs are copied. Consequently Git-dependent
 workflows and `actions/checkout` are **not yet supported or validated**. The
 [sanitized metadata design](git-metadata.md) names the only fields copied into
-the sibling `git.json`. Checkout actions stay rejected.
+the sibling `git.json`. An owned checkout of those files is
+[designed](checkout.md) and is not accepted yet. Checkout actions stay rejected.
 
 ## Stability and storage
 
