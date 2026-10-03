@@ -80,5 +80,7 @@ Local Actions configuration, code, state, or identity was imported.
 The current capture rules deliberately reject some legitimate inputs and do not
 provide atomic filesystem snapshots, arbitrary secret detection, or a sandbox.
 The allow-list is copied to a sibling `git.json`
-([design](../design/git-metadata.md)). Checkout actions stay rejected. See the
+([design](../design/git-metadata.md)). An owned checkout is
+[designed](../design/checkout.md) and is not accepted yet. Checkout
+actions stay rejected. See the
 [implemented capture contract](../design/source-capture.md).

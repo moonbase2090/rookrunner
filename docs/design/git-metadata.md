@@ -97,9 +97,11 @@ default, persists a token for later Git commands
 (https://github.com/actions/checkout). Its default clean step resets
 the work tree to HEAD. That would drop the dirty and untracked bytes
 this capture stores. The action stays `CAPABILITY_UNSUPPORTED`,
-including `uses: actions/checkout@v4` and a `uses` without `@`. Capture
-does not fetch, does not persist a credential, and does not reset the
-workspace.
+including `uses: actions/checkout@v4` and a `uses` without `@`. The
+[owned checkout](checkout.md) says a later PR may accept only that `v4`
+string without replacing captured files. That acceptance is not
+implemented. Capture does not fetch, does not persist a credential, and
+does not reset the workspace.
 
 No capture command may print configuration or remotes.
 `git config --list` and `git remote -v` are not allowed.
@@ -139,7 +141,8 @@ and reports no metadata digest.
 
 ## Out of scope
 
-Accepting `actions/checkout`, copying objects, synthesizing a commit,
-filling the `github` context, and publishing a GitHub-equivalence claim
-are later work. Each one needs its own design. None of them is
+Accepting `actions/checkout` is designed in [checkout](checkout.md) and
+is not implemented. Copying objects, synthesizing a commit, filling the
+`github` context, and publishing a GitHub-equivalence claim are later
+work. Each of those still needs its own design. None of them is
 authorized by this copy.

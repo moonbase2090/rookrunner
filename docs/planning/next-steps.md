@@ -5,7 +5,8 @@ Status: build order, 2026-10-03. Derived from the
 [engine plan](../design/execution-engine.md) supplies the sequence inside
 roadmap step 1 and the first executable subset. NS-1 through NS-19 are
 implemented. NS-20 records the sanitized Git metadata allow-list, and
-NS-21 copies it. Checkout actions stay rejected. Later items are not.
+NS-21 copies it. NS-22 is the written design for an owned checkout of
+those captured files. Checkout actions stay rejected. Later items are not.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -13,7 +14,8 @@ and not an acceptance of open PRD questions.
 Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. Sanitized Git
 metadata is copied to a sibling `git.json`. Credentials and remote URLs
-stay excluded. Checkout actions stay rejected. The act pin stays historical.
+stay excluded. An owned checkout of those files is designed and is not
+accepted yet. Checkout actions stay rejected. The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -641,7 +643,8 @@ states the same 1 MB and 50 MB figures and says size is approximated with
 UTF-16. It does not define MB.
 
 Checkout and `actions/checkout` stay rejected. Sanitized metadata is
-the sibling `git.json` written by NS-21.
+the sibling `git.json` written by NS-21. The owned-checkout design is
+NS-22.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
@@ -890,13 +893,43 @@ Acceptance criteria:
 - A later checkout edit does not change the captured digest.
 - Checkout actions remain an explicit rejection.
 
+**NS-22. Owned checkout of captured files.**
+
+Status: designed. The design is [checkout of captured files](../design/checkout.md).
+This slice does not accept a checkout action.
+
+The workspace already holds the captured files, including dirty bytes.
+`actions/checkout` fetches and, by default, resets that work tree. The
+following PR may accept only `uses: actions/checkout@v4` as an owned
+step that does not replace those files, does not persist a credential,
+and does not create `.git`. `clean: true`, a token, a repository, a
+ref, and every other checkout input stay rejected. Other `uses` strings
+stay rejected. `github.sha` and `github.token` stay uninvented. This
+slice does not change the capability version.
+
+https://github.com/actions/checkout
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A written design names the one checkout `uses` string a later PR may accept.
+- That design does not replace captured files or persist a credential.
+- Checkout actions remain an explicit rejection.
+
 ## After the first path
 
-No later item is started. Accepting a checkout action needs its own
-design. Checkout actions remain an explicit rejection. None of this work
-is authorized to call the result GitHub-equivalent.
+The next item accepts the checkout designed above. It is not started.
+Copying Git objects, synthesizing a commit, and filling the `github`
+context are not started. None of this work is authorized to call the
+result GitHub-equivalent.
+
+| Order | PR | Acceptance criteria |
+| --- | --- | --- |
+| NS-23 | Accept the owned checkout | Accept only `uses: actions/checkout@v4` as a step that does not replace captured files, does not persist a credential, and does not create `.git`. Every other checkout input stays an explicit rejection. |
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-21 follows that evidence. It does not say the first subset runs.
+restart. NS-23 can follow that evidence. It is not required to say the
+first subset runs.
