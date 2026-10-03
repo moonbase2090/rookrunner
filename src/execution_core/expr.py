@@ -1,10 +1,22 @@
-"""Evaluator for a step `if` expression.
+"""Evaluator for step `if`, job `if`, and job output expressions.
 
 Operators, literals, coercion, and functions follow the GitHub Actions
-expression reference. Context names allowed on `jobs.<job_id>.steps.if`
-follow the context-availability table. An unavailable context or function
-is an error. A missing property of an available value is an empty string.
-`hashFiles` is not implemented. This is not a GitHub equivalence claim.
+expression reference, including `case`. Context names follow the
+context-availability table for the workflow key being checked. An
+unavailable context or function is an error. A missing property of an
+available value is an empty string. `hashFiles` is not implemented.
+
+`case` evaluates predicates in order and does not evaluate later branches.
+A property name may contain `-`, which is the contexts reference rule for
+property dereference. `env.MY-VAR` is the property `MY-VAR`. The operators
+table does not list arithmetic, and `-` is not subtraction here.
+
+The contexts table lists no special functions for a job output. A function
+listed in that column is available only on the keys that name it, so
+`success`, `failure`, `always`, and `cancelled` are not accepted in an
+output. Ordinary functions are.
+
+This is not a GitHub equivalence claim.
 https://docs.github.com/en/actions/reference/workflows-and-actions/expressions
 https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
 
@@ -47,6 +59,27 @@ STEP_IF_FUNCTIONS = frozenset(
         "cancelled",
     }
 )
+# jobs.<job_id>.if — https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+JOB_IF_CONTEXTS = frozenset({"github", "needs", "vars", "inputs"})
+# jobs.<job_id>.outputs.<output_id>
+# Special functions: None. Status functions are listed only on `if`.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+OUTPUT_CONTEXTS = frozenset(
+    {
+        "github",
+        "needs",
+        "strategy",
+        "matrix",
+        "job",
+        "runner",
+        "env",
+        "vars",
+        "secrets",
+        "steps",
+        "inputs",
+    }
+)
+OUTPUT_FUNCTIONS = STEP_IF_FUNCTIONS - _STATUS
 
 
 class ExprError(Exception):
@@ -71,8 +104,25 @@ def unwrap_expression(source):
 def check_step_if(source):
     """Reject a step `if` the subset cannot evaluate. Does not run it."""
 
-    tree = _parse(unwrap_expression(source))
-    _check(tree)
+    _check(_parse(unwrap_expression(source)), STEP_IF_CONTEXTS, STEP_IF_FUNCTIONS)
+
+
+def check_job_if(source):
+    """Reject a job `if` the subset cannot evaluate. Does not run it."""
+
+    _check(_parse(unwrap_expression(source)), JOB_IF_CONTEXTS, STEP_IF_FUNCTIONS)
+
+
+def check_job_output(source):
+    """Reject a job output expression the subset cannot evaluate."""
+
+    _check(_parse(unwrap_expression(source)), OUTPUT_CONTEXTS, OUTPUT_FUNCTIONS)
+
+
+def mentions_context(source, name):
+    """Return whether `name` appears as a context, including in a branch that is not taken."""
+
+    return _mentions(_parse(unwrap_expression(source)), name)
 
 
 def evaluate(source, values, prior=None, cancelled=False):
@@ -98,29 +148,71 @@ def step_is_enabled(source, values, prior, cancelled):
     return _truthy(_eval(tree, values, _functions(prior, cancelled)))
 
 
-def _check(node):
+def job_is_enabled(source, values, needed_results, ancestor_failed, cancelled):
+    """Return whether a job `if` is true.
+
+    An omitted condition is `success()`. Direct needs that are not `success`
+    make `success()` false, so a failed or skipped dependency skips this job.
+    `failure()` is true when any transitive dependency failed. `always()`
+    stays true. The same default combination as a step `if` applies when the
+    expression does not call a status function.
+    """
+
+    if source is None:
+        tree = _parse("success()")
+    else:
+        tree = _parse(unwrap_expression(source))
+        if not _has_status(tree):
+            tree = ("and", ("call", "success", ()), tree)
+    functions = _functions([], cancelled)
+    functions["success"] = lambda: all(item == "success" for item in needed_results)
+    functions["failure"] = lambda: bool(ancestor_failed)
+
+    def always():
+        return True
+
+    functions["always"] = always
+    functions["cancelled"] = lambda: bool(cancelled)
+    return _truthy(_eval(tree, values, functions))
+
+
+def _check(node, contexts, functions):
     kind = node[0]
     if kind == "name":
-        if node[1] not in STEP_IF_CONTEXTS:
+        if node[1] not in contexts:
             raise ExprError(f"context is not available: {node[1]}")
         return
     if kind == "call":
         name = node[1]
         if name == "hashFiles":
             raise ExprError("function is not available: hashFiles")
-        if name not in STEP_IF_FUNCTIONS:
+        if name not in functions:
             _reject()
         for arg in node[2]:
-            _check(arg)
+            _check(arg, contexts, functions)
         return
     if kind == "lit":
         return
     for child in node[1:]:
         if isinstance(child, tuple):
-            _check(child)
+            _check(child, contexts, functions)
         elif isinstance(child, list):
             for item in child:
-                _check(item)
+                _check(item, contexts, functions)
+
+
+def _mentions(node, name):
+    kind = node[0]
+    if kind == "name":
+        return node[1] == name
+    if kind == "lit":
+        return False
+    for child in node[1:]:
+        if isinstance(child, tuple) and _mentions(child, name):
+            return True
+        if isinstance(child, list) and any(_mentions(item, name) for item in child):
+            return True
+    return False
 
 
 def _has_status(node):
@@ -306,6 +398,9 @@ def _tokenize(source):
             if char.isalpha() or char == "_":
                 start = index
                 index += 1
+                # Property dereference allows "-" in the name. The operators
+                # table does not list subtraction, so this is not arithmetic.
+                # https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
                 while index < length and (source[index].isalnum() or source[index] in "_-"):
                     index += 1
                 yield ("ident", source[start:index])

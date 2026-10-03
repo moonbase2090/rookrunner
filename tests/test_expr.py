@@ -4,8 +4,12 @@ from pathlib import Path
 
 from execution_core.expr import (
     ExprError,
+    check_job_if,
+    check_job_output,
     check_step_if,
     evaluate,
+    job_is_enabled,
+    mentions_context,
     step_is_enabled,
 )
 from execution_core import expr
@@ -114,3 +118,51 @@ class ExpressionTests(unittest.TestCase):
         self.assertTrue(step_is_enabled("cancelled()", VALUES, [], True))
         self.assertFalse(step_is_enabled("cancelled()", VALUES, [], False))
         self.assertTrue(step_is_enabled("success()", VALUES, skipped, False))
+
+    def test_hyphen_is_part_of_the_property_name(self):
+        values = dict(VALUES)
+        values["env"] = {"MY-VAR": "kept", "MY": "no"}
+        self.assertEqual(evaluate("env.MY-VAR", values), "kept")
+        self.assertEqual(evaluate("env['MY-VAR']", values), "kept")
+        with self.assertRaises(ExprError):
+            evaluate("1-1", values)
+
+    def test_case_returns_the_first_true_branch(self):
+        self.assertEqual(
+            evaluate("case(true, 'first', false, fromJSON('['), 'no')", VALUES), "first"
+        )
+        self.assertEqual(evaluate("case(false, 'a', true, 'b', 'c')", VALUES), "b")
+
+    def test_job_if_status_follows_needs(self):
+        values = dict(VALUES)
+        values["needs"] = {"one": {"result": "success", "outputs": {"kind": "local"}}}
+        self.assertTrue(job_is_enabled(None, VALUES, [], False, False))
+        self.assertFalse(job_is_enabled(None, VALUES, ["failure"], True, False))
+        self.assertFalse(job_is_enabled(None, VALUES, ["skipped"], False, False))
+        self.assertTrue(job_is_enabled("always()", VALUES, ["failure"], True, False))
+        self.assertTrue(job_is_enabled("failure()", VALUES, ["skipped"], True, False))
+        self.assertFalse(job_is_enabled("failure()", VALUES, ["skipped"], False, False))
+        self.assertTrue(job_is_enabled("success()", values, ["success"], False, False))
+        self.assertTrue(
+            job_is_enabled("needs.one.outputs.kind == 'local'", values, ["success"], False, False)
+        )
+        self.assertFalse(
+            job_is_enabled("needs.one.outputs.kind == 'local'", values, ["failure"], True, False)
+        )
+        self.assertTrue(job_is_enabled("cancelled()", VALUES, [], False, True))
+        self.assertFalse(job_is_enabled("cancelled()", VALUES, [], False, False))
+
+    def test_secrets_mention_includes_an_untaken_branch(self):
+        self.assertTrue(mentions_context("false && secrets.TOKEN", "secrets"))
+        self.assertFalse(mentions_context("github.event.kind", "secrets"))
+        check_job_output("secrets.TOKEN")
+        check_job_output("case(true, 'kept', 'other')")
+        with self.assertRaises(ExprError) as raised:
+            check_job_if("secrets.TOKEN")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_job_output("success()")
+        self.assertIn("expression is not accepted", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_job_output("hashFiles('*.txt')")
+        self.assertIn("function is not available: hashFiles", str(raised.exception))

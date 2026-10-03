@@ -65,8 +65,13 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 2)
+        self.assertEqual(plan["capability_version"], 3)
         self.assertEqual(plan["job"]["id"], "build")
+        self.assertEqual(plan["job"]["needs"], [])
+        self.assertEqual(plan["job"]["outputs"], {})
+        self.assertNotIn("if", plan["job"])
+        self.assertEqual([item["id"] for item in plan["jobs"]], ["build"])
+        self.assertIs(plan["jobs"][-1], plan["job"])
         self.assertEqual(plan["job"]["name"], "Build")
         self.assertEqual(plan["job"]["runs_on"], "ubuntu-latest")
         self.assertEqual(plan["workflow"]["name"], "demo")
@@ -290,12 +295,12 @@ jobs:
   test:
     uses: example/repo/.github/workflows/ci.yml@main
 """,
-            "jobs.test.needs": """\
+            "jobs.test.steps.0.needs": """\
 jobs:
   test:
-    needs: other
     steps:
-      - run: echo hi
+      - needs: other
+        run: echo hi
 """,
             "jobs.test.strategy": """\
 jobs:
@@ -355,15 +360,6 @@ jobs:
     steps:
       - run: echo hi
 """,
-            "jobs.other": """\
-jobs:
-  test:
-    steps:
-      - run: echo hi
-  other:
-    steps:
-      - run: echo there
-""",
         }
         for field, workflow in cases.items():
             with self.subTest(field=field):
@@ -417,18 +413,193 @@ jobs:
         self.assertIn("hashFiles", str(raised.exception))
         self.assertIn("capability is unsupported", str(raised.exception))
 
-    def test_job_if_stays_unsupported(self):
+    def test_closure_follows_workflow_order(self):
         workflow = """\
 jobs:
-  test:
-    if: success()
+  build:
+    needs: [left, right]
     steps:
-      - run: echo hi
+      - run: echo build
+  extra:
+    steps:
+      - run: echo extra
+  right:
+    steps:
+      - run: echo right
+  left:
+    steps:
+      - run: echo left
+"""
+        plan = plan_workflow(workflow.encode(), "build")["plan"]
+        self.assertEqual([job["id"] for job in plan["jobs"]], ["right", "left", "build"])
+        self.assertIs(plan["job"], plan["jobs"][-1])
+        self.assertEqual(plan["job"]["needs"], ["left", "right"])
+        upstream = plan_workflow(workflow.encode(), "left")["plan"]
+        self.assertEqual([job["id"] for job in upstream["jobs"]], ["left"])
+
+    def test_unneeded_job_is_omitted_and_still_checked(self):
+        workflow = """\
+jobs:
+  extra:
+    steps:
+      - run: echo extra
+  build:
+    steps:
+      - run: echo build
+"""
+        plan = plan_workflow(workflow.encode(), "build")["plan"]
+        self.assertEqual([job["id"] for job in plan["jobs"]], ["build"])
+        rejected = """\
+jobs:
+  extra:
+    uses: example/repo/.github/workflows/ci.yml@main
+  build:
+    steps:
+      - run: echo build
 """
         with self.assertRaises(PlanError) as raised:
-            plan_workflow(workflow.encode(), "test")
+            plan_workflow(rejected.encode(), "build")
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
-        self.assertEqual(raised.exception.field, "jobs.test.if")
+        self.assertEqual(raised.exception.field, "jobs.extra.uses")
+
+    def test_missing_dependency_is_outside_the_selection(self):
+        workflow = """\
+jobs:
+  build:
+    needs: missing
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow.encode(), "build")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.build.needs")
+        self.assertIn("outside the selection", str(raised.exception))
+
+    def test_dependency_cycle_is_rejected(self):
+        cases = {
+            "jobs.one.needs": """\
+jobs:
+  one:
+    needs: two
+    steps:
+      - run: echo one
+  two:
+    needs: one
+    steps:
+      - run: echo two
+""",
+            "jobs.build.needs": """\
+jobs:
+  build:
+    needs: build
+    steps:
+      - run: echo build
+""",
+            "jobs.build.needs.duplicate": """\
+jobs:
+  one:
+    steps:
+      - run: echo one
+  build:
+    needs: [one, one]
+    steps:
+      - run: echo build
+""",
+        }
+        for field, workflow in cases.items():
+            with self.subTest(field=field):
+                with self.assertRaises(PlanError) as raised:
+                    selected = "one" if field.startswith("jobs.one") else "build"
+                    plan_workflow(workflow.encode(), selected)
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+                self.assertIn("dependency cycle", str(raised.exception))
+
+    def test_job_if_and_outputs_are_stored(self):
+        workflow = """\
+jobs:
+  one:
+    outputs:
+      kind: ${{ github.event.kind }}
+      token: ${{ secrets.TOKEN }}
+      label: ${{ case(true, 'kept', 'other') }}
+    steps:
+      - run: echo one
+  build:
+    needs: one
+    if: success()
+    steps:
+      - run: echo build
+"""
+        plan = plan_workflow(workflow.encode(), "build")["plan"]
+        self.assertEqual([job["id"] for job in plan["jobs"]], ["one", "build"])
+        self.assertEqual(plan["jobs"][0]["outputs"]["kind"], "${{ github.event.kind }}")
+        self.assertEqual(plan["jobs"][0]["outputs"]["token"], "${{ secrets.TOKEN }}")
+        self.assertEqual(plan["jobs"][0]["outputs"]["label"], "${{ case(true, 'kept', 'other') }}")
+        self.assertEqual(plan["job"]["if"], "success()")
+        self.assertEqual(plan["job"]["needs"], ["one"])
+        secret = """\
+jobs:
+  build:
+    if: secrets.TOKEN
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(secret.encode(), "build")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.build.if")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        steps = """\
+jobs:
+  build:
+    if: steps.one.outcome == 'success'
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(steps.encode(), "build")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertIn("context is not available: steps", str(raised.exception))
+        hashed = """\
+jobs:
+  build:
+    if: hashFiles('*.txt')
+    outputs:
+      kind: ${{ github.event.kind }}
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(hashed.encode(), "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.build.if")
+        self.assertIn("hashFiles", str(raised.exception))
+        output = """\
+jobs:
+  build:
+    outputs:
+      kind: ${{ hashFiles('*.txt') }}
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(output.encode(), "build")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.build.outputs.kind")
+        status = """\
+jobs:
+  build:
+    outputs:
+      kind: ${{ success() }}
+    steps:
+      - run: echo build
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(status.encode(), "build")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertEqual(raised.exception.field, "jobs.build.outputs.kind")
+        self.assertIn("expression is not accepted", str(raised.exception))
 
     def test_yaml_alias_is_rejected(self):
         workflow = """\

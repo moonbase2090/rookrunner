@@ -10,7 +10,14 @@ import unittest
 
 from execution_core.attempt import materialize_attempt
 from execution_core.plan import plan_workflow
-from execution_core.run import RunError, _exec_limit, run_job
+from execution_core.run import (
+    RunError,
+    _OUTPUT_JOB_BYTES,
+    _OUTPUT_RUN_BYTES,
+    _exec_limit,
+    _job_outputs,
+    run_job,
+)
 from execution_core.snapshot import SourceCapture
 
 
@@ -106,6 +113,52 @@ jobs:
         if: always()
         run: printf '%s\\n' after > "$GITHUB_WORKSPACE/after.txt"
 """
+OUTPUTS = """\
+on: push
+jobs:
+  one:
+    outputs:
+      kind: ${{ github.event.kind }}
+      token: ${{ secrets.TOKEN }}
+    steps:
+      - id: show
+        run: echo one
+  build:
+    needs: one
+    if: needs.one.outputs.kind == 'local'
+    steps:
+      - id: keep
+        if: needs.one.outputs.token == ''
+        run: printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
+      - id: blank
+        run: printf '%s\\n' blank > "$GITHUB_WORKSPACE/blank.txt"
+"""
+CHAIN = """\
+on: push
+jobs:
+  one:
+    outputs:
+      kind: ${{ github.event.kind }}
+      token: ${{ secrets.TOKEN }}
+    steps:
+      - id: fail
+        name: fail step
+        run: exit 4
+  two:
+    needs: one
+    steps:
+      - id: run
+        run: printf '%s\\n' ran > "$GITHUB_WORKSPACE/ran.txt"
+  build:
+    needs: [one, two]
+    if: always()
+    steps:
+      - id: keep
+        if: >-
+          needs.one.result == 'failure' && needs.two.result == 'skipped' &&
+          needs.one.outputs.kind == 'local' && needs.one.outputs.token == ''
+        run: printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
+"""
 
 
 def _git(repo, *args):
@@ -151,6 +204,36 @@ def _capture(root, workflow_text):
 
 def _plan(workflow_text):
     return plan_workflow(workflow_text.encode(), "build")["plan"]
+
+
+class OutputLimitTests(unittest.TestCase):
+    def test_secret_and_oversize_outputs_are_not_copied(self):
+        huge = "a" * ((_OUTPUT_JOB_BYTES // 2) + 1)
+        produced, used = _job_outputs(
+            {
+                "outputs": {
+                    "token": "secrets.TOKEN",
+                    "big": "'" + huge + "'",
+                    "kind": "'local'",
+                    "flag": "true",
+                    "empty": "null",
+                    "obj": "fromJSON('{}')",
+                }
+            },
+            {"secrets": {"TOKEN": "super-secret-value"}},
+            0,
+        )
+        self.assertEqual(produced["kind"], "local")
+        self.assertEqual(produced["flag"], "true")
+        self.assertEqual(produced["empty"], "")
+        self.assertNotIn("token", produced)
+        self.assertNotIn("big", produced)
+        self.assertNotIn("obj", produced)
+        self.assertNotIn("super-secret-value", produced.values())
+        self.assertLessEqual(used, _OUTPUT_JOB_BYTES)
+        blocked, same = _job_outputs({"outputs": {"kind": "'local'"}}, {}, _OUTPUT_RUN_BYTES)
+        self.assertEqual(blocked, {})
+        self.assertEqual(same, _OUTPUT_RUN_BYTES)
 
 
 class TimeoutLimitTests(unittest.TestCase):
@@ -426,6 +509,91 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 2)
         self.assertEqual([step["status"] for step in result["steps"]], ["failed", "succeeded"])
         self.assertEqual((self.workspace / "after.txt").read_text(), "after\n")
+
+    def test_needed_job_passes_outputs_and_withholds_secrets(self):
+        root = self.root / "outputs"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, OUTPUTS)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(OUTPUTS),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual([step["job_id"] for step in result["steps"]], ["one", "build", "build"])
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["succeeded", "succeeded", "succeeded"],
+        )
+        self.assertEqual((workspace / "kept.txt").read_text(), "kept\n")
+        self.assertEqual((workspace / "blank.txt").read_text(), "blank\n")
+        rendered = "\n".join(
+            (step.get("stdout") or "") + (step.get("stderr") or "") for step in result["steps"]
+        )
+        self.assertNotIn("super-secret-value", rendered)
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(len(creates), 1)
+
+    def test_failed_need_skips_the_next_job_and_always_runs(self):
+        root = self.root / "chain"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, CHAIN)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(CHAIN),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 4)
+        self.assertEqual(result["failed_step"]["id"], "fail")
+        self.assertEqual([step["job_id"] for step in result["steps"]], ["one", "two", "build"])
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["failed", "skipped", "succeeded"],
+        )
+        self.assertFalse((workspace / "ran.txt").exists())
+        self.assertEqual((workspace / "kept.txt").read_text(), "kept\n")
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(len(creates), 1)
+
+    def test_false_job_if_succeeds_without_running(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    if: false
+    steps:
+      - run: printf '%s\\n' ran > "$GITHUB_WORKSPACE/ran.txt"
+"""
+        root = self.root / "skip-job"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["steps"][0]["status"], "skipped")
+        self.assertEqual(result["steps"][0]["job_id"], "build")
+        self.assertFalse((workspace / "ran.txt").exists())
 
     def test_unresolvable_digest_is_setup_failure(self):
         with self.assertRaises(RunError) as raised:

@@ -68,6 +68,11 @@
             }
           ]
         },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\ud800-\\udfff]*$"
+        },
         "status": {
           "enum": [
             "succeeded",

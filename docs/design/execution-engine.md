@@ -16,9 +16,11 @@ storage (https://docs.github.com/en/actions/reference/limits), stored as
 10 * 1024 * 1024 * 1024 bytes. Active runs and their evidence are kept.
 A finished workflow attempt publishes a manifest of the regular files it
 wrote under its workspace. `run.artifacts` and `artifact.read` page that
-manifest and its bytes. A step `if` on the Bash subset is evaluated by an
-owned parser. Other expression positions stay literal. `hashFiles`, job
-`if`, `needs`, and `secrets` stay unsupported.
+manifest and its bytes. A step `if`, a job `if`, and job outputs are
+evaluated by an owned parser. The selected job runs after the jobs it needs,
+one at a time, in one caller-pinned container and one attempt workspace.
+`run` and `env` text stay literal. `hashFiles`, matrices, actions, and a
+secret store stay unsupported. This is not a GitHub-equivalence claim.
 The rest of this plan is not.
 
 ## Execution path
@@ -35,8 +37,8 @@ flowchart LR
 
 The parser consumes the captured workflow, not a later checkout version. It
 validates the entire submitted workflow under an explicit selection policy before
-acceptance. A selected job must include its required dependency closure once
-dependencies are supported. Job selection must never silently omit required work.
+acceptance. A selected job includes its required dependency closure. Job
+selection must never silently omit required work.
 
 An execution plan records workflow/source identities, engine and capability
 versions, normalized jobs/steps, event context, environment/shell defaults, image
@@ -69,10 +71,10 @@ credentials into ordinary job containers by default.
    source checks. Compare semantic outcomes and relevant emitted values, not wall
    time or incidental log formatting. Record environment-related differences.
 
-Do not advertise expression positions other than step `if`, or `uses`,
-dependencies, matrices, services, or reusable workflows, while building this
-path. Early rejection is temporary capability status, not a decision to
-abandon those features.
+Do not advertise expression positions other than step `if`, job `if`, and
+job outputs, or `uses`, matrices, services, or reusable workflows, while
+building this path. Early rejection is temporary capability status, not a
+decision to abandon those features.
 
 ## Compatibility expansion
 
@@ -80,8 +82,8 @@ abandon those features.
 | --- | --- | --- |
 | Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Implemented for one selected job of sequential `run` steps |
 | Steps and shells | Ordering, script invocation, defaults, environment precedence, working directories | Implemented for the Linux Bash subset in one caller-pinned container |
-| Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Implemented for step `if` on the Bash subset. Other expression positions stay literal. Not a GitHub-equivalence claim |
-| Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Not implemented |
+| Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Implemented for step `if`, job `if`, and job output expressions. `run` and `env` stay literal. `case` matches the expression reference and does not evaluate a branch it does not take. `env.MY-VAR` is the property `MY-VAR`, not subtraction. Not a GitHub-equivalence claim |
+| Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Implemented for the selected job's `needs` closure. Jobs run one at a time in one container and one workspace. A dependency outside the workflow fails planning. An output expression that reads `secrets` is omitted. Not a GitHub-equivalence claim |
 | Runtime communication | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, state files, workflow commands and masking | Not implemented |
 | Action types | Composite, JavaScript, and Docker actions; inputs/outputs; setup/main/post lifecycle | Not implemented |
 | Strategies | Matrix expansion, include/exclude, fail-fast, max-parallel, concurrency | Not implemented |

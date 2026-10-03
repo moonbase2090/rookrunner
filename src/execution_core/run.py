@@ -19,10 +19,11 @@ as canonical JSON. It is not a GitHub event delivery. No other GitHub context
 is invented. `runs-on` does not select an image.
 
 The container is created with network `none`. The Docker socket and host
-credential directories are not mounted. Step `if` is evaluated. Expressions
-in `run`, `env`, and `name` stay literal text. `github.event` is the caller
-event. Other `github` properties are not invented. `runner.os` is `Linux`
-because this subset runs in a Linux container.
+credential directories are not mounted. Step `if` and job `if` are evaluated.
+Expressions in `run`, `env`, and `name` stay literal text. `github.event` is
+the caller event. Other `github` properties are not invented. `runner.os` is
+`Linux` because this subset runs in a Linux container. Jobs in one plan share
+that container and the attempt workspace. They run one at a time.
 
 The job deadline is `timeout-minutes` on the plan (default 360). It starts
 when `run_job` starts and covers setup and steps. Reaching it stops the owned
@@ -49,7 +50,7 @@ import tempfile
 import threading
 import time
 
-from .expr import ExprError, step_is_enabled
+from .expr import ExprError, evaluate, job_is_enabled, mentions_context, step_is_enabled
 from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
@@ -67,6 +68,12 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FILE_MODES = {"100644": 0o644, "100755": 0o755}
+# jobs.<job_id>.outputs: 1 MB per job and 50 MB for the workflow run.
+# The syntax page does not define MB as 1000 or 1024. These checks use
+# 1024-based bytes of UTF-16-LE, the encoding named on that page.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+_OUTPUT_JOB_BYTES = 1024 * 1024
+_OUTPUT_RUN_BYTES = 50 * 1024 * 1024
 _INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
 _RESERVED_ENV = {
     "GITHUB_WORKSPACE": "/workspace",
@@ -191,21 +198,43 @@ def _docker_binary(docker):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 2:
+    if not isinstance(plan, dict) or plan.get("capability_version") != 3:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
-    job = plan.get("job")
-    if not isinstance(workflow, dict) or not isinstance(job, dict):
+    jobs = plan.get("jobs")
+    selected = plan.get("job")
+    if not isinstance(workflow, dict) or not isinstance(jobs, list) or not jobs:
         _setup("plan is not accepted")
-    steps = job.get("steps")
-    if not isinstance(steps, list) or not steps:
+    if not isinstance(selected, dict) or selected.get("id") != jobs[-1].get("id"):
         _setup("plan is not accepted")
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict) or step.get("index") != index:
+    seen = set()
+    for job in jobs:
+        if not isinstance(job, dict):
             _setup("plan is not accepted")
-        if not isinstance(step.get("run"), str) or "\0" in step["run"]:
+        job_id = job.get("id")
+        needs = job.get("needs")
+        outputs = job.get("outputs")
+        if not isinstance(job_id, str) or job_id == "" or job_id in seen:
             _setup("plan is not accepted")
-    return workflow, job, steps
+        if not isinstance(needs, list) or not isinstance(outputs, dict):
+            _setup("plan is not accepted")
+        if any(not isinstance(item, str) or item not in seen for item in needs):
+            _setup("plan is not accepted")
+        for key, value in outputs.items():
+            if not isinstance(key, str) or key.strip() == "" or "\0" in key:
+                _setup("plan is not accepted")
+            if not isinstance(value, str) or value.strip() == "" or "\0" in value:
+                _setup("plan is not accepted")
+        steps = job.get("steps")
+        if not isinstance(steps, list) or not steps:
+            _setup("plan is not accepted")
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict) or step.get("index") != index:
+                _setup("plan is not accepted")
+            if not isinstance(step.get("run"), str) or "\0" in step["run"]:
+                _setup("plan is not accepted")
+        seen.add(job_id)
+    return workflow, jobs
 
 
 def _env_layer(items):
@@ -405,8 +434,8 @@ def _text(value):
     return value.decode("utf-8", "replace")
 
 
-def _step_result(step, status, exit_code, stdout, stderr, error):
-    return {
+def _step_result(step, status, exit_code, stdout, stderr, error, job_id=None):
+    record = {
         "index": step["index"],
         "id": step.get("id"),
         "name": step.get("name"),
@@ -416,11 +445,14 @@ def _step_result(step, status, exit_code, stdout, stderr, error):
         "stderr": stderr,
         "error": error,
     }
+    if job_id is not None:
+        record["job_id"] = job_id
+    return record
 
 
 def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     reference, digest = _pinned(image)
-    workflow, job, steps = _plan_parts(plan)
+    workflow, jobs = _plan_parts(plan)
     try:
         encoded = (canonical(event) + "\n").encode("ascii")
     except (TypeError, ValueError, UnicodeError) as exc:
@@ -434,7 +466,7 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     for label in (snapshot_dir, workspace):
         if "," in os.fspath(label) or "\n" in os.fspath(label):
             _setup("workspace path is not accepted")
-    return reference, digest, workflow, job, steps, encoded, workspace
+    return reference, digest, workflow, jobs, encoded, workspace
 
 
 def _create_args(name, workspace, private, reference):
@@ -464,14 +496,12 @@ def _create_args(name, workspace, private, reference):
     ]
 
 
-def _job_seconds(plan):
-    """Return the job deadline in seconds. An omitted value is 360 minutes."""
+def _job_seconds(job):
+    """Return one job's deadline in seconds. An omitted value is 360 minutes."""
 
     minutes = DEFAULT_JOB_TIMEOUT_MINUTES
-    if isinstance(plan, dict):
-        job = plan.get("job")
-        if isinstance(job, dict) and "timeout_minutes" in job:
-            minutes = job["timeout_minutes"]
+    if isinstance(job, dict) and "timeout_minutes" in job:
+        minutes = job["timeout_minutes"]
     if type(minutes) is not int or minutes < 1 or minutes > MAX_JOB_TIMEOUT_MINUTES:
         _setup("job timeout is not accepted")
     return minutes * 60
@@ -711,20 +741,21 @@ def run_job(
     step whose condition is true. The result names the first failed step, its
     exit code, and the image digest.
 
-    The job deadline is the plan's `timeout_minutes` (default 360) measured
-    from the start of this call. Reaching it returns status cancelled. A step
-    `timeout_minutes`, or a caller `step_timeout` in seconds, fails that step
-    when it is shorter than the time remaining. The worker does not pass
-    `step_timeout`; the accepted plan is the bound. A timed-out `docker exec`
-    discards partial stdout and stderr. `owner` reserves the name before
+    The first job's deadline is that job's `timeout_minutes` (default 360)
+    measured from the start of this call. Each later job gets its own
+    deadline when it starts. Reaching a deadline returns status cancelled and
+    does not start later jobs. A needed job that failed or was skipped skips
+    a dependent job unless that job's `if` is true. A step timeout stops the
+    container and does not start later jobs. `owner` reserves the name before
     create. If that owner is already cancelled, this does not start the
     container.
     """
 
-    deadline = time.monotonic() + _job_seconds(plan)
-    reference, digest, workflow, job, steps, event_bytes, workspace = _prepare(
+    started = time.monotonic()
+    reference, digest, workflow, jobs, event_bytes, workspace = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
     )
+    deadline = started + _job_seconds(jobs[0])
     resolved = digest
     docker_bin = _docker_binary(docker)
     private = Path(tempfile.mkdtemp(prefix="rookrunner-run-"))
@@ -739,10 +770,16 @@ def run_job(
         resolved = _resolve_image(docker_bin, reference, digest, deadline)
         (private / "event.json").write_bytes(event_bytes)
         os.chmod(private / "event.json", 0o600)
-        for step in steps:
-            script = private / f"step-{step['index']}"
-            script.write_bytes(step["run"].encode("utf-8"))
-            os.chmod(script, 0o600)
+        scripts = {}
+        ordinal = 0
+        for planned in jobs:
+            for step in planned["steps"]:
+                script_name = f"step-{ordinal}"
+                ordinal += 1
+                scripts[(planned["id"], step["index"])] = script_name
+                script = private / script_name
+                script.write_bytes(step["run"].encode("utf-8"))
+                os.chmod(script, 0o600)
         if "," in os.fspath(private):
             _setup("workspace path is not accepted")
         name = _container_name(owner)
@@ -767,29 +804,82 @@ def run_job(
         )
         bash_ok = probe == 0
         failed = None
-        prior = []
-        for step in steps:
+        results = {}
+        output_bytes = 0
+        jobs_by_id = {planned["id"]: planned for planned in jobs}
+        for job_index, job in enumerate(jobs):
+            if job_index:
+                deadline = time.monotonic() + _job_seconds(job)
+            if owner is not None and owner.cancelled():
+                graceful = True
+                outcome = _cancelled(resolved, reference, records)
+                break
             if deadline - time.monotonic() <= 0:
                 raise _JobDeadline()
-            record = _consider_step(
-                docker_bin,
-                name,
-                step,
-                workflow,
+            needs = _needs_context(job, results)
+            ancestor_failed = _ancestor_failed(job, jobs_by_id, results)
+            cancelled = owner is not None and owner.cancelled()
+            try:
+                enabled = job_is_enabled(
+                    job.get("if"),
+                    _expression_values(event, workflow, job, {"env": {}}, [], cancelled, needs),
+                    [needs[item]["result"] for item in job["needs"]],
+                    ancestor_failed,
+                    cancelled,
+                )
+            except ExprError as exc:
+                enabled = None
+                message = str(exc)[:512]
+            if enabled is None:
+                record = _step_result(job["steps"][0], "failed", None, "", "", message, job["id"])
+                records.append(record)
+                if failed is None:
+                    failed = record
+                for step in job["steps"][1:]:
+                    records.append(_step_result(step, "skipped", None, "", "", None, job["id"]))
+                results[job["id"]] = {"result": "failure", "outputs": {}}
+                continue
+            if not enabled:
+                for step in job["steps"]:
+                    records.append(_step_result(step, "skipped", None, "", "", None, job["id"]))
+                results[job["id"]] = {"result": "skipped", "outputs": {}}
+                continue
+            prior = []
+            job_failed = False
+            for step in job["steps"]:
+                if deadline - time.monotonic() <= 0:
+                    raise _JobDeadline()
+                record = _consider_step(
+                    docker_bin,
+                    name,
+                    step,
+                    workflow,
+                    job,
+                    event,
+                    workspace,
+                    bash_ok,
+                    step_timeout,
+                    deadline,
+                    prior,
+                    owner is not None and owner.cancelled(),
+                    needs,
+                    scripts[(job["id"], step["index"])],
+                )
+                records.append(record)
+                prior.append(record)
+                if record["status"] == "failed":
+                    job_failed = True
+                    if failed is None:
+                        failed = record
+            result_name = "failure" if job_failed else "success"
+            produced, output_bytes = _job_outputs(
                 job,
-                event,
-                workspace,
-                bash_ok,
-                step_timeout,
-                deadline,
-                prior,
-                owner is not None and owner.cancelled(),
+                _expression_values(event, workflow, job, {"env": {}}, prior, cancelled, needs),
+                output_bytes,
             )
-            records.append(record)
-            prior.append(record)
-            if record["status"] == "failed" and failed is None:
-                failed = record
-        outcome = _outcome(resolved, reference, records, failed)
+            results[job["id"]] = {"result": result_name, "outputs": produced}
+        else:
+            outcome = _outcome(resolved, reference, records, failed)
     except _JobDeadline as exc:
         if exc.step is not None:
             records.append(exc.step)
@@ -858,7 +948,7 @@ def _cancelled(image_digest, reference, records):
     }
 
 
-def _expression_values(event, workflow, job, step, prior, cancelled):
+def _expression_values(event, workflow, job, step, prior, cancelled, needs=None):
     """Contexts for one step `if`. Missing properties stay missing.
 
     `env` is the workflow, job, and step env map. Values that contain
@@ -882,7 +972,7 @@ def _expression_values(event, workflow, job, step, prior, cancelled):
         job_status = "success"
     return {
         "github": {"event": _event_value(event)},
-        "needs": {},
+        "needs": needs if isinstance(needs, dict) else {},
         "strategy": {},
         "matrix": {},
         "job": {"status": job_status},
@@ -914,6 +1004,76 @@ def _conclusion(status):
     return None
 
 
+def _needs_context(job, results):
+    context = {}
+    for need in job["needs"]:
+        item = results.get(need) or {"result": "skipped", "outputs": {}}
+        context[need] = {"result": item["result"], "outputs": dict(item["outputs"])}
+    return context
+
+
+def _ancestor_failed(job, jobs_by_id, results):
+    seen = set()
+    stack = list(job["needs"])
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        item = results.get(current)
+        if item is not None and item["result"] == "failure":
+            return True
+        parent = jobs_by_id.get(current)
+        if parent is not None:
+            stack.extend(parent["needs"])
+    return False
+
+
+def _output_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float) and math.isfinite(value):
+        return str(value)
+    return None
+
+
+def _job_outputs(job, values, used):
+    """Copy job outputs. An expression that reads `secrets` is not copied.
+
+    GitHub skips an output whose value contains a registered secret. This
+    subset has no secret store, so an output expression that names `secrets`
+    is omitted instead of evaluated. A value past the documented 1 MB job
+    total or 50 MB run total is also omitted. Those sizes are 1024-based
+    UTF-16-LE bytes. The syntax page says 1 MB and 50 MB and does not define
+    MB.
+    """
+
+    produced = {}
+    job_used = 0
+    for _name, source in job.get("outputs", {}).items():
+        if mentions_context(source, "secrets"):
+            continue
+        try:
+            text = _output_text(evaluate(source, values))
+        except ExprError:
+            continue
+        if text is None or "\0" in text:
+            continue
+        size = len(text.encode("utf-16-le"))
+        if job_used + size > _OUTPUT_JOB_BYTES or used + size > _OUTPUT_RUN_BYTES:
+            continue
+        produced[_name] = text
+        job_used += size
+        used += size
+    return produced, used
+
+
 def _consider_step(
     docker,
     name,
@@ -927,32 +1087,65 @@ def _consider_step(
     deadline,
     prior,
     cancelled,
+    needs,
+    script_name,
 ):
+    job_id = job.get("id")
     try:
         enabled = step_is_enabled(
             step.get("if"),
-            _expression_values(event, workflow, job, step, prior, cancelled),
+            _expression_values(event, workflow, job, step, prior, cancelled, needs),
             prior,
             cancelled,
         )
     except ExprError as exc:
-        return _step_result(step, "failed", None, "", "", str(exc)[:512])
+        return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     if not enabled:
-        return _step_result(step, "skipped", None, "", "", None)
-    return _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout, deadline)
+        return _step_result(step, "skipped", None, "", "", None, job_id)
+    return _run_step(
+        docker,
+        name,
+        step,
+        workflow,
+        job,
+        workspace,
+        bash_ok,
+        step_timeout,
+        deadline,
+        script_name,
+        job_id,
+    )
 
 
-def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout, deadline):
+def _run_step(
+    docker,
+    name,
+    step,
+    workflow,
+    job,
+    workspace,
+    bash_ok,
+    step_timeout,
+    deadline,
+    script_name,
+    job_id,
+):
     shell = _chosen_shell(step, job, workflow)
     relative = _chosen_directory(step, job, workflow)
-    container_script = f"/run/rookrunner/step-{step['index']}"
+    container_script = f"/run/rookrunner/{script_name}"
     command = _shell_command(shell, bash_ok, container_script)
     workdir = _working_directory(workspace, relative)
     if command is None:
-        return _step_result(step, "failed", None, "", "", "shell is unsupported")
+        return _step_result(step, "failed", None, "", "", "shell is unsupported", job_id)
     if workdir is None:
         return _step_result(
-            step, "failed", None, "", "", "working-directory is not inside the workspace"
+            step,
+            "failed",
+            None,
+            "",
+            "",
+            "working-directory is not inside the workspace",
+            job_id,
         )
     env_args = []
     for key, value in _merged_env(workflow, job, step):
@@ -971,9 +1164,9 @@ def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeou
         # The docker client is gone. Partial stdout and stderr from that call
         # are discarded. The caller stops the container.
         message = "job timed out" if job_bound else "step timed out"
-        record = _step_result(step, "failed", None, "", "", message)
+        record = _step_result(step, "failed", None, "", "", message, job_id)
         if job_bound:
             raise _JobDeadline(record) from None
         raise _StepTimedOut(record) from None
     status = "succeeded" if code == 0 else "failed"
-    return _step_result(step, status, code, _text(stdout), _text(stderr), None)
+    return _step_result(step, status, code, _text(stdout), _text(stderr), None, job_id)

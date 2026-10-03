@@ -1,9 +1,11 @@
-"""Versioned plan for one selected job of sequential run steps.
+"""Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 2 records declared fields, including step `if` text.
-It checks that a step `if` can be parsed and does not evaluate it. Anything
-this slice cannot describe is rejected.
+run. Capability version 3 records declared fields, including step and job
+`if` text and job output expressions. It checks that those expressions can
+be parsed and does not evaluate them. A selected job includes the jobs it
+needs. A dependency that is not defined in the workflow is rejected.
+Anything this slice cannot describe is rejected.
 """
 
 import hashlib
@@ -16,10 +18,10 @@ import yaml
 from yaml.constructor import SafeConstructor
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
-from .expr import ExprError, check_step_if
+from .expr import ExprError, check_job_if, check_job_output, check_step_if
 from .protocol import canonical
 
-CAPABILITY_VERSION = 2
+CAPABILITY_VERSION = 3
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -59,7 +61,6 @@ SCALAR_TAGS = {
 # https://docs.github.com/en/actions/reference/limits
 FORBIDDEN = {
     "uses",
-    "needs",
     "strategy",
     "matrix",
     "secrets",
@@ -69,7 +70,17 @@ FORBIDDEN = {
     "workflow_call",
 }
 WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
-JOB_KEYS = {"name", "runs-on", "steps", "defaults", "env", "timeout-minutes"}
+JOB_KEYS = {
+    "name",
+    "runs-on",
+    "needs",
+    "if",
+    "outputs",
+    "steps",
+    "defaults",
+    "env",
+    "timeout-minutes",
+}
 STEP_KEYS = {"id", "name", "if", "run", "shell", "working-directory", "env", "timeout-minutes"}
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
@@ -147,27 +158,13 @@ class _Planner:
         jobs = self._mapping(body["jobs"][1], "jobs")
         if job_id not in jobs:
             _invalid("no selected job", "jobs")
-        extras = [key for key in jobs if key != job_id]
-        if extras:
-            _unsupported(f"jobs.{extras[0]}")
-        job_node = jobs[job_id][1]
-        job_field = f"jobs.{job_id}"
-        job_body = self._mapping(job_node, job_field)
-        self._allow(job_body, job_field, JOB_KEYS)
-        steps = self._steps(job_body, job_field)
+        parsed = {key: self._job(jobs, key) for key in jobs}
+        planned_jobs = [parsed[key] for key in self._order(parsed, job_id)]
         plan = {
             "capability_version": CAPABILITY_VERSION,
             "workflow": workflow_plan,
-            "job": {
-                "id": job_id,
-                "location": _location(job_node),
-                "name": self._optional_string(job_body, job_field, "name"),
-                "runs_on": self._runs_on(job_body, job_field),
-                "defaults": self._defaults(job_body, job_field),
-                "env": self._env(job_body, job_field),
-                "timeout_minutes": self._timeout_minutes(job_body, job_field),
-                "steps": steps,
-            },
+            "job": planned_jobs[-1],
+            "jobs": planned_jobs,
         }
         encoded = canonical(plan).encode("ascii")
         return {"plan": plan, "digest": hashlib.sha256(encoded).hexdigest()}
@@ -353,8 +350,117 @@ class _Planner:
             )
         return value
 
-    def _if_text(self, items, field):
-        """Store step `if` text. Parsing checks the shape and does not evaluate it."""
+    def _order(self, parsed, selected):
+        """Return the selected job after each job it needs, in workflow order."""
+
+        pending = set()
+        visiting = set()
+
+        def walk(job_id, field):
+            if job_id in pending:
+                return
+            if job_id in visiting:
+                _invalid(f"{field}: dependency cycle", field)
+            if job_id not in parsed:
+                _invalid(f"{field}: dependency is outside the selection", field)
+            visiting.add(job_id)
+            for need in parsed[job_id]["needs"]:
+                walk(need, f"jobs.{job_id}.needs")
+            visiting.remove(job_id)
+            pending.add(job_id)
+
+        walk(selected, f"jobs.{selected}")
+        order = []
+        remaining = set(pending)
+        while remaining:
+            ready = [
+                job_id
+                for job_id in parsed
+                if job_id in remaining
+                and all(need not in remaining for need in parsed[job_id]["needs"])
+            ]
+            if not ready:
+                _invalid(f"jobs.{selected}.needs: dependency cycle", f"jobs.{selected}.needs")
+            order.append(ready[0])
+            remaining.remove(ready[0])
+        return order
+
+    def _job(self, jobs, job_id):
+        job_node = jobs[job_id][1]
+        job_field = f"jobs.{job_id}"
+        job_body = self._mapping(job_node, job_field)
+        self._allow(job_body, job_field, JOB_KEYS)
+        recorded = {
+            "id": job_id,
+            "location": _location(job_node),
+            "name": self._optional_string(job_body, job_field, "name"),
+            "needs": self._needs(job_body, job_field, job_id),
+            "runs_on": self._runs_on(job_body, job_field),
+            "defaults": self._defaults(job_body, job_field),
+            "env": self._env(job_body, job_field),
+            "outputs": self._outputs(job_body, job_field),
+            "timeout_minutes": self._timeout_minutes(job_body, job_field),
+            "steps": self._steps(job_body, job_field),
+        }
+        condition = self._if_text(job_body, job_field, check_job_if)
+        if condition is not None:
+            recorded["if"] = condition
+        return recorded
+
+    def _needs(self, items, field, job_id):
+        if "needs" not in items:
+            return []
+        return self._needs_value(items["needs"][1], _join(field, "needs"), job_id, enter=True)
+
+    def _needs_value(self, node, path, job_id, enter):
+        if enter:
+            self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG:
+            names = [node.value]
+        elif isinstance(node, SequenceNode) and node.tag == "tag:yaml.org,2002:seq":
+            if enter:
+                names = []
+                for index, child in enumerate(node.value):
+                    names.append(self._string_scalar(child, _join(path, index)))
+            else:
+                names = []
+                for child in node.value:
+                    if not isinstance(child, ScalarNode) or child.tag != STR_TAG:
+                        _invalid(f"{path} must name a job", path)
+                    names.append(child.value)
+        else:
+            _invalid(f"{path} must name a job", path)
+        seen = []
+        for name in names:
+            if not isinstance(name, str) or name.strip() == "" or "\0" in name:
+                _invalid(f"{path} must name a job", path)
+            if name == job_id or name in seen:
+                _invalid(f"{path}: dependency cycle", path)
+            seen.append(name)
+        return seen
+
+    def _outputs(self, items, field):
+        if "outputs" not in items:
+            return {}
+        path = _join(field, "outputs")
+        body = self._mapping(items["outputs"][1], path)
+        recorded = {}
+        for key, (_, value) in body.items():
+            if key.strip() == "" or "\0" in key:
+                _invalid(f"{path}: expression is not accepted", path)
+            output_field = _join(path, key)
+            self._enter(value, output_field)
+            if not isinstance(value, ScalarNode) or value.tag not in SCALAR_TAGS:
+                _invalid(f"{output_field}: expression is not accepted", output_field)
+            text = value.value
+            if not isinstance(text, str) or text.strip() == "" or "\0" in text:
+                _invalid(f"{output_field}: expression is not accepted", output_field)
+            self._check_expression(text, output_field, check_job_output)
+            recorded[key] = text
+        return recorded
+
+    def _if_text(self, items, field, check):
+        """Store `if` text. Parsing checks the shape and does not evaluate it."""
 
         if "if" not in items:
             return None
@@ -366,8 +472,12 @@ class _Planner:
         text = node.value
         if not isinstance(text, str) or text.strip() == "" or "\0" in text:
             _invalid(f"{path}: expression is not accepted", path)
+        self._check_expression(text, path, check)
+        return text
+
+    def _check_expression(self, text, path, check):
         try:
-            check_step_if(text)
+            check(text)
         except ExprError as exc:
             message = str(exc)
             if message == "function is not available: hashFiles":
@@ -381,7 +491,6 @@ class _Planner:
             raise PlanError(
                 "WORKFLOW_INVALID", f"{path}: expression is not accepted", path
             ) from None
-        return text
 
     def _steps(self, items, field):
         if "steps" not in items:
@@ -410,7 +519,7 @@ class _Planner:
                 "working_directory": self._optional_string(body, step_field, "working-directory"),
                 "env": self._env(body, step_field),
             }
-            condition = self._if_text(body, step_field)
+            condition = self._if_text(body, step_field, check_step_if)
             if condition is not None:
                 recorded["if"] = condition
             timeout_minutes = self._step_timeout_minutes(body, step_field)
