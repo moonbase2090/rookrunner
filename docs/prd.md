@@ -139,16 +139,18 @@ Milestones are outcome gates, not dates. Detail and exit evidence are in the
 | --- | --- | --- |
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
-| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it, an artifact manifest of files a workflow attempt writes under its workspace, and evaluation of step `if` on that job are implemented. Other expression positions stay literal. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it, an artifact manifest of files a workflow attempt writes under its workspace, evaluation of step `if` on that job, and the selected job's `needs` closure and job outputs are implemented. Expressions in `run` and `env` stay literal. |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
 | M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
 
 M2's first executable subset is a starting point: an explicitly selected job,
 sequential steps, and a digest-pinned image, with unsupported syntax rejected.
-A step `if` is evaluated. Other expression positions stay literal. Job
-dependencies, action types, matrices, reusable workflows, and services are
-later increments of the same engine. They are not promised in the first
-slice, and they are not permanently excluded.
+A step `if` and a job `if` are evaluated. The worker runs the selected job
+and the jobs it needs, one at a time, in one caller-pinned container.
+Expressions in `run` and `env` stay literal. Action types, matrices,
+reusable workflows, services, and `GITHUB_OUTPUT` are later increments of
+the same engine. They are not promised in the first slice, and they are not
+permanently excluded.
 
 ## First usable release
 

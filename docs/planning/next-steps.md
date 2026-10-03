@@ -3,7 +3,7 @@
 Status: build order, 2026-10-02. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-13 are
+roadmap step 1 and the first executable subset. NS-1 through NS-14 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -12,8 +12,8 @@ Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. The PRD leaves
 sanitized Git metadata undesigned, so those workflows stay unsupported until
 a later item. The act pin stays historical. Development `run.submit` stays
-version 0 and fixture-only. Version 1 accepts one planned job and the worker
-executes it.
+version 0 and fixture-only. Version 1 accepts one selected job. The worker
+runs that job and the jobs it needs.
 
 Each item is one PR. A PR does not start the next item. Existing M1 and
 capture tests must still pass. Real execution checks use disposable
@@ -42,11 +42,11 @@ Acceptance criteria:
   digest of the plan bytes. Repeating the parse yields the same digest.
 - String keys such as `on` survive parsing. Duplicate YAML keys fail.
   Expression text is preserved and not evaluated.
-- `uses`, `needs`, `strategy`, matrix, `secrets`, service containers,
+- `uses`, `strategy`, matrix, `secrets`, service containers,
   reusable workflow calls, and host or privileged execution fail before a
   plan exists. The error names the field and says the capability is
   unsupported. Unsupported is a current limit, not a decision to drop the
-  feature.
+  feature. Job `needs` is NS-14.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
 - A workflow file larger than 500 KB produces no plan. The error is a
@@ -384,7 +384,8 @@ An unavailable context, including `secrets`, is an error. A missing property
 of an available context is an empty string. `github.event` is the
 caller-supplied event. Other `github` properties are not invented.
 `runner.os` is `Linux` because this subset runs in a Linux container.
-`needs`, `strategy`, `matrix`, `vars`, and `inputs` are empty objects.
+`strategy`, `matrix`, `vars`, and `inputs` are empty objects. `needs` is
+empty until a job dependency supplies it (NS-14).
 `steps.<id>.outcome` and `steps.<id>.conclusion` are `success`, `failure`,
 or `skipped`. `steps.<id>.outputs` is empty. `env` is the workflow, job,
 and step env map, and `${{ }}` in those values stays literal.
@@ -392,9 +393,14 @@ and step env map, and `${{ }}` in those values stays literal.
 Operators, types, and the functions used by this subset follow the
 expression reference
 (https://docs.github.com/en/actions/reference/workflows-and-actions/expressions).
-`hashFiles` is not implemented. Expressions in `run`, `env`, and `name`
-stay literal. Job `if`, `needs`, and matrices stay unsupported. This is not
-a GitHub-equivalence claim.
+`case` is that function: predicates run in order, and a branch that is not
+taken is not evaluated. A property name may contain `-`, which is the
+contexts reference rule for property dereference. `env.MY-VAR` is the
+property `MY-VAR`. The operators table does not list arithmetic, and `-` is
+not subtraction. A hosted runner that reads `env.MY-VAR` as subtraction is
+not claimed. `hashFiles` is not implemented. Expressions in `run`, `env`,
+and `name` stay literal. Job `if` and `needs` are NS-14. Matrices stay
+unsupported. This is not a GitHub-equivalence claim.
 
 Acceptance criteria:
 
@@ -404,17 +410,90 @@ Acceptance criteria:
   context is an empty string.
 - `if` on a step can skip it.
 
+**NS-14. Job `needs` and outputs.**
+
+Status: implemented.
+
+Capability version is 3. The planner parses every job in the file. The
+plan's `jobs` list is the selected job after each job it needs, in workflow
+order. `job` is that selected job. A job the selection does not need is
+omitted. A dependency that is not a job in the workflow is
+`WORKFLOW_INVALID` and says the dependency is outside the selection. A
+cycle, a self-need, or a duplicate need is `WORKFLOW_INVALID`. A forbidden
+key on a job that is not selected still fails planning.
+
+Those jobs run one at a time, in one container, on the one attempt
+workspace, using the caller-pinned image. Parallel hosted jobs are not
+claimed. GitHub gives each job a fresh machine; this subset does not. The
+first job's deadline starts when `run_job` starts, so image setup counts
+toward it. Each later job gets its own `timeout-minutes` when it starts. A
+step timeout or a job deadline stops the container and does not start later
+jobs. A caller cancel between jobs does not start later jobs, including a
+job whose `if` is `cancelled()`.
+
+A failed or skipped direct need skips a job whose `if` is omitted or does
+not call a status function. `success()` is true only when every direct need
+has result `success`. With no needs, that is true. `failure()` is true when
+any ancestor job's result is `failure`. `always()` is true after those needs
+have a result. A skipped job does not run its steps and publishes no
+outputs. A job that ran evaluates its outputs at the end, including when a
+step failed. The first failed step still fails the run. If every job
+succeeded or was skipped, the run is `succeeded` with exit 0. There is no
+skipped run state.
+
+Job `if` contexts are `github`, `needs`, `vars`, and `inputs`, plus
+`always`, `cancelled`, `success`, and `failure`
+(https://docs.github.com/en/actions/reference/workflows-and-actions/contexts).
+`needs.<job_id>` is a direct dependency, with `result` and `outputs`. A
+missing property is an empty string. Other contexts on a job `if`, including
+`secrets` and `steps`, are errors. `hashFiles` stays unavailable.
+
+Job output expressions may use `github`, `needs`, `strategy`, `matrix`,
+`job`, `runner`, `env`, `vars`, `secrets`, `steps`, and `inputs`. That table
+lists no special functions for the key, and a listed function is available
+only where it is named, so `success`, `failure`, `always`, `cancelled`, and
+`hashFiles` are not accepted there. Ordinary functions, including `case`,
+are. `steps.<id>.outputs` stays empty. `GITHUB_OUTPUT` is not implemented.
+`run` and `env` text stay literal.
+
+Outputs are strings. Null is an empty string. A boolean is `true` or
+`false`. An array or object is not copied. GitHub skips an output whose
+value contains a registered secret. This subset has no secret store, so an
+output expression that names the `secrets` context is not evaluated and that
+key is omitted. A later job reads the missing property as an empty string.
+This is not a scan for registered secret values.
+
+Each job's outputs are at most 1 MB, and all outputs in a workflow run are
+at most 50 MB, approximated with UTF-16
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+The syntax page does not define MB as 1000 or 1024. This check uses
+1024-based UTF-16-LE bytes. An output that would pass either total is
+omitted. A later output that still fits can be copied.
+
+`case` matches the expression reference: predicates run in order, and a
+branch that is not selected is not evaluated. `env.MY-VAR` is the property
+`MY-VAR`. `-` is not subtraction. A hosted runner that tokenizes that name
+as subtraction is not claimed.
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A selected job includes its dependency closure. Skip and failure
+  propagation match the documented rules under test.
+- A dependency outside the selection fails planning.
+- An output expression that reads `secrets` is not copied into the next job.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-thirteen PRs. Each one updates the capability version, rejects anything it
+fourteen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-14 | Job `needs` and outputs | A selected job includes its dependency closure. Skip and failure propagation match the documented rules under test. A dependency outside the selection fails planning. Outputs that look like secrets are not copied into the next job. |
 | NS-15 | Environment files and workflow commands | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, and the documented commands apply to later steps. `add-mask` masks subsequent logs of that exact string. Deprecated `set-env` and `add-path` stay disabled. |
 | NS-16 | One action runtime | Composite, JavaScript, or Docker actions are added one runtime per PR. The action comes from the snapshot or from a recorded digest. A moving ref after acceptance does not change the run. |
 | NS-17 | Matrix | Include, exclude, fail-fast, and max-parallel are tested. Unsupported matrix keys fail at plan time. |
@@ -425,5 +504,5 @@ GitHub-equivalent.
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-14 through NS-20 can follow that evidence. They are not required
+restart. NS-15 through NS-20 can follow that evidence. They are not required
 to say the first subset runs.
