@@ -16,6 +16,7 @@ from execution_core.run import (
     _OUTPUT_RUN_BYTES,
     _exec_limit,
     _job_outputs,
+    _read_utf8,
     run_job,
 )
 from execution_core.snapshot import SourceCapture
@@ -159,6 +160,73 @@ jobs:
           needs.one.outputs.kind == 'local' && needs.one.outputs.token == ''
         run: printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
 """
+COMMANDS = """\
+on: push
+jobs:
+  one:
+    outputs:
+      color: ${{ steps.color.outputs.SELECTED_COLOR }}
+    steps:
+      - id: color
+        run: |
+          printf '%s' "$ACTION_STATE" > "$GITHUB_WORKSPACE/same.txt"
+          echo "SELECTED_COLOR=green" >> "$GITHUB_OUTPUT"
+          echo "secret-number=kept" >> "$GITHUB_OUTPUT"
+          echo "ACTION_STATE=yellow" >> "$GITHUB_ENV"
+          { echo 'MSG<<EOF'; echo one; echo two; echo EOF; } >> "$GITHUB_ENV"
+          echo "GITHUB_WORKSPACE=/tmp" >> "$GITHUB_ENV"
+          echo "NODE_OPTIONS=blocked" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          printf '%s\\n' '#!/bin/sh' 'printf seen' > "$GITHUB_WORKSPACE/bin/marker"
+          chmod +x "$GITHUB_WORKSPACE/bin/marker"
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+          echo '::set-env name=FROM_CMD::nope'
+          echo '::add-path::/workspace/not-added'
+          echo '::add-mask::mask-token'
+          echo 'mask-token'
+          echo '::add-mask::Mona The Octocat'
+          echo 'Mona The Octocat'
+          echo '::stop-commands::STOP'
+          echo '::add-mask::visible-command'
+          echo '::STOP::'
+          echo '::warning::Missing semicolon'
+      - id: later
+        if: >-
+          steps.color.outputs.SELECTED_COLOR == 'green' &&
+          steps.color.outputs.secret-number == 'kept'
+        run: |
+          printf '%s\\n' "$ACTION_STATE" > "$GITHUB_WORKSPACE/env.txt"
+          printf '%s\\n' "$MSG" > "$GITHUB_WORKSPACE/msg.txt"
+          printf '%s\\n' "$GITHUB_WORKSPACE" > "$GITHUB_WORKSPACE/ws.txt"
+          printf '%s' "$NODE_OPTIONS" > "$GITHUB_WORKSPACE/node.txt"
+          printf '%s' "$FROM_CMD" > "$GITHUB_WORKSPACE/cmd.txt"
+          printf '%s\\n' "$PATH" > "$GITHUB_WORKSPACE/path.txt"
+          marker
+          printf '%s\\n' mask-token
+          printf '%s\\n' 'Mona The Octocat'
+  build:
+    needs: one
+    steps:
+      - if: needs.one.outputs.color == 'green'
+        run: |
+          printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
+          printf '%s' "$ACTION_STATE" > "$GITHUB_WORKSPACE/cross.txt"
+          printf '%s\\n' mask-token
+"""
+FAILED_ENV = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: fail
+        run: |
+          echo "AFTER=yes" >> "$GITHUB_ENV"
+          echo '::set-env name=NOPE::no'
+          exit 2
+      - id: after
+        if: always() && env.AFTER == 'yes'
+        run: printf '%s' "$AFTER$NOPE" > "$GITHUB_WORKSPACE/after.txt"
+"""
 
 
 def _git(repo, *args):
@@ -234,6 +302,18 @@ class OutputLimitTests(unittest.TestCase):
         blocked, same = _job_outputs({"outputs": {"kind": "'local'"}}, {}, _OUTPUT_RUN_BYTES)
         self.assertEqual(blocked, {})
         self.assertEqual(same, _OUTPUT_RUN_BYTES)
+
+
+class CommandFileTests(unittest.TestCase):
+    def test_invalid_utf8_command_file_is_ignored(self):
+        temp = tempfile.TemporaryDirectory(prefix="run-cmd-")
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "env"
+        path.write_bytes(b"OK=1\xff")
+        self.assertIsNone(_read_utf8(path))
+        path.write_bytes(b"OK=1\n")
+        self.assertEqual(_read_utf8(path), "OK=1\n")
+        self.assertIsNone(_read_utf8(path.parent / "gone"))
 
 
 class TimeoutLimitTests(unittest.TestCase):
@@ -594,6 +674,68 @@ jobs:
         self.assertEqual(result["steps"][0]["status"], "skipped")
         self.assertEqual(result["steps"][0]["job_id"], "build")
         self.assertFalse((workspace / "ran.txt").exists())
+
+    def test_environment_files_apply_to_later_steps(self):
+        root = self.root / "commands"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, COMMANDS)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(COMMANDS),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual([step["job_id"] for step in result["steps"]], ["one", "one", "build"])
+        self.assertEqual((workspace / "same.txt").read_text(), "")
+        self.assertEqual((workspace / "env.txt").read_text(), "yellow\n")
+        self.assertEqual((workspace / "msg.txt").read_text(), "one\ntwo\n")
+        self.assertEqual((workspace / "ws.txt").read_text(), "/workspace\n")
+        self.assertEqual((workspace / "node.txt").read_text(), "")
+        self.assertEqual((workspace / "cmd.txt").read_text(), "")
+        self.assertEqual((workspace / "cross.txt").read_text(), "")
+        path = (workspace / "path.txt").read_text()
+        self.assertTrue(path.startswith("/workspace/bin:"))
+        self.assertNotIn("not-added", path)
+        color, later, build = result["steps"]
+        self.assertIn("***", color["stdout"])
+        self.assertNotIn("mask-token", color["stdout"])
+        self.assertNotIn("Mona The Octocat", color["stdout"])
+        self.assertIn("::add-mask::visible-command", color["stdout"])
+        self.assertIn("Missing semicolon", color["stdout"])
+        self.assertNotIn("::warning::", color["stdout"])
+        self.assertIn("seen", later["stdout"])
+        self.assertNotIn("mask-token", later["stdout"])
+        self.assertNotIn("Mona The Octocat", later["stdout"])
+        self.assertIn("mask-token", build["stdout"])
+        self.assertEqual((workspace / "kept.txt").read_text(), "kept\n")
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(len(creates), 1)
+
+    def test_failed_step_env_reaches_a_later_step(self):
+        root = self.root / "failed-env"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, FAILED_ENV)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(FAILED_ENV),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 2)
+        self.assertEqual([step["status"] for step in result["steps"]], ["failed", "succeeded"])
+        self.assertEqual((workspace / "after.txt").read_text(), "yes")
+        self.assertNotIn("no", result["steps"][0]["stdout"])
 
     def test_unresolvable_digest_is_setup_failure(self):
         with self.assertRaises(RunError) as raised:

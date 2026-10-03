@@ -65,7 +65,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 3)
+        self.assertEqual(plan["capability_version"], 4)
         self.assertEqual(plan["job"]["id"], "build")
         self.assertEqual(plan["job"]["needs"], [])
         self.assertEqual(plan["job"]["outputs"], {})

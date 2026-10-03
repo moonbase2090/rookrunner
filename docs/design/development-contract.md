@@ -127,8 +127,20 @@ UTF-16-LE bytes
 The syntax page says 1 MB and 50 MB and does not define MB. `case` matches
 the expression reference and does not evaluate an unused branch. A property
 name may contain `-`. `env.MY-VAR` is that property. The operators table
-does not list subtraction, and `-` is not subtraction here. This is not a
-GitHub-equivalence claim.
+does not list subtraction, and `-` is not subtraction here.
+`GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` apply to later steps in the
+same job
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands).
+The writing step does not see its own env or PATH update. `GITHUB_*` and
+`RUNNER_*` are ignored, and `GITHUB_ENV` cannot set `NODE_OPTIONS`
+(https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
+`set-env` and `add-path` are not applied. `add-mask` masks later logs in
+that job. The commands page says a masked value cannot be set as an output,
+and its example writes the value to `GITHUB_OUTPUT` and reads it back. This
+subset follows the example: the output is kept and the log is masked. A
+later job does not inherit the mask. `run` and YAML `env` text stay literal.
+State files, job summaries, and action inputs are not implemented. This is
+not a GitHub-equivalence claim.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,

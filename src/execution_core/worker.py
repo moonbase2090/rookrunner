@@ -966,7 +966,7 @@ class Worker:
             "backend": {"name": "workflow", "version": __version__},
             "compatibility_notes": [
                 "The selected closure runs one job at a time in one caller-pinned container.",
-                "Step if, job needs, and job outputs are evaluated. Actions, secrets, matrices, and services are not claimed.",
+                "Step if, job needs, job outputs, and environment files are evaluated. Actions, secrets, matrices, and services are not claimed.",
             ],
             "accepted_at": now(),
             "started_at": None,

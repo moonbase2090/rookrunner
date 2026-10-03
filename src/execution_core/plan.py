@@ -1,7 +1,7 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 3 records declared fields, including step and job
+run. Capability version 4 records declared fields, including step and job
 `if` text and job output expressions. It checks that those expressions can
 be parsed and does not evaluate them. A selected job includes the jobs it
 needs. A dependency that is not defined in the workflow is rejected.
@@ -21,7 +21,7 @@ from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 from .expr import ExprError, check_job_if, check_job_output, check_step_if
 from .protocol import canonical
 
-CAPABILITY_VERSION = 3
+CAPABILITY_VERSION = 4
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
