@@ -19,7 +19,10 @@ as canonical JSON. It is not a GitHub event delivery. No other GitHub context
 is invented. `runs-on` does not select an image.
 
 The container is created with network `none`. The Docker socket and host
-credential directories are not mounted. Expressions in `run` are not evaluated.
+credential directories are not mounted. Step `if` is evaluated. Expressions
+in `run`, `env`, and `name` stay literal text. `github.event` is the caller
+event. Other `github` properties are not invented. `runner.os` is `Linux`
+because this subset runs in a Linux container.
 
 The job deadline is `timeout-minutes` on the plan (default 360). It starts
 when `run_job` starts and covers setup and steps. Reaching it stops the owned
@@ -46,6 +49,7 @@ import tempfile
 import threading
 import time
 
+from .expr import ExprError, step_is_enabled
 from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
@@ -187,7 +191,7 @@ def _docker_binary(docker):
 
 
 def _plan_parts(plan):
-    if not isinstance(plan, dict) or plan.get("capability_version") != 1:
+    if not isinstance(plan, dict) or plan.get("capability_version") != 2:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     job = plan.get("job")
@@ -701,9 +705,11 @@ def run_job(
 
     Setup failures raise RunError with kind SETUP_FAILED. They are not a step
     result and they are not exit code 0. A returned result has status
-    succeeded and exit_code 0 only when every step exited 0. A nonzero step
-    stops the sequence. The result names that step, its exit code, and the
-    image digest.
+    succeeded and exit_code 0 only when every step that ran exited 0. A step
+    whose `if` is false is skipped and does not run. A failed step does not
+    run later steps whose condition is false, and it does not stop a later
+    step whose condition is true. The result names the first failed step, its
+    exit code, and the image digest.
 
     The job deadline is the plan's `timeout_minutes` (default 360) measured
     from the start of this call. Reaching it returns status cancelled. A step
@@ -760,24 +766,30 @@ def run_job(
             docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30, deadline
         )
         bash_ok = probe == 0
+        failed = None
+        prior = []
         for step in steps:
-            record = _run_step(
+            if deadline - time.monotonic() <= 0:
+                raise _JobDeadline()
+            record = _consider_step(
                 docker_bin,
                 name,
                 step,
                 workflow,
                 job,
+                event,
                 workspace,
                 bash_ok,
                 step_timeout,
                 deadline,
+                prior,
+                owner is not None and owner.cancelled(),
             )
             records.append(record)
-            if record["status"] != "succeeded":
-                outcome = _outcome(resolved, reference, records, record)
-                break
-        else:
-            outcome = _outcome(resolved, reference, records, None)
+            prior.append(record)
+            if record["status"] == "failed" and failed is None:
+                failed = record
+        outcome = _outcome(resolved, reference, records, failed)
     except _JobDeadline as exc:
         if exc.step is not None:
             records.append(exc.step)
@@ -844,6 +856,90 @@ def _cancelled(image_digest, reference, records):
         "failed_step": None,
         "steps": records,
     }
+
+
+def _expression_values(event, workflow, job, step, prior, cancelled):
+    """Contexts for one step `if`. Missing properties stay missing.
+
+    `env` is the workflow, job, and step env map. Values that contain
+    `${{ }}` are not expanded. `steps.<id>.outputs` stays empty.
+    """
+
+    env = {}
+    env.update(_env_layer(workflow.get("env")))
+    env.update(_env_layer(job.get("env")))
+    env.update(_env_layer(step.get("env")))
+    steps = {}
+    for record in prior:
+        step_id = record.get("id")
+        conclusion = _conclusion(record.get("status"))
+        if not isinstance(step_id, str) or step_id == "" or conclusion is None:
+            continue
+        steps[step_id] = {"outcome": conclusion, "conclusion": conclusion, "outputs": {}}
+    if cancelled or any(record.get("status") == "failed" for record in prior):
+        job_status = "cancelled" if cancelled else "failure"
+    else:
+        job_status = "success"
+    return {
+        "github": {"event": _event_value(event)},
+        "needs": {},
+        "strategy": {},
+        "matrix": {},
+        "job": {"status": job_status},
+        "runner": {"os": "Linux"},
+        "env": env,
+        "vars": {},
+        "steps": steps,
+        "inputs": {},
+    }
+
+
+def _event_value(event):
+    if isinstance(event, (dict, list, str, bool)) or event is None:
+        return event
+    if isinstance(event, int) and not isinstance(event, bool):
+        return event
+    if isinstance(event, float) and math.isfinite(event):
+        return event
+    return ""
+
+
+def _conclusion(status):
+    if status == "succeeded":
+        return "success"
+    if status == "failed":
+        return "failure"
+    if status == "skipped":
+        return "skipped"
+    return None
+
+
+def _consider_step(
+    docker,
+    name,
+    step,
+    workflow,
+    job,
+    event,
+    workspace,
+    bash_ok,
+    step_timeout,
+    deadline,
+    prior,
+    cancelled,
+):
+    try:
+        enabled = step_is_enabled(
+            step.get("if"),
+            _expression_values(event, workflow, job, step, prior, cancelled),
+            prior,
+            cancelled,
+        )
+    except ExprError as exc:
+        return _step_result(step, "failed", None, "", "", str(exc)[:512])
+    if not enabled:
+        return _step_result(step, "skipped", None, "", "", None)
+    return _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout, deadline)
 
 
 def _run_step(docker, name, step, workflow, job, workspace, bash_ok, step_timeout, deadline):

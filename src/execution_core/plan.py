@@ -1,8 +1,9 @@
 """Versioned plan for one selected job of sequential run steps.
 
-Parsing does not fetch actions, pull images, start containers, accept a run,
-or evaluate expressions. Capability version 1 records declared fields and
-rejects anything this slice cannot describe.
+Parsing does not fetch actions, pull images, start containers, or accept a
+run. Capability version 2 records declared fields, including step `if` text.
+It checks that a step `if` can be parsed and does not evaluate it. Anything
+this slice cannot describe is rejected.
 """
 
 import hashlib
@@ -15,9 +16,10 @@ import yaml
 from yaml.constructor import SafeConstructor
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
+from .expr import ExprError, check_step_if
 from .protocol import canonical
 
-CAPABILITY_VERSION = 1
+CAPABILITY_VERSION = 2
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -68,7 +70,7 @@ FORBIDDEN = {
 }
 WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
 JOB_KEYS = {"name", "runs-on", "steps", "defaults", "env", "timeout-minutes"}
-STEP_KEYS = {"id", "name", "run", "shell", "working-directory", "env", "timeout-minutes"}
+STEP_KEYS = {"id", "name", "if", "run", "shell", "working-directory", "env", "timeout-minutes"}
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
 
@@ -351,6 +353,36 @@ class _Planner:
             )
         return value
 
+    def _if_text(self, items, field):
+        """Store step `if` text. Parsing checks the shape and does not evaluate it."""
+
+        if "if" not in items:
+            return None
+        path = _join(field, "if")
+        node = items["if"][1]
+        self._enter(node, path)
+        if not isinstance(node, ScalarNode) or node.tag not in SCALAR_TAGS:
+            _invalid(f"{path}: expression is not accepted", path)
+        text = node.value
+        if not isinstance(text, str) or text.strip() == "" or "\0" in text:
+            _invalid(f"{path}: expression is not accepted", path)
+        try:
+            check_step_if(text)
+        except ExprError as exc:
+            message = str(exc)
+            if message == "function is not available: hashFiles":
+                raise PlanError(
+                    "CAPABILITY_UNSUPPORTED",
+                    f"{path}: hashFiles: capability is unsupported",
+                    path,
+                ) from None
+            if message.startswith("context is not available:"):
+                raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
+            raise PlanError(
+                "WORKFLOW_INVALID", f"{path}: expression is not accepted", path
+            ) from None
+        return text
+
     def _steps(self, items, field):
         if "steps" not in items:
             _invalid(f"{field} is not sequential run steps", _join(field, "steps"))
@@ -378,6 +410,9 @@ class _Planner:
                 "working_directory": self._optional_string(body, step_field, "working-directory"),
                 "env": self._env(body, step_field),
             }
+            condition = self._if_text(body, step_field)
+            if condition is not None:
+                recorded["if"] = condition
             timeout_minutes = self._step_timeout_minutes(body, step_field)
             if timeout_minutes is not None:
                 recorded["timeout_minutes"] = timeout_minutes

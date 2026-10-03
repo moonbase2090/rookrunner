@@ -16,7 +16,9 @@ storage (https://docs.github.com/en/actions/reference/limits), stored as
 10 * 1024 * 1024 * 1024 bytes. Active runs and their evidence are kept.
 A finished workflow attempt publishes a manifest of the regular files it
 wrote under its workspace. `run.artifacts` and `artifact.read` page that
-manifest and its bytes.
+manifest and its bytes. A step `if` on the Bash subset is evaluated by an
+owned parser. Other expression positions stay literal. `hashFiles`, job
+`if`, `needs`, and `secrets` stay unsupported.
 The rest of this plan is not.
 
 ## Execution path
@@ -67,9 +69,10 @@ credentials into ordinary job containers by default.
    source checks. Compare semantic outcomes and relevant emitted values, not wall
    time or incidental log formatting. Record environment-related differences.
 
-Do not advertise unsupported expressions, `uses`, dependencies, matrices, services,
-or reusable workflows while building this initial path. Early rejection is temporary
-capability status, not a decision to abandon those features.
+Do not advertise expression positions other than step `if`, or `uses`,
+dependencies, matrices, services, or reusable workflows, while building this
+path. Early rejection is temporary capability status, not a decision to
+abandon those features.
 
 ## Compatibility expansion
 
@@ -77,7 +80,7 @@ capability status, not a decision to abandon those features.
 | --- | --- | --- |
 | Workflow parsing | Actions YAML shape, meaningful diagnostics, bounded parsing, deterministic plans | Implemented for one selected job of sequential `run` steps |
 | Steps and shells | Ordering, script invocation, defaults, environment precedence, working directories | Implemented for the Linux Bash subset in one caller-pinned container |
-| Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Not implemented |
+| Conditions and expressions | Own parser/evaluator; types, coercion, contexts, functions, status checks; never Python `eval` | Implemented for step `if` on the Bash subset. Other expression positions stay literal. Not a GitHub-equivalence claim |
 | Job dependencies | `needs`, outputs, failure/skip propagation, selected dependency closure | Not implemented |
 | Runtime communication | `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, state files, workflow commands and masking | Not implemented |
 | Action types | Composite, JavaScript, and Docker actions; inputs/outputs; setup/main/post lifecycle | Not implemented |

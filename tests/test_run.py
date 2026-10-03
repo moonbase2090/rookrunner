@@ -80,6 +80,32 @@ jobs:
 """
 
 EVENT = {"kind": "local", "n": 1}
+CONDITIONS = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: skip
+        if: ${{ false }}
+        run: printf '%s\\n' skipped > "$GITHUB_WORKSPACE/skipped.txt"
+      - id: keep
+        if: github.event.kind == 'local'
+        run: printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
+      - id: blank
+        if: github.sha == ''
+        run: printf '%s\\n' blank > "$GITHUB_WORKSPACE/blank.txt"
+"""
+ALWAYS = """\
+on: push
+jobs:
+  build:
+    steps:
+      - id: fail
+        run: exit 2
+      - id: after
+        if: always()
+        run: printf '%s\\n' after > "$GITHUB_WORKSPACE/after.txt"
+"""
 
 
 def _git(repo, *args):
@@ -356,11 +382,50 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(result["failed_step"]["index"], 1)
         self.assertEqual(result["failed_step"]["id"], "fail")
         self.assertEqual(result["failed_step"]["name"], "fail step")
-        self.assertEqual([step["index"] for step in result["steps"]], [0, 1])
+        self.assertEqual([step["index"] for step in result["steps"]], [0, 1, 2])
         self.assertEqual(result["steps"][1]["exit_code"], 3)
+        self.assertEqual(result["steps"][2]["status"], "skipped")
+        self.assertIsNone(result["steps"][2]["exit_code"])
         self.assertNotEqual(result["exit_code"], 0)
         self.assertEqual((workspace / "order.txt").read_text(), "one\n")
         self.assertFalse((workspace / "order.txt").read_text().endswith("later\n"))
+
+    def test_step_if_skips_a_false_condition(self):
+        result = run_job(
+            self.snapshot,
+            self.digest,
+            self.workspace,
+            _plan(CONDITIONS),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["skipped", "succeeded", "succeeded"],
+        )
+        self.assertFalse((self.workspace / "skipped.txt").exists())
+        self.assertEqual((self.workspace / "kept.txt").read_text(), "kept\n")
+        self.assertEqual((self.workspace / "blank.txt").read_text(), "blank\n")
+
+    def test_always_runs_after_a_failed_step(self):
+        result = run_job(
+            self.snapshot,
+            self.digest,
+            self.workspace,
+            _plan(ALWAYS),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 2)
+        self.assertEqual([step["status"] for step in result["steps"]], ["failed", "succeeded"])
+        self.assertEqual((self.workspace / "after.txt").read_text(), "after\n")
 
     def test_unresolvable_digest_is_setup_failure(self):
         with self.assertRaises(RunError) as raised:
