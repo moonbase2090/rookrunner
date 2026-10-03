@@ -3,7 +3,7 @@
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
-roadmap step 1 and the first executable subset. NS-1 through NS-16 are
+roadmap step 1 and the first executable subset. NS-1 through NS-17 are
 implemented. Later items are not. Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -50,12 +50,13 @@ Acceptance criteria:
   digest of the plan bytes. Repeating the parse yields the same digest.
 - String keys such as `on` survive parsing. Duplicate YAML keys fail.
   Expression text is preserved and not evaluated.
-- `uses`, `strategy`, matrix, `secrets`, service containers,
-  reusable workflow calls, and host or privileged execution fail before a
-  plan exists. The error names the field and says the capability is
-  unsupported. Unsupported is a current limit, not a decision to drop the
-  feature. Job `needs` is NS-14. Local composite `uses` is NS-16. Remote
-  `uses` is still rejected.
+- `uses`, `secrets`, service containers, reusable workflow calls, and
+  host or privileged execution fail before a plan exists. The error names
+  the field and says the capability is unsupported. Unsupported is a current
+  limit, not a decision to drop the feature. Job `needs` is NS-14. Local
+  composite `uses` is NS-16. A job `strategy` matrix is NS-17. Remote
+  `uses` is still rejected. An unknown `strategy` key still fails before a
+  plan exists.
 - A workflow with no selected job, or a job that is not sequential `run`
   steps, produces no plan.
 - A workflow file larger than 500 KB produces no plan. The error is a
@@ -63,9 +64,9 @@ Acceptance criteria:
   `timeout-minutes` as the job time bound, default 360 minutes, and rejects
   a value above 5 days. A step `timeout-minutes` is recorded when present.
   Its maximum is 360 minutes; a larger value is a capability error. An
-  omitted step timeout is not given a default. Matrix expansion stays
-  unsupported. GitHub's documented limits for this slice are a 500 KB
-  workflow file, 256 matrix jobs per run, job execution time of 6 hours on
+  omitted step timeout is not given a default. GitHub's documented limits
+  for this slice are a 500 KB workflow file, 256 matrix jobs per run, job
+  execution time of 6 hours on
   hosted runners or 5 days on self-hosted runners
   (https://docs.github.com/en/actions/reference/limits), and a 360 minute
   step timeout
@@ -414,8 +415,8 @@ contexts reference rule for property dereference. `env.MY-VAR` is the
 property `MY-VAR`. The operators table does not list arithmetic, and `-` is
 not subtraction. A hosted runner that reads `env.MY-VAR` as subtraction is
 not claimed. `hashFiles` is not implemented. Expressions in `run`, `env`,
-and `name` stay literal. Job `if` and `needs` are NS-14. Matrices stay
-unsupported. This is not a GitHub-equivalence claim.
+and `name` stay literal. Job `if` and `needs` are NS-14. Matrix expansion
+is NS-17. This is not a GitHub-equivalence claim.
 
 Acceptance criteria:
 
@@ -642,17 +643,74 @@ Acceptance criteria:
   change the planned script.
 - A remote `uses`, a JavaScript action, and a Docker action produce no plan.
 
+**NS-17. Matrix.**
+
+Status: implemented.
+
+Capability version is 6. A job may declare `strategy` with `fail-fast`,
+`max-parallel`, and `matrix`. Any other `strategy` key fails planning and
+names the field. `matrix` outside `strategy` still fails planning. The
+planner expands a literal matrix. A matrix axis, `fail-fast`, or
+`max-parallel` whose whole value is an expression is unsupported. This
+slice does not evaluate matrix expressions.
+
+Combinations follow the workflow syntax page. Axis order is declaration
+order, and the last axis changes fastest. `exclude` is applied to that
+product first. A partial match is enough to exclude a combination. `include`
+is applied after `exclude`, so it can add a combination back. An include
+object merges into original combinations when it does not overwrite an
+original axis value. Otherwise it becomes its own combination. It does not
+merge into a combination that an earlier include created. Original axis
+values are not overwritten. Added values can be. Variable names are
+case-insensitive. The stored property keeps the axis spelling. Expression
+lookup of that property stays case-sensitive, which is this evaluator's
+existing property rule. Axis values keep the parsed YAML type. The matrix
+context example shows `node` as the number 16, while the context table
+lists that value as a string. This slice keeps the parsed value. An exclude key that is not a matrix variable
+removes nothing. That is not the Forgejo unknown-key rejection.
+
+`fail-fast` defaults to true. After one combination fails, later
+combinations of that job do not start. Their steps are not recorded.
+`continue-on-error` stays unsupported, so every failed combination counts.
+`max-parallel` must be a positive integer. GitHub publishes no numeric
+ceiling, and this slice does not add one. The value is stored and exposed
+as `strategy.max-parallel` when it was declared. Omitted, that property is
+missing and reads as an empty string. This worker has one container, so
+combinations run one at a time on the same attempt workspace. `max-parallel`
+does not start more containers and does not drop combinations.
+
+Each combination has its own step context, `GITHUB_ENV`, and step outputs.
+The workspace is shared. Job `if` is evaluated once, before expansion, and
+still sees empty `matrix` and `strategy` objects. Steps see `matrix` for
+that combination and `strategy.fail-fast`, `strategy.job-index` (zero-based),
+and `strategy.job-total`. A matrix job does not copy its outputs into
+`needs`. One `timeout-minutes` covers every combination of that job. A
+matrix that generates more than 256 jobs fails planning. Exactly 256 is
+accepted. The syntax page states that maximum for GitHub-hosted and
+self-hosted runners. This is not a GitHub-equivalence claim.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+https://docs.github.com/en/actions/reference/limits
+
+Acceptance criteria:
+
+- Include, exclude, fail-fast, and max-parallel are tested.
+- Unsupported matrix keys fail at plan time.
+- A matrix of 256 jobs is accepted. A matrix of 257 jobs is a capability
+  error and cites the 256-job limit.
+
 ## After the first path
 
 These are the roadmap's later M2 increments. They are not part of the first
-sixteen PRs. Each one updates the capability version, rejects anything it
+seventeen PRs. Each one updates the capability version, rejects anything it
 still does not implement, and records local evidence separately from any
 future GitHub reference run. None of them is authorized to call the result
 GitHub-equivalent.
 
 | Order | PR | Acceptance criteria |
 | --- | --- | --- |
-| NS-17 | Matrix | Include, exclude, fail-fast, and max-parallel are tested. Unsupported matrix keys fail at plan time. |
 | NS-18 | Reusable workflows | `workflow_call` inputs and outputs type-check. Nesting over the documented limit fails. Secrets are not passed implicitly. |
 | NS-19 | Service containers | Owned service containers become ready or fail setup. Cancellation and crash cleanup remove them. Service containers do not receive the engine socket. |
 | NS-20 | Sanitized Git metadata | A written design lands before code. The following PR copies only the metadata that design allows, still excludes credentials and remote URLs, and proves a checkout fixture against the captured digest. Until that PR, checkout actions remain an explicit rejection. |
@@ -660,5 +718,5 @@ GitHub-equivalent.
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
-restart. NS-17 through NS-20 can follow that evidence. They are not required
+restart. NS-18 through NS-20 can follow that evidence. They are not required
 to say the first subset runs.

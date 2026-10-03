@@ -78,7 +78,16 @@ self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 A missing socket fails setup and creates no container. Host credential
 directories are not mounted. The container is not privileged. This is not a
-private-network, nested-daemon, or egress-policy implementation. Unsupported workflow
+private-network, nested-daemon, or egress-policy implementation. A job may
+declare `strategy` with `fail-fast`, `max-parallel`, and a literal `matrix`.
+Include and exclude are expanded at plan time. `fail-fast` defaults to true.
+Combinations of that job run one at a time in the same container and
+workspace. `max-parallel` does not start more containers. GitHub publishes
+no numeric ceiling for `max-parallel`. A matrix that would generate more
+than 256 jobs creates no run
+(https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
+An unknown `strategy` key creates no run. A matrix expression is not
+evaluated. Unsupported workflow
 fields and invalid YAML create no run. A workflow file larger than 500 KB
 creates no run; that rejection is a capability error. The job time bound is
 `timeout-minutes`, default 360 minutes, and a value above 5 days is a
