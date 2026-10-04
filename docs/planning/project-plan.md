@@ -34,6 +34,23 @@ and history are preserved; no duplicate replacement tickets were created.
 - **Discovery:** private remote execution and unrelated-customer hosting. Each has
   its own proposal and decision gate. Neither is a dependency of the local preview.
 
+### Re-prioritization, 2026-10-03
+
+The owner's 2026-10-03 priorities change the horizons:
+
+- **Now:** NS-29 finishes. Then the `dogfood` epic, together with the
+  `check.yml` subset of RR-16, RR-17, and RR-18, gets Rookrunner running
+  its own `check.yml` from the CLI (NS-30–NS-38).
+- **Next:** the `ownerci` epic reports push and pull request results for
+  owner repositories to GitHub as commit statuses (NS-39–NS-43).
+- **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
+
+The `dogfood` and `ownerci` stories in the [backlog manifest](backlog.json)
+have no Waypoint ids yet. This planning change does not create tickets.
+Their owner is `build-seat` until Waypoint assignment. The ordered slices,
+rationale, and deferrals are in
+[next steps](next-steps.md#re-prioritization-2026-10-03).
+
 Milestones are outcome gates, not dates. Compatibility-1/2/3 are planning groupings,
 not accepted feature tiers. M3 adapters can progress once their protocol dependencies
 are ready; they need not wait for all compatibility expansion. M4 requires the local
@@ -93,10 +110,12 @@ PMUX carries direct assignments and review findings until delivery is verified.
 | --- | --- | --- | --- | --- |
 | RR-1 — M2: Execute captured workflows with the owned engine | A developer can execute captured local workflow inputs and trust the reported terminal result. | Now / M2 | codex-rr | RR-2, RR-3, RR-4, RR-5, RR-6, RR-7, RR-8, RR-9 |
 | RR-10 — Evaluate workflow conditions and exchange step data | Authors can use conditions, contexts, step outputs and dependent jobs with explainable outcomes. | Next / Compatibility-1 | codex-rr | RR-11, RR-12, RR-13, RR-14 |
-| RR-15 — Run checkout and reusable action steps | Authors can run a checkout/setup/build workflow with owned action resolution and runtimes. | Next / Compatibility-2 | codex-rr | RR-16, RR-17, RR-18, RR-19 |
+| RR-15 — Run checkout and reusable action steps | Authors can run a checkout/setup/build workflow with owned action resolution and runtimes. | Now (check.yml subset) / Compatibility-2 | codex-rr | RR-16, RR-17, RR-18, RR-19 |
+| dogfood (no ticket yet) — Run this repository's check.yml end to end from the CLI | Rookrunner runs its own `check.yml` and reports a terminal result tied to an identified commit. | Now / CI-1 | build-seat | dogfooddesign, permissions, context, dogfoodproof |
+| ownerci (no ticket yet) — Report CI results for owner repositories to GitHub | Pushes and same-repository pull requests on owner repositories receive a truthful commit status. | Next / CI-1 | build-seat | cidesign, status, ontriggers, poll, ciproof |
 | RR-20 — Expand workflow orchestration beyond sequential builds | Teams can incrementally adopt more complex workflows without silent omissions. | Later / Compatibility-3 | codex-rr | RR-21, RR-22, RR-23, RR-24 |
 | RR-25 — Make compatibility claims traceable and reproducible | Maintainers and users can see exactly which behavior is supported and how it was validated. | Next / Quality | codex-rr | RR-26, RR-27, RR-28 |
-| RR-29 — Give coding agents reliable execution tools | Agents can submit, reconnect, inspect and cancel through the same contract as CLI users. | Next / M3 | codex-rr | RR-30, RR-31, RR-32 |
+| RR-29 — Give coding agents reliable execution tools | Agents can submit, reconnect, inspect and cancel through the same contract as CLI users. | Later / M3 | codex-rr | RR-30, RR-31, RR-32 |
 | RR-33 — Let humans inspect and control local execution | A developer can understand queue, results and recovery from a usable local dashboard. | Later / M3 | codex-rr | RR-34, RR-35, RR-36 |
 | RR-37 — Deliver an installable local preview | A new user can install independently and complete the documented first workflow run. | Later / M4 | codex-rr | RR-38, RR-39, RR-40, RR-41 |
 | RR-42 — Discover private remote execution requirements | Decide whether and how to extend local execution to authenticated private machines. | Discovery / Discovery-remote | codex-rr | RR-43, RR-44 |

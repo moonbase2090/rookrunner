@@ -12,8 +12,13 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | Not started. Scheduled 2026-10-03 as NS-30–NS-43, after NS-29 |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
+
+Order as of 2026-10-03: M2 finishes NS-29. Then CI-1 runs: dogfood first,
+then owner CI. M3 and M4 follow CI-1. The rationale and deferrals are in
+[next steps](planning/next-steps.md#re-prioritization-2026-10-03).
 
 ## M1 — Executable contract
 
@@ -58,6 +63,35 @@ files, action runtimes, matrices, reusable workflows, and service integrations.
 Track local validation separately from GitHub reference comparisons; no M2 exit
 claim implies complete GitHub Actions compatibility.
 
+## CI-1 — Dogfood and owner repository CI
+
+Proposed 2026-10-03 from the owner's priorities. The slices are NS-30
+through NS-43 in [next steps](planning/next-steps.md).
+
+1. Design the dogfood path, with one document for every `check.yml` gap (NS-30).
+2. Accept read-only `permissions` and a SHA-pinned `actions/checkout` (NS-31, NS-32).
+3. Fill the `github` and `runner` contexts and the default variables (NS-33).
+4. Resolve remote actions pinned by full commit SHA, provide Node 24, and
+   run `node24` JavaScript actions through `main` and `post` (NS-34–NS-37).
+5. Record this repository's `check.yml` run from the CLI (NS-38).
+6. Design owner CI. Report runs as commit statuses, evaluate `on` for push
+   and pull request, and poll owner repositories from an OS-scheduled pass
+   (NS-39–NS-42).
+7. Record Rookrunner reporting its own CI (NS-43).
+
+Exit evidence:
+
+- `check.yml` ends `succeeded` with exit code 0 for an identified commit,
+  and a forced ruff failure ends `failed`.
+- Commit statuses posted for this repository match those terminal results.
+- Only `succeeded` with exit code 0 posts `success`.
+
+CI stays portable: plain CLI commands and an OS scheduler. There is no
+inbound listener, runner registration, or Terraform. Every limit cites
+GitHub's documented limits (https://docs.github.com/en/actions/reference/limits).
+Scorecard and the websites need more workflow support. The NS-39 inventory
+orders that work.
+
 ## M3 — Agent and human access
 
 1. Map MCP tools to the same protocol operations as the CLI.
@@ -85,6 +119,8 @@ Public publishing is a separate step after the preview artifact is reviewable.
 
 - Authenticated workers on private remote machines.
 - Managed GitHub runners using GitHub's official runner application.
+  Reporting results for the owner's own repositories moved to CI-1 on
+  2026-10-03. Webhook delivery and runner registration stay here.
 - Resource scheduling across multiple workers and projects.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.

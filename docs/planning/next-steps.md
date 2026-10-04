@@ -1,5 +1,9 @@
 # M2 next steps
 
+The order after NS-29 was re-prioritized on 2026-10-03. See
+[Re-prioritization](#re-prioritization-2026-10-03) for what moved, why,
+and what is deferred. NS-30 through NS-43 are proposed and not started.
+
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
 [engine plan](../design/execution-engine.md) supplies the sequence inside
@@ -1144,3 +1148,731 @@ representative success and failure, unchanged digests after checkout edits,
 no owned container left after cancel, and no silent second execution after
 restart. NS-23 is that checkout. It is not required to say the
 first subset runs.
+
+## Re-prioritization, 2026-10-03
+
+Accepted direction is the owner's 2026-10-03 priorities, in order:
+
+1. Dogfood as soon as possible. Rookrunner runs this repository's
+   `.github/workflows/check.yml` end to end from the CLI.
+2. Then use Rookrunner as real CI for owner repositories. It triggers on
+   push and pull request and reports pass or fail to GitHub.
+3. The Git-directory work, NS-28 and NS-29, finishes first. In-flight
+   work is not reordered.
+4. CI stays portable. Use plain scripts and minimal GitHub-only features.
+   Every limit comes from a cited GitHub limit. No Terraform.
+
+Proposed below: the slice order, the scope of each slice, and the
+recommended answers to design questions. Each design question is
+settled by its design PR, not by this section. NS-29 (owned Git
+directory, PR #33) is in review and keeps its scope.
+
+### What `check.yml` needs
+
+`check.yml` has one job, `check`. Its steps are `actions/checkout` pinned
+by SHA, `astral-sh/setup-uv` pinned by SHA, and three `run` steps:
+`uv sync`, ruff, and unittest. Checked against the planner and the
+action metadata at those SHAs on 2026-10-03:
+
+| Element | Today | Slice |
+| --- | --- | --- |
+| `permissions: contents: read` | `permissions` is not a workflow key, so planning fails | NS-31 |
+| `actions/checkout@11d5960…` (v4, `runs.using: node20`) | Only the string `actions/checkout@v4` is the owned checkout | NS-32 |
+| `astral-sh/setup-uv@c18668ad…` | Remote `uses` is rejected | NS-34 |
+| setup-uv `runs.using: node24` with `main`, `post`, and `post-if: success()` | JavaScript actions are rejected | NS-35, NS-36, NS-37 |
+| setup-uv input defaults `${{ github.workspace }}` and `${{ github.token }}` | `github` holds only `event` | NS-33, NS-36 |
+| setup-uv `enable-cache: auto` ("enables caching on GitHub-hosted runners") | `RUNNER_ENVIRONMENT` is not set | NS-33 |
+| `uv sync`, ruff, and unittest `run` steps | Supported. `uv` comes from setup-uv's `GITHUB_PATH` write (NS-15). Downloads use the default `bridge` network | Existing |
+| `runs-on: ubuntu-latest` | Accepted. The caller pins the image by digest | Unchanged |
+| `on: push` and `pull_request` | Stored, not evaluated | NS-41 (CI only) |
+
+Owner repositories pin `actions/checkout` by SHA too. Scorecard's `ci.yml`
+and the websites' `scorecard.yml` use v7.0.1. So NS-32 serves both
+priorities.
+
+### What moved and why
+
+- **Dogfood comes right after NS-29.** It is scheduled as NS-30 through
+  NS-38. That pulls a narrow subset of three existing stories into Now:
+  RR-16 (resolve actions), RR-17 (checkout), and RR-18 (JavaScript
+  actions). The subset is only what `check.yml` needs: full-SHA pins,
+  Node 24, and `main` and `post`. Before this change those stories were
+  Next, under Compatibility-2.
+- **GitHub reporting moves from Later investigations into scheduled
+  slices** (NS-39 through NS-43). It is scoped to the operator's own
+  repositories. It uses outbound HTTPS only. There is no listener and no
+  runner registration. This is neither remote execution nor service for
+  unrelated customers. Those stay separate discovery milestones.
+- **Rookrunner itself is the first CI target.** After NS-38 its own
+  `check.yml` runs, so the trigger and reporting slices can be proven on
+  this repository first. Scorecard and the websites need more workflow
+  support. The NS-39 inventory measures that work, and the provisional
+  list below orders it.
+- **M3 and M4 move after CI-1.** MCP (RR-29), the dashboard (RR-33),
+  and packaging (RR-37) are not dropped. They move from Next to Later.
+- **One design PR per track.** The Git work used a separate design PR
+  for each implementation PR (NS-20 through NS-29). This plan uses one
+  design document per track instead: NS-30 for dogfood and NS-39 for
+  CI. Each implementation slice cites a section of that document. That
+  removes six design-only round trips from the dogfood path.
+
+### Build order and dependencies
+
+Each item is still one PR. The build order is linear because there is
+one build seat. Hard dependencies:
+
+```mermaid
+flowchart LR
+  NS29[NS-29 Git directory, in review] --> NS30[NS-30 Dogfood design]
+  NS30 --> NS31[NS-31 Read-only permissions]
+  NS30 --> NS32[NS-32 Checkout by SHA]
+  NS30 --> NS33[NS-33 github and runner contexts]
+  NS30 --> NS34[NS-34 Remote actions by SHA]
+  NS30 --> NS35[NS-35 Node 24]
+  NS33 --> NS36[NS-36 JavaScript main]
+  NS34 --> NS36
+  NS35 --> NS36
+  NS36 --> NS37[NS-37 JavaScript post]
+  NS31 --> NS38[NS-38 Dogfood evidence]
+  NS32 --> NS38
+  NS37 --> NS38
+  NS39[NS-39 Owner CI design] --> NS40[NS-40 Commit status]
+  NS39 --> NS41[NS-41 on filters]
+  NS33 --> NS41
+  NS40 --> NS42[NS-42 Poll pass]
+  NS41 --> NS42
+  NS38 --> NS43[NS-43 Rookrunner CI evidence]
+  NS42 --> NS43
+```
+
+NS-31 and NS-32 come first because they are small planner changes with
+no runtime risk, and each one removes a `check.yml` rejection. NS-33
+precedes the runtime work because setup-uv's input defaults read
+`github.workspace`. Node (NS-35) and resolution (NS-34) precede the
+runtime that uses them. `main` lands before `post`. NS-36 rejects an
+action that declares `post`, so nothing runs half of an action's
+lifecycle.
+
+NS-39 is docs only and does not depend on NS-31 through NS-38. The
+planner seat may draft it while those slices land. It merges after
+NS-38 so that its gap inventory reflects the dogfood engine.
+
+### Limits used
+
+No slice below adds a numeric limit without a GitHub source. Read
+2026-10-03:
+
+| Limit | Value | Source | Used by |
+| --- | --- | --- | --- |
+| Self-hosted job execution time | 5 days | https://docs.github.com/en/actions/reference/limits | Existing NS-8 bound |
+| Self-hosted job queue time | 24 hours | https://docs.github.com/en/actions/reference/limits | NS-42 |
+| Cache storage | 10 GB per repository | https://docs.github.com/en/actions/reference/limits | Existing disk budget. NS-33 directories and the NS-34 store count against it |
+| REST primary limit, unauthenticated | 60 requests per hour | https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api | NS-30, NS-34 |
+| REST primary limit, authenticated user | 5,000 requests per hour | same | NS-42 |
+| REST primary limit, GitHub App installation | 5,000 per hour minimum, 12,500 maximum outside Enterprise Cloud | same | NS-42 |
+| Content-generating requests | 80 per minute and 500 per hour | same | NS-40, NS-42 |
+| Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
+| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | NS-39 |
+| `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
+| Pending runs in a concurrency group | 100, with `queue: max` | same | Provisional P2 |
+
+The poll interval is the operator's schedule, not a number in code. A
+poll pass follows GitHub's rate-limit response headers. It does not
+assume a fixed rate.
+
+### Deliberately deferred
+
+- A webhook receiver. It needs an inbound listener, which the PRD
+  excludes from the local worker.
+- Registering as a GitHub self-hosted runner. That runs GitHub's job
+  protocol, not this engine. It stays under Later investigations.
+- Pull requests from forks, and any untrusted code. GitHub's secure-use
+  guidance says self-hosted runners should almost never run public
+  repository pull requests
+  (https://docs.github.com/en/actions/reference/security/secure-use).
+- Secrets, `GITHUB_TOKEN`, `write` permissions, and deploy workflows.
+  These wait for a reviewed secrets design.
+- The `actions/cache` and artifact HTTP services, Docker actions, `pre`
+  entries, `node20` actions, tag or branch action refs, and private
+  action repositories.
+- macOS and Windows jobs, such as Scorecard's `check-macos`.
+- Check runs, until NS-39 settles the credential. Commit statuses come
+  first.
+- MCP, the dashboard, and packaging (M3 and M4). They come after CI-1.
+- Remote workers and hosted service discovery (RR-42 and RR-45). Their
+  scope is unchanged.
+- Terraform and any hosted infrastructure.
+
+## Dogfood: run `check.yml`
+
+**NS-30. Design the `check.yml` dogfood path.**
+
+Status: not started. It starts after NS-29 merges. Docs only.
+
+A new design document, `docs/design/dogfood-check.md`, maps each element
+of this repository's `check.yml` to the slice that supports it, the
+behavior that slice implements, and the documented source. It settles
+these questions, so later slices do not reopen them:
+
+1. **`github.sha`.** NS-29 points the workspace `HEAD` at the
+   synthesized commit, not at `base_commit`. The push event documents
+   `GITHUB_SHA` as the tip commit pushed. Choose one of two options.
+   One sets `base_commit` only for a clean capture with no included
+   files, and leaves the value unset otherwise. The other uses the
+   synthesized commit id. Recommended: `base_commit` only when clean.
+   Record the intentional difference that `HEAD` names another commit.
+2. **The source of each `github` property.** Each comes from the
+   caller's event, from the plan, or stays unset. `github.token` stays
+   unset. Nothing is read from the user's Git configuration.
+3. **`GITHUB_ACTIONS`.** The variables reference says it is always
+   `true` when GitHub Actions runs the workflow. This engine is not
+   GitHub Actions. Recommended: leave it unset unless a dogfood fixture
+   shows a needed action depends on it.
+4. **Runner directories.** Decide where `HOME`, `RUNNER_TEMP`, and
+   `RUNNER_TOOL_CACHE` live in the job container, and how they are
+   removed and counted. GitHub documents `/github/home` for Docker
+   container actions.
+5. **How a remote action pinned by SHA is fetched.** The options are
+   Git over HTTPS from the action repository, or the REST archive
+   endpoint. The REST limit for unauthenticated requests is 60 per hour.
+   Recommended: Git over HTTPS, with no credential.
+6. **How Node 24 reaches the job container.** The options are an
+   operator-supplied distribution mounted read-only, or a worker
+   download verified against a pinned checksum. Recommended for the
+   first slice: the operator-supplied distribution.
+7. **The `runs.using: node20` policy.** The 2026-09-23 changelog
+   retires Node 20 on GitHub Actions
+   (https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-in-github-actions/).
+   It does not say how a `node20` action now runs. Until a cited rule
+   exists, `node20` stays rejected by name. The only `node20` action in
+   `check.yml` is `actions/checkout`, and that is the owned step.
+8. **Action files in the container.** They are either mounted read-only
+   from the store or copied into the attempt. Some actions write next to
+   their own files.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+
+Acceptance criteria:
+
+- Each `check.yml` element maps to one of NS-31 through NS-37, or to
+  existing behavior.
+- Each answer cites the GitHub page it follows, or is labeled an
+  intentional local difference.
+- No limit is added without a cited GitHub limit.
+- No code changes. The capability version is unchanged.
+
+**NS-31. Accept read-only `permissions`.**
+
+Status: not started.
+
+`permissions` is accepted at the workflow level and on a concrete job
+when its value is one of these:
+
+- `read-all`.
+- `{}`.
+- A map whose keys are documented scopes and whose values are `read` or
+  `none`.
+
+`write`, `write-all`, and an unknown scope are `CAPABILITY_UNSUPPORTED`
+and name the field. A job that calls a reusable workflow still rejects
+`permissions`. The scopes are the list on the workflow syntax page on
+the day of the PR. No `GITHUB_TOKEN` is created, so a declared read
+scope grants nothing. The plan records the declared value. The
+capability version increases by one.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- `permissions: contents: read` plans and runs, at the workflow level
+  and on a job.
+- `write`, `write-all`, and an unknown scope fail planning, name the
+  field, and create no run.
+- A workflow without `permissions` plans as before.
+
+**NS-32. Accept a SHA-pinned `actions/checkout` as the owned checkout.**
+
+Status: not started.
+
+`uses: actions/checkout@<sha>` becomes the same owned step as
+`actions/checkout@v4` when `<sha>` is a full-length commit SHA of 40
+lowercase hexadecimal characters. GitHub's secure-use guidance calls a
+full-length commit SHA the only way to use an action as an immutable
+release. The plan stores the `uses` string verbatim, with `checkout` set
+to `captured`. The step does not fetch that commit, read its action
+file, or run its JavaScript. The SHA is recorded and is not verified.
+The `with` policy from NS-23 is unchanged. Short SHAs, branches, and
+other tags stay rejected. The capability version increases by one.
+
+https://docs.github.com/en/actions/reference/security/secure-use
+https://github.com/actions/checkout
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- The checkout step in `check.yml` plans as the owned checkout. A
+  captured dirty file stays in place.
+- A 39-character SHA, `@main`, and `@v5` stay rejected and create no
+  run.
+- `actions/checkout@v4` behaves as before.
+
+**NS-33. Fill the `github` and `runner` contexts and the default variables.**
+
+Status: not started. It follows the NS-30 answers.
+
+Today the `github` context holds only `event`, plus `action_path`
+inside a composite. The process gets `GITHUB_WORKSPACE`,
+`ROOKRUNNER_EVENT`, and the three command files. This slice sets the
+values NS-30 assigns, both as context properties and as the documented
+default variables. At least these are set:
+
+- `github.workspace` and `GITHUB_WORKSPACE`.
+- `github.job` and `GITHUB_JOB`.
+- `github.workflow` and `GITHUB_WORKFLOW`.
+- `github.event_name` and `GITHUB_EVENT_NAME`.
+- `GITHUB_EVENT_PATH`, which is the existing event file.
+- `runner.os` and `RUNNER_OS`, with value `Linux`.
+- `runner.arch` and `RUNNER_ARCH`, from the image platform.
+- `runner.environment` and `RUNNER_ENVIRONMENT`, with value
+  `self-hosted`.
+- `runner.temp` and `RUNNER_TEMP`.
+- `runner.tool_cache` and `RUNNER_TOOL_CACHE`.
+- `HOME`.
+- `CI`, with value `true`.
+
+`GITHUB_*` and `RUNNER_*` names still cannot be overwritten. `CI` can
+be, as the variables reference says.
+
+Version 1 `run.submit` gains an optional `event_name`, with the CLI
+flag `--event-name`. It is part of the normalized input, so the same
+key with a different event name conflicts. When it is absent,
+`github.event_name` is a missing property and `GITHUB_EVENT_NAME` is
+unset. A value the event does not supply stays missing. `github.token`
+stays missing. Nothing comes from host Git configuration or credentials.
+
+The temp, tool-cache, and home directories belong to the attempt and
+sit outside the workspace. They are removed with the attempt and count
+toward the disk budget. They are not in the artifact manifest.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/variables
+https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A `run` step sees the default variables. An `if` reads the same
+  values from the contexts.
+- `GITHUB_ENV` cannot replace a `GITHUB_*` or `RUNNER_*` name. It can
+  replace `CI`.
+- `event_name` takes part in idempotency. When it is absent,
+  `github.event_name` reads as empty.
+- `github.token` reads as empty. No value comes from host Git
+  configuration or credentials.
+- The attempt directories are removed with the attempt and count
+  toward the disk budget.
+
+**NS-34. Resolve a remote action pinned by full commit SHA.**
+
+Status: not started.
+
+`uses: {owner}/{repo}@{sha}` and `{owner}/{repo}/{path}@{sha}` are the
+documented forms. During submission, before acceptance, the action is
+fetched by the method NS-30 selects. Only a full-length commit SHA is
+accepted. A tag or branch ref is `CAPABILITY_UNSUPPORTED`, and the
+message asks for a SHA pin. The action directory is stored in the
+state directory under its content digest. The plan records the owner,
+repository, path, commit, and that digest. A later submission reuses
+the stored copy after it checks the digest. The store counts toward the
+disk budget, so a fetch that would exceed the budget returns
+`STORAGE_FULL`. A fetch failure returns a structured error, creates no
+run, and does not consume the submission key. No credential is sent.
+Private action repositories stay unsupported.
+
+The fetched `action.yml` (or `action.yaml`) is parsed with the existing
+metadata rules. A remote composite action whose steps are `run` steps
+runs the same way as a local one. `node24` and `docker` stay rejected in
+this slice, naming `runs.using`. Nested `uses` stays rejected. The
+fetched code is workflow input recorded on each run. It is not code
+imported into this repository.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A pinned remote composite action runs. The run records its commit and
+  digest. Tests use a local repository in place of github.com.
+- A tag ref, a short SHA, and an unreachable repository create no run
+  and do not consume the key.
+- A second submission does not fetch again when the stored digest
+  matches. A tampered stored copy is not used.
+- `node24` and `docker` actions still produce no plan.
+
+**NS-35. Provide Node 24 to the job container.**
+
+Status: not started.
+
+`worker --node24 DIR` names an unpacked Node.js 24 Linux distribution
+for the image architecture, as NS-30 decides. The worker records a
+digest of that directory and mounts it read-only at a fixed container
+path. It is not added to `PATH` for `run` steps. `worker.describe`
+reports Node 24, with its digest, only when the flag is set. Each run
+that uses it records the digest and the version that `node --version`
+prints in the job container. Rookrunner does not download or bundle
+Node in this slice. Packaging (M4) revisits bundling and notices.
+
+Acceptance criteria:
+
+- With the flag, the mounted `node --version` runs in the job
+  container. A step cannot write to the mount.
+- Without the flag, describe does not report Node 24.
+- A `run` step's `PATH` is unchanged.
+
+**NS-36. Run the `main` entry of a `node24` JavaScript action.**
+
+Status: not started.
+
+A resolved action (NS-34) with `runs.using: node24` and `main` runs as
+one step. The NS-35 Node runs the `main` file in the job container,
+with `GITHUB_WORKSPACE` as the working directory.
+
+- **Inputs.** Each input arrives as `INPUT_<NAME>`, in upper case with
+  spaces replaced by `_`, as the metadata syntax documents for
+  JavaScript actions. A `with` value wins. Otherwise the input
+  `default` applies. A default that is a whole-string expression is
+  evaluated with the contexts NS-30 names. setup-uv uses
+  `${{ github.workspace }}` and `${{ github.token }}`. `required: true`
+  does not fail a missing input.
+- **Files.** Outputs come from `GITHUB_OUTPUT`. The env and path files
+  apply at the step boundary, as in NS-15. Values written to
+  `GITHUB_STATE` are stored for that action instance, for NS-37 to use.
+  Other actions cannot see them. `GITHUB_STEP_SUMMARY` is a per-step
+  file. Its bytes are kept as step evidence and are not rendered.
+- **Commands.** Stdout workflow commands follow NS-15. An unknown
+  command, such as `add-matcher`, stays in the log.
+- **Exit.** Exit 0 succeeds. A nonzero exit fails the step with that
+  code. Step timeout and cancel work as they do for `run` steps.
+
+`pre`, `pre-if`, and `node20` stay rejected by name. An action that
+declares `post` is rejected until NS-37, so the engine never runs half
+of an action's lifecycle. The capability version increases by one.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A fixture `node24` action passes these checks:
+  - It reads `INPUT_*`.
+  - It resolves a default of `${{ github.workspace }}`.
+  - It writes an output that a later step reads.
+  - It writes a `PATH` entry that a later `run` step uses.
+- A nonzero exit fails the step with that code. A later step whose `if`
+  is true still runs.
+- State written by one action is not visible to another action.
+- `pre`, `node20`, and `post` fail planning and create no run.
+
+**NS-37. Run JavaScript `post` entries with `post-if`.**
+
+Status: not started.
+
+After a job's main steps, `post` entries run in reverse order of their
+`main` steps. This applies to each action whose `main` ran. `post-if`
+defaults to `always()` and is evaluated against the job status, as the
+metadata syntax documents. setup-uv declares `post-if: success()`. The
+post process receives the `STATE_<name>` values that its own `main`
+wrote, and the same inputs. A post entry is recorded as its own step
+after the main steps. A failed post fails the job. The first failed
+main step stays the reported failure. The job deadline covers post
+entries.
+
+A caller cancel or a job deadline stops the container before post
+entries run. GitHub runs the post steps of a cancelled job. That is
+a documented local difference.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- The post entries of two fixture actions run in reverse order after
+  the last main step.
+- `post-if: success()` skips the post after a failed step. The default,
+  `always()`, runs it.
+- State written in `main` reaches only that action's own post.
+- A failing post fails the run. A post never turns a failed run into
+  `succeeded`.
+
+**NS-38. Dogfood: run this repository's `check.yml` from the CLI.**
+
+Status: not started. It depends on NS-31 through NS-37.
+
+This slice is a validation record. It adds no capability. The run uses
+a clean clone of this repository at an identified commit on `main`.
+The worker runs with `--node24` and the default network. The CLI
+submits `--workflow .github/workflows/check.yml --job-id check
+--event-name push`, a push event for that commit, and `--image` with a
+digest. Then it runs `follow`.
+
+The record is `docs/validation/dogfood-check.md` plus a JSON evidence
+file, in the style of the M1 and M2 records. It names:
+
+- The commit.
+- The snapshot, manifest, workflow, and plan digests.
+- The image digest.
+- The Node directory digest and version.
+- The setup-uv commit and action digest.
+- The per-step records.
+- The terminal state and exit code.
+- The network the job used.
+- The worker and CLI command lines.
+
+Only `succeeded` with `exit_code` 0 for that snapshot counts as
+success. A second run, on a disposable copy with a deliberate ruff
+violation, must end `failed` with the ruff step's exit code. The
+GitHub-hosted `check` result for the same commit is recorded as an
+observed reference. It is not a dispatched comparison.
+
+If `check.yml` exposes a gap that NS-31 through NS-37 did not cover,
+this record names it. The next slice is then that gap, not NS-40.
+`check.yml` itself does not change in this slice.
+
+Acceptance criteria:
+
+- One run of `check.yml` ends `succeeded` with exit code 0 for an
+  identified commit. The record lists every digest above.
+- One run ends `failed` for the ruff violation. Its exit code is
+  nonzero and the record names the failing step.
+- Queued, running, cancelled, lost, and unknown outcomes are not
+  reported as success.
+
+## Owner repository CI
+
+**NS-39. Design CI for owner repositories.**
+
+Status: not started. Docs only. The planner seat may draft it during
+NS-31 through NS-38. It merges after NS-38.
+
+A new design document, `docs/design/owner-ci.md`, settles these
+questions:
+
+1. **Trust.** Only the operator's own repositories run, and they are
+   trusted code. A pull request from a fork never runs. The PRD trust
+   model is unchanged.
+2. **Trigger.** Recommended: a one-shot poll pass started by the OS
+   scheduler (cron, launchd, or a systemd timer). It is not a resident
+   service and not a listener. Webhooks need an inbound listener and
+   stay deferred. Runner registration stays deferred.
+3. **Source.** A dedicated clone per repository is fetched, and a clean
+   work tree at the SHA is captured with no included files. GitHub runs
+   `pull_request` on the merge commit, `refs/pull/<n>/merge`. Choose
+   between testing that merge commit and reporting on the head SHA,
+   which is GitHub's behavior, and testing the head itself. A pull
+   request with a merge conflict does not run, as GitHub documents.
+4. **Event payload.** Name the fields built from REST responses: `ref`,
+   `before`, `after`, `repository`, and the pull request number, head,
+   and base. Nothing else is invented.
+5. **Reporting.** Any credential with commit-status write access can
+   create a commit status. Only GitHub Apps can create check runs.
+   Recommended: commit statuses first, with a context such as
+   `rookrunner/<workflow>/<job>`. The state mapping follows NS-40.
+6. **Credential.** This is an owner decision: a GitHub App installation
+   token or a fine-grained token. The credential is read at call time
+   from an operator file. It never enters the state directory, a job
+   container, a snapshot, or a log. Job secrets stay disabled.
+7. **Limits.** Use the table in this section. Nothing else.
+8. **Coexistence.** GitHub-hosted checks keep running. Choosing required
+   checks is the owner's decision.
+9. **Gap inventory.** Run the planner on every push or pull-request
+   workflow in Rookrunner, Scorecard, and the websites. Record each
+   rejection, ranked by how many workflows it blocks. Deploy workflows
+   need secrets and are out of scope.
+
+https://docs.github.com/en/rest/commits/statuses
+https://docs.github.com/en/rest/checks/runs
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+https://docs.github.com/en/actions/reference/security/secure-use
+
+Acceptance criteria:
+
+- Each question is answered with a cited source or labeled an
+  intentional local difference. Owner decisions stay listed as open
+  until they are recorded.
+- The inventory lists every unsupported field for each workflow.
+- There is no listener, runner registration, Terraform, or hosted
+  service.
+- No code changes.
+
+**NS-40. Report a run to GitHub as a commit status.**
+
+Status: not started. It follows NS-39.
+
+A CLI command posts one commit status for one run. The command takes
+the run, the repository, the SHA, and the context. It refuses, with a
+structured error and no HTTP request, unless all of these hold:
+
+- The run is a workflow run.
+- Its snapshot is clean, with no included files.
+- `base_commit` equals the SHA.
+
+The state mapping:
+
+| Run | Status |
+| --- | --- |
+| `queued` or `running` | `pending` |
+| `succeeded` with `exit_code` 0 | `success` |
+| `failed` | `failure` |
+| `cancelled`, `lost`, or anything else | `error` |
+
+Nothing else maps to `success`.
+
+The credential is read at call time from the source NS-39 chose. It is
+not stored, logged, or echoed in errors. The worker records each
+posted state, so posting the same terminal state again sends nothing.
+That keeps the run far below the 1,000 statuses allowed per SHA and
+context. A rate-limit or secondary-limit response is not retried in the
+same call. It returns a retryable error. The API base URL is
+configurable, and its default is `https://api.github.com`. Tests use a
+local HTTP stub. No test contacts GitHub.
+
+https://docs.github.com/en/rest/commits/statuses
+https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+
+Acceptance criteria:
+
+- A clean run at the SHA posts the mapped state. A dirty run, a run
+  with included files, or a SHA mismatch posts nothing.
+- Only `succeeded` with exit code 0 posts `success`.
+- Posting the same terminal state again sends no request.
+- The credential appears in no log, error, state file, or job
+  container.
+
+**NS-41. Evaluate `on` for push and pull request.**
+
+Status: not started.
+
+When `event_name` (NS-33) is `push` or `pull_request`, submission
+checks `on` before acceptance:
+
+- The event name must be listed.
+- `push` checks `branches`, `branches-ignore`, `tags`, `tags-ignore`,
+  `paths`, and `paths-ignore`.
+- `pull_request` checks `types`, `branches`, `branches-ignore`,
+  `paths`, and `paths-ignore`. The default types are `opened`,
+  `synchronize`, and `reopened`.
+
+Patterns follow the workflow syntax filter rules. The snapshot has no
+history, so the caller supplies the changed-file list. When the push
+has more than 1,000 commits, or the diff is unavailable, the workflow
+runs. A match beyond the first 3,000 files of the diff does not count.
+Both rules are documented. A workflow that does not match returns a
+structured not-triggered result, creates no run, and does not consume
+the key. Without `event_name`, `on` is not evaluated, as today.
+`workflow_dispatch` and `schedule` are not evaluated in this slice.
+
+https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- Branch, tag, path, and type filters are tested for both events,
+  including the ignore forms.
+- A non-matching workflow creates no run and does not consume the key.
+- The 1,000-commit and 3,000-file rules are tested.
+
+**NS-42. Poll an owner repository and run its CI.**
+
+Status: not started. It depends on NS-40 and NS-41.
+
+A one-shot poll command handles one configured repository. The OS
+scheduler starts it. Each pass:
+
+1. Lists branch heads and open pull requests from the same repository,
+   using conditional requests.
+2. For each new SHA and each workflow job the operator configured,
+   fetches into the dedicated clone and captures the SHA cleanly.
+   Then it evaluates `on` (NS-41), submits, and posts `pending`
+   (NS-40).
+3. Posts the final status for each run that has become terminal.
+
+The submission key is built from the repository, event, SHA, workflow,
+and job, so a repeated pass creates no duplicate run.
+
+A run still queued 24 hours after acceptance is cancelled and reported
+as `error`. That is the self-hosted job queue time. A pass stops when
+the rate-limit headers report nothing remaining, and the next pass
+resumes. A pull request from a fork is skipped and recorded, never run.
+Without concurrency support, an older SHA's run finishes even after a
+newer push. There is no listener, no resident service, and no runner
+registration.
+
+https://docs.github.com/en/actions/reference/limits
+https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
+
+Acceptance criteria:
+
+- Against a local HTTP stub and a local Git remote:
+  - A new push and a same-repository pull request each produce one run
+    and one `pending`, then one final status.
+  - A repeated pass creates nothing new.
+  - A fork pull request runs nothing.
+- The 24-hour queue rule and rate-limit exhaustion are tested.
+- The credential rules from NS-40 hold.
+
+**NS-43. Rookrunner reports its own CI.**
+
+Status: not started. It depends on NS-38 and NS-42. It needs the owner
+to authorize the credential and posting to moonbase2090/Rookrunner.
+
+This slice is a validation record. The poll pass runs against this
+repository for one push to a branch and one same-repository pull
+request. The record is `docs/validation/owner-ci-rookrunner.md`. For
+each SHA it lists:
+
+- The posted context, SHA, and state.
+- The run id and digests.
+- The GitHub-hosted `check` result for the same SHA.
+
+A disposable branch with a deliberate ruff violation posts `failure`.
+
+Acceptance criteria:
+
+- Statuses for one push and one pull request match their Rookrunner
+  terminal results. Only `succeeded` with exit code 0 posted `success`.
+- The forced failure posted `failure`.
+- No credential appears in the record or the state directory.
+
+### Provisional after NS-43
+
+These items are ordered from the owner workflows read on 2026-10-03.
+They get NS numbers once the NS-39 inventory is accepted, and they may
+be reordered by it.
+
+1. **P1.** Expressions in `run`, `env`, `with`, and `name`, including
+   mixed text. Every owner repository uses them.
+2. **P2.** `concurrency` and `cancel-in-progress` on one worker. With
+   `queue: max`, at most 100 runs can be pending per group.
+3. **P3.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
+   That one needs history in the snapshot.
+4. **P4.** An owned `actions/upload-artifact` that maps to the artifact
+   manifest.
+5. **P5.** Check runs through a GitHub App, if NS-39 picks an App
+   credential.
+6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
+   apt. This is the PRD's runner image question.
+7. **P7.** Steps that require a token, such as `write` permissions and
+   `GITHUB_TOKEN`. These wait for a reviewed secrets design.
