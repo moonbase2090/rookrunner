@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import time
 
+from .poll import PollError, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
 from .worker import serve
@@ -188,6 +189,43 @@ def _print_status_error(error):
     sys.exit(1)
 
 
+def _worker_caller(state):
+    def caller(method, params):
+        reply = call(state, method, params)
+        if "error" in reply:
+            data = reply["error"].get("data") or {}
+            message = reply["error"].get("message") or "worker refused the poll request"
+            raise PollError(data.get("kind") or "WORKER_ERROR", message)
+        return reply["result"]
+
+    return caller
+
+
+def report_poll(args):
+    """Run one pass and exit. A rate-limit stop is a finished pass."""
+
+    try:
+        result = poll_once(
+            repository=args.repository,
+            clone=args.clone,
+            jobs=args.job,
+            image=args.image,
+            credential_file=args.credential_file,
+            api_base=args.api_base,
+            state=args.state,
+            caller=_worker_caller(args.state),
+        )
+    except PollError as error:
+        print(
+            canonical({"error": {"kind": error.kind, "message": str(error)}}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except StatusError as error:
+        _print_status_error(error)
+    print(canonical(result))
+
+
 def report_status(args):
     """Post one status after the worker accepts the run. Skip a repeated terminal state."""
 
@@ -360,7 +398,30 @@ def main():
         default=DEFAULT_API_BASE,
         help=f"GitHub API origin (default {DEFAULT_API_BASE})",
     )
+    poll = commands.add_parser("poll", help="run one poll pass for one owner repository")
+    poll.add_argument("--repository", required=True, help="GitHub repository as owner/name")
+    poll.add_argument("--clone", required=True, help="dedicated clone; the worker repository")
+    poll.add_argument(
+        "--job",
+        action="append",
+        nargs=2,
+        metavar=("WORKFLOW", "JOB_ID"),
+        help="workflow path inside the clone and the job to run; repeat for each job",
+    )
+    poll.add_argument("--image", required=True, help="digest-pinned image id or name@sha256 pin")
+    poll.add_argument(
+        "--credential-file",
+        required=True,
+        help="operator token file read only when a status is posted",
+    )
+    poll.add_argument(
+        "--api-base",
+        default=DEFAULT_API_BASE,
+        help=f"GitHub API origin (default {DEFAULT_API_BASE})",
+    )
     args = parser.parse_args()
+    if args.command == "poll" and not args.job:
+        parser.error("poll requires at least one --job WORKFLOW JOB_ID")
     try:
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)
@@ -368,6 +429,9 @@ def main():
             return
         if args.command == "status":
             report_status(args)
+            return
+        if args.command == "poll":
+            report_poll(args)
             return
         if args.command == "worker":
             serve(

@@ -12,7 +12,7 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. NS-39 designs owner CI. The credential stays an owner decision. NS-40 posts one commit status. NS-41 evaluates `on` for push and pull request. The next slice is NS-42. NS-42 and NS-43 are not started |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. NS-39 designs owner CI. The credential stays an owner decision. NS-40 posts one commit status. NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. The next slice is NS-43 |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
 
@@ -79,11 +79,13 @@ through NS-43 in [next steps](planning/next-steps.md).
    [that record](validation/dogfood-check.md) is closed. A later run of
    `21a3f5ad5058027fda62b2b9af6bbba9e336bf83` ended `succeeded` with
    exit code 0. NS-39 designs owner CI. NS-40 posts one commit status.
-   NS-41 evaluates `on` for push and pull request. The next slice is NS-42.
+   NS-41 evaluates `on` for push and pull request. A tag push skips the
+   path filters. Tags under `pull_request` are ignored. NS-42 polls one
+   owner repository. The next slice is NS-43.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request
    (NS-41, implemented). Poll owner repositories from an OS-scheduled
-   pass (NS-42, not started).
+   pass (NS-42, implemented).
 7. Record Rookrunner reporting its own CI (NS-43).
 
 Exit evidence:
