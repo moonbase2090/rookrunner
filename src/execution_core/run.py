@@ -47,12 +47,14 @@ mount gives the job the engine socket this process already uses, at
 It is added to the socket's group and to group 0 so it can open a mode
 0660 socket, including one the engine presents as owned by root. The job
 image must already contain the Docker client. This module does not install
-one. When the socket is mounted, a private directory under `/tmp` is
-created on the host and bind-mounted at that same absolute path.
-`TMPDIR`, `TEMP`, and `TMP` default to it, so a nested client creates
-bind sources the host engine can see. A later env layer can replace
-those three. The directory is removed with the job container. The host
-`/tmp` is not mounted as a whole. GitHub requires Docker to be installed
+one. When the socket is mounted, a private Docker volume is mounted
+into the job at that volume's mountpoint. `TMPDIR`, `TEMP`, and `TMP`
+default to it, so a nested client creates bind sources the host engine
+can see. A later env layer can replace those three. The volume is
+removed with the job container. A bind of the host's `/tmp` is not
+used: on that shared folder, chmod of a Unix socket fails and Git does
+not see a repository it just created. The host `/tmp` is not mounted.
+GitHub requires Docker to be installed
 and the service running for container-dependent jobs on a self-hosted
 runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
@@ -1105,34 +1107,63 @@ def _job_socket(docker, docker_socket):
     return path, info.st_gid
 
 
-def _socket_temp():
-    """Create the host directory a socket job bind-mounts at the same path.
+def _socket_share(docker, image, deadline):
+    """Return `(volume name, mountpoint)` for a socket job.
 
-    A nested Docker client sends host paths. A directory created only
-    inside the job does not exist on the host. `/tmp` is resolved so the
-    mount, `TMPDIR`, and the path that client sends are the same string.
+    A nested client sends host paths. A directory created only inside the
+    job does not exist on the host. The volume is mounted at the
+    mountpoint Docker already uses for it, and `TMPDIR` points there.
+    A bind of host `/tmp` is not used: chmod of a socket fails on that
+    shared folder, and Git does not see a repository it just created.
     """
 
-    parent = Path("/tmp").resolve()
-    if parent.is_symlink() or not parent.is_dir():
-        _setup("workspace path is not accepted")
-    path = Path(tempfile.mkdtemp(prefix="rookrunner-socket-", dir=os.fspath(parent))).resolve()
+    name = "rookrunner-socket-" + os.urandom(4).hex()
     try:
-        os.chmod(path, 0o700)
-        text = os.fspath(path)
-        if (
-            path.is_symlink()
-            or not path.is_dir()
-            or path.parent != parent
-            or "," in text
-            or "\n" in text
-            or "\0" in text
-        ):
+        code, _stdout, _stderr = _invoke_within(docker, ["volume", "create", name], 30, deadline)
+        if code != 0:
+            _setup("container setup failed")
+        code, stdout, _stderr = _invoke_within(
+            docker,
+            ["volume", "inspect", "--format", "{{.Mountpoint}}", name],
+            30,
+            deadline,
+        )
+        if code != 0:
+            _setup("container setup failed")
+        try:
+            text = stdout.decode("utf-8").strip()
+        except UnicodeError as exc:
+            _setup("workspace path is not accepted", exc)
+        if not text.startswith("/") or "," in text or "\n" in text or "\0" in text or " " in text:
             _setup("workspace path is not accepted")
+        owner = f"{os.getuid()}:{os.getgid()}"
+        code, _stdout, _stderr = _invoke_within(
+            docker,
+            [
+                "run",
+                "--rm",
+                "--user",
+                "0:0",
+                "--entrypoint",
+                "sh",
+                "--mount",
+                f"type=volume,source={name},destination=/vol",
+                image,
+                "-c",
+                f"chown {owner} /vol && chmod 700 /vol",
+            ],
+            60,
+            deadline,
+        )
+        if code != 0:
+            _setup("container setup failed")
     except Exception:
-        shutil.rmtree(path, ignore_errors=True)
+        try:
+            _invoke(docker, ["volume", "rm", name], 30)
+        except Exception:
+            pass
         raise
-    return path
+    return name, text
 
 
 def _plan_uses_node24(jobs):
@@ -1172,6 +1203,7 @@ def _create_args(
     node_root,
     actions_root,
     socket_temp=None,
+    socket_volume=None,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1232,11 +1264,11 @@ def _create_args(
                 f"type=bind,source={socket_path},destination={_CONTAINER_SOCKET}",
             ]
         )
-    if socket_temp is not None:
+    if socket_volume is not None and socket_temp is not None:
         args.extend(
             [
                 "--mount",
-                f"type=bind,source={socket_temp},destination={socket_temp}",
+                f"type=volume,source={socket_volume},destination={socket_temp}",
             ]
         )
     args.extend(
@@ -2018,8 +2050,8 @@ def run_job(
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
     `docker_socket` is off unless the caller passes true or a socket path.
-    When the socket is mounted, a private host directory is bind-mounted
-    at the same path and `TMPDIR`, `TEMP`, and `TMP` default to it.
+    When the socket is mounted, a private Docker volume is mounted at
+    that volume's mountpoint and `TMPDIR`, `TEMP`, and `TMP` default to it.
     `node24` is omitted, or a `(directory, digest)` pair. The directory is
     mounted read-only at `/opt/node24` and is not placed on `PATH`.
     `actions` is the attempt copy of node24 action files, mounted
@@ -2028,7 +2060,7 @@ def run_job(
     the container starts.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
-    or that temporary directory.
+    or that volume.
     """
 
     if network not in _NETWORKS:
@@ -2069,18 +2101,19 @@ def run_job(
     attempt_token = None
     path_token = None
     socket_temp = None
+    socket_volume = None
     try:
         resolved, arch = _resolve_image(docker_bin, reference, digest, deadline)
         runner_dirs = _runner_dirs(workspace)
         if socket_path is not None:
-            socket_temp = _socket_temp()
+            socket_volume, socket_temp = _socket_share(docker_bin, reference, deadline)
         attempt_token = _ATTEMPT.set(
             {
                 "arch": arch,
                 "event_name": event_name,
                 "sha": _commit_sha(manifest),
                 "temp": runner_dirs["runner-temp"],
-                "socket_temp": None if socket_temp is None else os.fspath(socket_temp),
+                "socket_temp": socket_temp,
             }
         )
         (private / "event.json").write_bytes(event_bytes)
@@ -2107,7 +2140,8 @@ def run_job(
                 runner_dirs,
                 None if node_mount is None else node_mount["root"],
                 actions_root,
-                None if socket_temp is None else os.fspath(socket_temp),
+                socket_temp,
+                socket_volume,
             ),
             60,
             deadline,
@@ -2519,8 +2553,11 @@ def run_job(
                     service_cleanup = 0
         shutil.rmtree(private, ignore_errors=True)
         shutil.rmtree(commands, ignore_errors=True)
-        if socket_temp is not None:
-            shutil.rmtree(socket_temp, ignore_errors=True)
+        if socket_volume is not None:
+            try:
+                _invoke(docker_bin, ["volume", "rm", socket_volume], 30)
+            except (RunError, _Timeout):
+                pass
         if owner is not None:
             owner.closed()
     if failure is not None:

@@ -61,10 +61,11 @@ environments for real execution checks, and do not mount the Docker socket
 or host credentials into ordinary job containers unless the worker was
 started with `--docker-socket`. That flag exposes the host Docker service
 to the job. The job keeps the caller user. When the socket is mounted, a
-private directory under `/tmp` is bind-mounted at the same path, and
-`TMPDIR`, `TEMP`, and `TMP` default to it. A later env layer can replace
-those three. The host `/tmp` is not mounted as a whole. Host credentials
-stay unmounted.
+private Docker volume is mounted into the job at that volume's
+mountpoint, and `TMPDIR`, `TEMP`, and `TMP` default to it. A later env
+layer can replace those three. The volume is removed with the job
+container. The host `/tmp` is not mounted. Host credentials stay
+unmounted.
 
 ## M2 implementation order
 

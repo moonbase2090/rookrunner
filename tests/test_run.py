@@ -32,7 +32,6 @@ from execution_core.run import (
     _read_utf8,
     _resolve_call_inputs,
     _runner_arch,
-    _socket_temp,
     _soft_defaults,
     _verify_workspace,
     _workflow_label,
@@ -843,21 +842,6 @@ class ContextValueTests(unittest.TestCase):
             self.assertFalse((root / "gone").exists())
             self.assertEqual((locked / "file").read_text(), "stay")
             os.chmod(locked, 0o700)
-
-    def test_socket_temp_is_a_private_directory_under_tmp(self):
-        path = _socket_temp()
-        try:
-            text = os.fspath(path)
-            self.assertTrue(path.is_dir())
-            self.assertFalse(path.is_symlink())
-            self.assertEqual(path.parent, Path("/tmp").resolve())
-            self.assertTrue(path.name.startswith("rookrunner-socket-"))
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
-            self.assertNotIn(",", text)
-            self.assertNotIn("\n", text)
-            self.assertEqual(text, os.fspath(path.resolve()))
-        finally:
-            shutil.rmtree(path)
 
     def test_soft_defaults_set_temp_only_for_a_socket_job(self):
         shared = "/tmp/rookrunner-socket-example"
@@ -1922,7 +1906,37 @@ jobs:
                 found.append(parts["source"])
         return found
 
-    def test_socket_temp_is_mounted_at_the_same_path(self):
+    def _volume_mounts(self, create):
+        found = []
+        for item in create:
+            if not isinstance(item, str) or not item.startswith("type=volume,"):
+                continue
+            parts = {}
+            for piece in item.split(","):
+                if "=" not in piece:
+                    continue
+                key, value = piece.split("=", 1)
+                parts[key] = value
+            if "source" in parts and "destination" in parts:
+                found.append((parts["source"], parts["destination"]))
+        return found
+
+    def _assert_socket_volume_removed(self, create):
+        mounts = self._volume_mounts(create)
+        self.assertEqual(len(mounts), 1)
+        name, destination = mounts[0]
+        self.assertTrue(name.startswith("rookrunner-socket-"))
+        self.assertTrue(destination.startswith("/"))
+        self.assertNotIn(",", destination)
+        listed = subprocess.run(
+            ["docker", "volume", "inspect", name],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(listed.returncode, 0)
+        return name, destination
+
+    def test_socket_volume_is_mounted_at_its_mountpoint(self):
         probe = """\
 on: push
 jobs:
@@ -1953,11 +1967,11 @@ jobs:
         )
         self.assertEqual(result["status"], "succeeded", result)
         path = result["steps"][0]["stdout"].strip()
-        self.assertTrue(path.startswith(str(Path("/tmp").resolve()) + "/rookrunner-socket-"))
         creates = [call for call in self._calls() if call and call[0] == "create"]
-        self.assertEqual(self._same_path_mounts(creates[-1]), [path])
+        _name, destination = self._assert_socket_volume_removed(creates[-1])
+        self.assertEqual(destination, path)
+        self.assertEqual(self._same_path_mounts(creates[-1]), [])
         self.assertNotIn("--privileged", creates[-1])
-        self.assertFalse(Path(path).exists())
 
     def test_socket_off_does_not_share_a_temp_directory(self):
         probe = """\
@@ -1987,6 +2001,7 @@ jobs:
         self.assertEqual(result["status"], "succeeded", result)
         self.assertEqual(result["steps"][0]["stdout"], "unset")
         creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(self._volume_mounts(creates[-1]), [])
         self.assertEqual(self._same_path_mounts(creates[-1]), [])
 
     def test_workflow_env_replaces_the_socket_temp(self):
@@ -2021,11 +2036,8 @@ jobs:
             "/tmp/from-workflow /tmp/from-workflow /tmp/from-workflow\n",
         )
         creates = [call for call in self._calls() if call and call[0] == "create"]
-        mounts = self._same_path_mounts(creates[-1])
-        self.assertEqual(len(mounts), 1)
-        self.assertNotEqual(mounts[0], "/tmp/from-workflow")
-        self.assertTrue(mounts[0].startswith(str(Path("/tmp").resolve()) + "/rookrunner-socket-"))
-        self.assertFalse(Path(mounts[0]).exists())
+        _name, destination = self._assert_socket_volume_removed(creates[-1])
+        self.assertNotEqual(destination, "/tmp/from-workflow")
 
     def test_nonzero_step_stops_and_names_the_digest(self):
         fail_root = self.root / "fail"
@@ -3075,8 +3087,9 @@ jobs:
         )
         self.assertFalse(any("docker.sock" in item for item in service))
         self.assertNotIn("--privileged", service)
+        self.assertEqual(self._volume_mounts(service), [])
         self.assertEqual(self._same_path_mounts(service), [])
-        self.assertEqual(len(self._same_path_mounts(job)), 1)
+        self.assertEqual(len(self._volume_mounts(job)), 1)
         self.assertNotIn("rookrunner-socket-", " ".join(service))
 
     def test_cancel_removes_the_service_container(self):
