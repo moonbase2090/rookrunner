@@ -678,6 +678,47 @@
                   "minLength": 1,
                   "maxLength": 512,
                   "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                "actions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "owner": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 39,
+                        "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\\Z"
+                      },
+                      "repository": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                        "pattern": "^[A-Za-z0-9._-]+\\Z"
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 1024,
+                        "pattern": "^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)?\\Z"
+                      },
+                      "commit": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{40}\\Z"
+                      },
+                      "digest": {
+                        "$ref": "#/$defs/Digest"
+                      }
+                    },
+                    "required": [
+                      "owner",
+                      "repository",
+                      "path",
+                      "commit",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -1581,7 +1622,8 @@
                     "IDEMPOTENCY_CONFLICT",
                     "WORKER_NOT_READY",
                     "STORAGE_FULL",
-                    "SOURCE_UNSTABLE"
+                    "SOURCE_UNSTABLE",
+                    "ACTION_UNAVAILABLE"
                   ]
                 },
                 "retryable": {

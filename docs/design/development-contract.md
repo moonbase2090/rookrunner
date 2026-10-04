@@ -277,7 +277,7 @@ The current worker never automatically recommends retries (`retryable: false`).
 | -32601 | `METHOD_NOT_FOUND` |
 | -32602 | `INVALID_PARAMS` |
 | -32603 | `INTERNAL_ERROR` |
-| -32000 | `VERSION_UNSUPPORTED`, `CAPABILITY_UNSUPPORTED`, `QUEUE_FULL`, `RUN_NOT_FOUND`, `CURSOR_EXPIRED`, `IDEMPOTENCY_CONFLICT`, `WORKER_NOT_READY`, `STORAGE_FULL` |
+| -32000 | `VERSION_UNSUPPORTED`, `CAPABILITY_UNSUPPORTED`, `QUEUE_FULL`, `RUN_NOT_FOUND`, `CURSOR_EXPIRED`, `IDEMPOTENCY_CONFLICT`, `WORKER_NOT_READY`, `STORAGE_FULL`, `SOURCE_UNSTABLE`, `ACTION_UNAVAILABLE` |
 
 Startup root mismatch fails before serving requests. SQLite full errors on protocol
 operations produce `STORAGE_FULL`; failed acceptance is rolled back without
@@ -285,7 +285,8 @@ consuming the submission key. Other database errors produce sanitized
 `INTERNAL_ERROR` replies. If the scheduler cannot persist a transition, it stops
 and reports not-ready; restart reconciles any active attempt as lost. A
 killed worker's owned container is removed on restart or left unresolved.
-A configured disk budget covers the state directory, including snapshots and
+A configured disk budget covers the state directory, including snapshots,
+fetched action trees, and
 attempt workspaces. The default is GitHub Actions cache storage, 10 GB per
 repository on every plan in the storage table
 (https://docs.github.com/en/actions/reference/limits), stored as

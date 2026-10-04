@@ -38,10 +38,11 @@ import uuid
 from datetime import datetime, timezone
 
 from . import __version__
+from .actions import DEFAULT_ACTION_REMOTE, ActionStore
 from .artifacts import ArtifactError, file_identity, read_bytes, written_files
 from .attempt import AttemptError, materialize_attempt
 from .disk import DEFAULT_DISK_BUDGET, usage
-from .plan import PlanError, plan_snapshot
+from .plan import PlanError, plan_snapshot, remote_action_records
 from .run import (
     CONTAINER_NAME,
     DEFAULT_NETWORK,
@@ -221,14 +222,32 @@ def _step_failure_message(outcome, image_ok):
 
 class Worker:
     def __init__(
-        self, repository, state, disk_budget=None, *, network=DEFAULT_NETWORK, docker_socket=False
+        self,
+        repository,
+        state,
+        disk_budget=None,
+        *,
+        network=DEFAULT_NETWORK,
+        docker_socket=False,
+        action_remote=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
         if type(docker_socket) is not bool:
             raise ValueError("docker socket must be a boolean")
+        if action_remote is None:
+            action_remote = DEFAULT_ACTION_REMOTE
+        if action_remote != DEFAULT_ACTION_REMOTE:
+            remote_root = Path(action_remote)
+            if not remote_root.is_absolute() or not remote_root.is_dir():
+                raise ValueError(
+                    "action remote must be https://github.com or an absolute directory"
+                )
+            action_remote = str(remote_root)
         self.network = network
         self.docker_socket = docker_socket
+        self.action_remote = action_remote
+        self._action_store = None
         if disk_budget is None:
             disk_budget = DEFAULT_DISK_BUDGET
         # bool is an int subclass. A flag is not a byte count.
@@ -690,7 +709,9 @@ class Worker:
             or manifest.get("workflow_digest") != pinned["workflow_digest"]
         ):
             raise RunError("SETUP_FAILED", "snapshot workflow does not match the accepted digest")
-        planned = plan_snapshot(snapshot, pinned["job_id"])
+        store = self.action_store()
+        with store.guard:
+            planned = plan_snapshot(snapshot, pinned["job_id"], action_store=store)
         if planned["digest"] != pinned["plan_digest"]:
             raise RunError("SETUP_FAILED", "planned digest does not match the accepted plan")
         if self._abandoned(record["run_id"]):
@@ -976,83 +997,93 @@ class Worker:
         except CaptureError as exc:
             self._capture_fault(exc)
         snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+        store = self.action_store()
+        with store.guard:
+            return self._accept_planned(p, key, normalized, event_text, snapshot, captured, store)
+
+    def _accept_planned(self, p, key, normalized, event_text, snapshot, captured, store):
         try:
-            manifest = verify_snapshot(snapshot, captured["digest"])
-            planned = plan_snapshot(snapshot, p["job_id"])
-        except VerifyError as exc:
-            self._drop_snapshot(captured["snapshot_id"])
-            raise Fault("INTERNAL_ERROR", "captured snapshot failed verification") from exc
-        except PlanError as exc:
-            self._drop_snapshot(captured["snapshot_id"])
-            kind = (
-                "CAPABILITY_UNSUPPORTED"
-                if exc.kind == "CAPABILITY_UNSUPPORTED"
-                else "INVALID_PARAMS"
-            )
-            raise Fault(kind, str(exc)[:512]) from exc
-        except (OSError, UnicodeError, ValueError) as exc:
+            store.begin()
+        except OSError as exc:
             self._drop_snapshot(captured["snapshot_id"])
             raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
-        image_digest = "sha256:" + p["image"].rsplit("sha256:", 1)[1]
-        record = {
-            "run_id": str(uuid.uuid4()),
-            "worker_id": self.worker_id,
-            "submission_key": key,
-            "state": "queued",
-            "exit_code": None,
-            "input": {
-                "kind": "workflow_job",
-                "digest": captured["digest"],
-                "snapshot_id": captured["snapshot_id"],
-                "workflow": manifest["workflow"],
-                "workflow_digest": captured["workflow_digest"],
-                "plan_digest": planned["digest"],
-                "job_id": p["job_id"],
-                "event_digest": hashlib.sha256(event_text.encode("ascii")).hexdigest(),
-                "image_digest": image_digest,
-                "image_reference": p["image"],
-            },
-            "backend": {"name": "workflow", "version": __version__},
-            "compatibility_notes": [
-                "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
-                "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript and Docker actions are not claimed. Services do not receive the engine socket.",
-            ],
-            "accepted_at": now(),
-            "started_at": None,
-            "finished_at": None,
-            "attempt_id": None,
-            "cancel_requested": False,
-            "error": None,
-            "cleanup": "not_started",
-        }
         try:
-            reserve = usage(snapshot)
-        except OSError:
-            self._drop_snapshot(captured["snapshot_id"])
-            raise Fault("STORAGE_FULL", _STORAGE_FULL) from None
-        # usage(state) already includes this snapshot. Reserve the same number
-        # of bytes again for the later attempt workspace, plus the queued row.
-        reserve += len(normalized.encode()) + len(canonical(record).encode())
-        if self._over_budget(reserve):
-            self._drop_snapshot(captured["snapshot_id"])
-            raise Fault("STORAGE_FULL", _STORAGE_FULL)
-        try:
-            with self.db:
-                self.db.execute(
-                    "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
-                    (record["run_id"], key, normalized, canonical(record), b""),
-                )
-        except sqlite3.IntegrityError:
-            self._drop_snapshot(captured["snapshot_id"])
-            existing = self.db.execute(
-                "SELECT request, record FROM runs WHERE submission_key=?", (key,)
-            ).fetchone()
-            if existing and existing[0] == normalized:
-                return json.loads(existing[1])
-            raise Fault(
-                "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
-            ) from None
-        return record
+            try:
+                manifest = verify_snapshot(snapshot, captured["digest"])
+                planned = plan_snapshot(snapshot, p["job_id"], action_store=store)
+            except VerifyError as exc:
+                raise Fault("INTERNAL_ERROR", "captured snapshot failed verification") from exc
+            except PlanError as exc:
+                raise self._plan_fault(exc) from exc
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
+            image_digest = "sha256:" + p["image"].rsplit("sha256:", 1)[1]
+            record = {
+                "run_id": str(uuid.uuid4()),
+                "worker_id": self.worker_id,
+                "submission_key": key,
+                "state": "queued",
+                "exit_code": None,
+                "input": {
+                    "kind": "workflow_job",
+                    "digest": captured["digest"],
+                    "snapshot_id": captured["snapshot_id"],
+                    "workflow": manifest["workflow"],
+                    "workflow_digest": captured["workflow_digest"],
+                    "plan_digest": planned["digest"],
+                    "job_id": p["job_id"],
+                    "event_digest": hashlib.sha256(event_text.encode("ascii")).hexdigest(),
+                    "image_digest": image_digest,
+                    "image_reference": p["image"],
+                },
+                "backend": {"name": "workflow", "version": __version__},
+                "compatibility_notes": [
+                    "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
+                    "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript and Docker actions are not claimed. Services do not receive the engine socket.",
+                    "A remote composite action pinned by a 40-character commit SHA is fetched with Git and no credential. Its run steps execute. JavaScript and Docker actions stay rejected.",
+                ],
+                "accepted_at": now(),
+                "started_at": None,
+                "finished_at": None,
+                "attempt_id": None,
+                "cancel_requested": False,
+                "error": None,
+                "cleanup": "not_started",
+            }
+            actions = remote_action_records(planned["plan"])
+            if actions:
+                record["input"]["actions"] = actions
+            try:
+                reserve = usage(snapshot)
+            except OSError:
+                raise Fault("STORAGE_FULL", _STORAGE_FULL) from None
+            # usage(state) already includes this snapshot and any action
+            # stored for it. Reserve the same snapshot size again for the
+            # later attempt workspace, plus the queued row.
+            reserve += len(normalized.encode()) + len(canonical(record).encode())
+            if self._over_budget(reserve):
+                raise Fault("STORAGE_FULL", _STORAGE_FULL)
+            try:
+                with self.db:
+                    self.db.execute(
+                        "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+                        (record["run_id"], key, normalized, canonical(record), b""),
+                    )
+            except sqlite3.IntegrityError:
+                existing = self.db.execute(
+                    "SELECT request, record FROM runs WHERE submission_key=?", (key,)
+                ).fetchone()
+                if existing and existing[0] == normalized:
+                    return json.loads(existing[1])
+                raise Fault(
+                    "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
+                ) from None
+            store.commit()
+            return record
+        finally:
+            if store.is_open:
+                self._drop_snapshot(captured["snapshot_id"])
+                store.rollback()
 
     @staticmethod
     def _capture_fault(exc):
@@ -1062,6 +1093,23 @@ class Worker:
         if exc.kind == "SOURCE_UNSTABLE":
             raise Fault("SOURCE_UNSTABLE", message) from exc
         raise Fault("INVALID_PARAMS", message) from exc
+
+    def action_store(self):
+        if self._action_store is None:
+            self._action_store = ActionStore(
+                self.state, self.action_remote, lambda: self.disk_budget
+            )
+        return self._action_store
+
+    @staticmethod
+    def _plan_fault(exc):
+        if exc.kind == "CAPABILITY_UNSUPPORTED":
+            return Fault("CAPABILITY_UNSUPPORTED", str(exc)[:512])
+        if exc.kind == "ACTION_UNAVAILABLE":
+            return Fault("ACTION_UNAVAILABLE", str(exc)[:512])
+        if exc.kind == "STORAGE_FULL":
+            return Fault("STORAGE_FULL", _STORAGE_FULL)
+        return Fault("INVALID_PARAMS", str(exc)[:512])
 
     def _over_budget(self, incoming):
         try:

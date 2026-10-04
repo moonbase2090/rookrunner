@@ -5,8 +5,9 @@ The order after NS-29 was re-prioritized on 2026-10-03. See
 and what is deferred. NS-30 designs the dogfood path and does not
 change the engine. NS-31 accepts read-only `permissions`. NS-32 accepts
 a SHA-pinned `actions/checkout` as the owned checkout. NS-33 fills the
-`github` and `runner` contexts and the default variables. The capability
-version stays 11. NS-34 through NS-43 are not started.
+`github` and `runner` contexts and the default variables. NS-34 fetches
+a remote action pinned by a 40-character lowercase commit SHA. The
+capability version stays 11. NS-35 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -36,7 +37,16 @@ including `github.token`, stay unset. `runner.os` is `Linux`.
 `runner.arch` comes from the image platform. `runner.environment` is
 `self-hosted`. The attempt mounts `HOME`, `RUNNER_TEMP`, and
 `RUNNER_TOOL_CACHE` outside the workspace. `CI` is `true`.
-`GITHUB_ACTIONS` stays unset.
+`GITHUB_ACTIONS` stays unset. `uses: {owner}/{repo}@{sha}` and
+`uses: {owner}/{repo}/{path}@{sha}` are fetched during submission when
+`<sha>` is 40 lowercase hexadecimal characters. The action directory is
+stored under its content digest. The plan and the run record the owner,
+repository, path, commit, and that digest. A later submission reuses the
+stored copy after the digest matches. A tag, a branch, a short SHA, and
+a 64-character pin are `CAPABILITY_UNSUPPORTED` and ask for a full SHA
+pin. A failed fetch is `ACTION_UNAVAILABLE`. It creates no run and does
+not consume the key. `node24` and `docker` still produce no plan. The
+fetched tree is not copied into the workspace `.git`.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -1488,7 +1498,20 @@ Acceptance criteria:
 
 **NS-34. Resolve a remote action pinned by full commit SHA.**
 
-Status: not started.
+Status: implemented. The capability version stays 11. A version 10 plan
+is not migrated.
+
+A full pin is 40 lowercase hexadecimal characters. A 64-character pin
+is not accepted in this slice. The fetch uses Git and asks for that one
+commit. The URL is `https://github.com/{owner}/{repo}.git`. Tests pass
+an absolute directory in place of that host. Host Git configuration is
+not read, and no credential is sent. The REST archive API is not used.
+The stored directory's content digest is the plan's `content_digest`
+and the run's `input.actions[].digest`. The existing metadata
+`action_digest` stays the digest of the parsed action. A remote
+composite's `run` steps execute from that plan. The action files stay
+in the store until a later slice copies them into the attempt. `node24`
+and `docker` still name `runs.using` and create no run.
 
 `uses: {owner}/{repo}@{sha}` and `{owner}/{repo}/{path}@{sha}` are the
 documented forms. During submission, before acceptance, the action is

@@ -1,7 +1,8 @@
 """Versioned plan for one selected job and the jobs it needs.
 
-Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 10 records declared fields, including step and job
+Parsing does not pull images, start containers, or accept a run. It fetches
+an action only through a caller-supplied store. Capability version 11 records
+declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
 snapshot, a literal job matrix, a local reusable workflow, service
 containers, an owned checkout of the captured files for
@@ -16,7 +17,9 @@ to a called workflow. A service image must be pinned by digest. GitHub
 accepts a tag or registry name there. `credentials`, `volumes`, `options`,
 and `ports` are rejected. A selected job includes the jobs it needs. A
 dependency that is not defined in the workflow is rejected. Anything this
-slice cannot describe is rejected.
+slice cannot describe is rejected. A remote action pinned by a
+40-character lowercase commit SHA is read from the caller-supplied store.
+The planner does not fetch one when that store is absent.
 """
 
 import hashlib
@@ -30,6 +33,7 @@ import yaml
 from yaml.constructor import SafeConstructor
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
+from .actions import ActionStorageFull, ActionUnavailable, full_sha, parse_remote_uses
 from .expr import (
     ExprError,
     check_call_default,
@@ -402,10 +406,11 @@ def _expand_matrix(axes, excludes, includes, path):
 
 
 class _Planner:
-    def __init__(self, action_root=None):
+    def __init__(self, action_root=None, action_store=None):
         self.seen_stack = [set()]
         self.constructor = SafeConstructor()
         self.action_root = None if action_root is None else Path(action_root)
+        self.action_store = action_store
         self.call_stack = []
         self.called_workflows = set()
         self.workflow_level = 1
@@ -1390,6 +1395,11 @@ class _Planner:
                     recorded["inputs"] = action["inputs"]
                     recorded["outputs"] = action["outputs"]
                     recorded["steps"] = action["steps"]
+                    if "content_digest" in action:
+                        recorded["action_owner"] = action["owner"]
+                        recorded["action_repository"] = action["repository"]
+                        recorded["action_commit"] = action["commit"]
+                        recorded["content_digest"] = action["content_digest"]
             condition = self._if_text(body, step_field, check_step_if)
             if condition is not None:
                 recorded["if"] = condition
@@ -1482,6 +1492,9 @@ class _Planner:
         an action file, so this parser does not add one.
         """
 
+        remote = parse_remote_uses(uses_text)
+        if remote is not None:
+            return self._remote_composite(remote, field)
         relative = self._uses_relative(uses_text, field)
         if self.action_root is None:
             _unsupported(field)
@@ -1494,6 +1507,55 @@ class _Planner:
             return self._composite_body(body, field, relative)
         finally:
             self.seen_stack.pop()
+
+    def _remote_composite(self, remote, field):
+        """Inline one fetched composite. The store is supplied by the caller.
+
+        A tag, branch, short SHA, or 64-character pin is not fetched. A
+        40-character lowercase SHA is the only full commit pin this slice
+        accepts. Without a store, planning still launches no fetch.
+        """
+
+        if not full_sha(remote.ref):
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                (
+                    f"{field}: capability is unsupported; pin the action with a "
+                    f"full 40-character lowercase commit SHA ({GITHUB_WORKFLOW_SYNTAX})"
+                ),
+                field,
+            )
+        if self.action_store is None:
+            _unsupported(field)
+        try:
+            stored = self.action_store.resolve(
+                remote.owner, remote.repository, remote.path, remote.ref
+            )
+        except ActionUnavailable as exc:
+            raise PlanError(
+                "ACTION_UNAVAILABLE",
+                f"{field}: action repository could not be fetched",
+                field,
+            ) from exc
+        except ActionStorageFull as exc:
+            raise PlanError(
+                "STORAGE_FULL",
+                "worker storage is full; free space before retrying",
+                field,
+            ) from exc
+        payload = self._action_bytes(stored.path, field)
+        node = self._action_node(payload, field)
+        self.seen_stack.append(set())
+        try:
+            body = self._mapping(node, field)
+            parsed = self._composite_body(body, field, remote.path)
+        finally:
+            self.seen_stack.pop()
+        parsed["owner"] = remote.owner
+        parsed["repository"] = remote.repository
+        parsed["commit"] = remote.ref
+        parsed["content_digest"] = stored.digest
+        return parsed
 
     def _composite_body(self, body, field, relative):
         self._allow(body, field, ACTION_KEYS)
@@ -1721,13 +1783,13 @@ class _Planner:
         return recorded
 
 
-def plan_workflow(workflow, job_id, action_root=None):
+def plan_workflow(workflow, job_id, action_root=None, action_store=None):
     """Plan workflow bytes for one job. The same bytes and job produce the same digest."""
 
-    return _Planner(action_root).plan(workflow, job_id)
+    return _Planner(action_root, action_store).plan(workflow, job_id)
 
 
-def plan_snapshot(snapshot_dir, job_id):
+def plan_snapshot(snapshot_dir, job_id, action_store=None):
     """Plan the workflow bytes stored in a capture snapshot. Does not verify hashes."""
 
     root = Path(snapshot_dir)
@@ -1748,4 +1810,33 @@ def plan_snapshot(snapshot_dir, job_id):
         workflow_bytes = target.read_bytes()
     except OSError:
         _invalid("snapshot workflow is not readable")
-    return plan_workflow(workflow_bytes, job_id, action_root=root / "files")
+    return plan_workflow(
+        workflow_bytes, job_id, action_root=root / "files", action_store=action_store
+    )
+
+
+def remote_action_records(plan):
+    """Owner, repository, path, commit, and content digest recorded on the plan."""
+
+    found = []
+    seen = set()
+    for job in plan.get("jobs", []):
+        for step in job.get("steps", []):
+            if "content_digest" not in step:
+                continue
+            record = {
+                "owner": step["action_owner"],
+                "repository": step["action_repository"],
+                "path": step["action_path"],
+                "commit": step["action_commit"],
+                "digest": step["content_digest"],
+            }
+            key = tuple(
+                record[name] for name in ("owner", "repository", "path", "commit", "digest")
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(record)
+    found.sort(key=lambda item: (item["owner"], item["repository"], item["path"], item["commit"]))
+    return found
