@@ -1,11 +1,12 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not fetch actions, pull images, start containers, or accept a
-run. Capability version 9 records declared fields, including step and job
+run. Capability version 10 records declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
 snapshot, a literal job matrix, a local reusable workflow, service
-containers, and an owned checkout of the captured files for
-`uses: actions/checkout@v4`. That checkout does not fetch a ref, replace
+containers, an owned checkout of the captured files for
+`uses: actions/checkout@v4`, and a read-only `permissions` value.
+That checkout does not fetch a ref, replace
 those files, or persist a credential. It checks that expressions can be
 parsed and does not evaluate them. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
@@ -39,7 +40,7 @@ from .expr import (
 )
 from .protocol import canonical
 
-CAPABILITY_VERSION = 9
+CAPABILITY_VERSION = 10
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -103,7 +104,7 @@ FORBIDDEN = {
     "privileged",
     "container",
 }
-WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env"}
+WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env", "permissions"}
 JOB_KEYS = {
     "name",
     "runs-on",
@@ -116,6 +117,7 @@ JOB_KEYS = {
     "timeout-minutes",
     "strategy",
     "services",
+    "permissions",
 }
 # jobs.<job_id>.services.<service_id>. `credentials` would carry a registry
 # login. `volumes` can bind a host path. `options` is passed to
@@ -166,6 +168,32 @@ STEP_KEYS = {
 # https://github.com/actions/checkout
 CHECKOUT_USES = "actions/checkout@v4"
 CHECKOUT_WITH = {"clean", "persist-credentials"}
+# permissions scopes on the workflow syntax page, read 2026-10-04.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
+# The page lists `id-token` as `write|none` and `vulnerability-alerts` as
+# `read|none`. This slice accepts `read` or `none` for every scope below
+# and rejects `write`. No token is created from the recorded value.
+PERMISSION_SCOPES = frozenset(
+    {
+        "actions",
+        "artifact-metadata",
+        "attestations",
+        "checks",
+        "code-quality",
+        "contents",
+        "deployments",
+        "discussions",
+        "id-token",
+        "issues",
+        "packages",
+        "pages",
+        "pull-requests",
+        "security-events",
+        "statuses",
+        "vulnerability-alerts",
+    }
+)
+PERMISSION_ACCESS = frozenset({"read", "none"})
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
 # Local composite metadata only. JavaScript and Docker runtimes are rejected.
@@ -380,6 +408,9 @@ class _Planner:
             "defaults": self._defaults(body, ""),
             "env": self._env(body, ""),
         }
+        permissions = self._permissions(body, "")
+        if permissions is not None:
+            workflow_plan["permissions"] = permissions
         if "jobs" not in body:
             _invalid("no selected job", "jobs")
         jobs = self._mapping(body["jobs"][1], "jobs")
@@ -684,6 +715,33 @@ class _Planner:
             remaining.remove(ready[0])
         return order
 
+    def _permissions(self, items, field):
+        """Record a read-only permissions value. No token is created."""
+
+        if "permissions" not in items:
+            return None
+        path = _join(field, "permissions")
+        node = items["permissions"][1]
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG:
+            self._enter(node, path)
+            if node.value == "read-all":
+                return "read-all"
+            _unsupported(path)
+        if isinstance(node, MappingNode):
+            body = self._mapping(node, path, forbid=False)
+            recorded = {}
+            for key, (_, value) in body.items():
+                child = _join(path, key)
+                if key not in PERMISSION_SCOPES:
+                    _unsupported(child)
+                access = self._string_scalar(value, child)
+                if access not in PERMISSION_ACCESS:
+                    _unsupported(child)
+                recorded[key] = access
+            return recorded
+        self._enter(node, path)
+        _unsupported(path)
+
     def _job(self, jobs, job_id):
         job_node = jobs[job_id][1]
         job_field = f"jobs.{job_id}"
@@ -706,6 +764,9 @@ class _Planner:
             "services": self._services(job_body, job_field),
             "steps": self._steps(job_body, job_field),
         }
+        permissions = self._permissions(job_body, job_field)
+        if permissions is not None:
+            recorded["permissions"] = permissions
         condition = self._if_text(job_body, job_field, check_job_if)
         if condition is not None:
             recorded["if"] = condition
@@ -880,13 +941,20 @@ class _Planner:
         return {
             "inputs": spec["inputs"],
             "outputs": spec["outputs"],
-            "workflow": {
-                "name": self._optional_string(body, "", "name"),
-                "env": self._env(body, ""),
-                "defaults": self._defaults(body, ""),
-            },
+            "workflow": self._called_workflow(body),
             "jobs": planned,
         }
+
+    def _called_workflow(self, body):
+        recorded = {
+            "name": self._optional_string(body, "", "name"),
+            "env": self._env(body, ""),
+            "defaults": self._defaults(body, ""),
+        }
+        permissions = self._permissions(body, "")
+        if permissions is not None:
+            recorded["permissions"] = permissions
+        return recorded
 
     def _called_trigger(self, node, field):
         if isinstance(node, ScalarNode) and node.tag == STR_TAG:

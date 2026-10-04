@@ -146,7 +146,12 @@ import time
 from .commands import ENV_NAME as _ENV_NAME
 from .commands import mask_text, parse_env, parse_output, parse_path, process_stdout
 from .expr import ExprError, evaluate, job_is_enabled, mentions_context, step_is_enabled
-from .plan import DEFAULT_JOB_TIMEOUT_MINUTES, MAX_JOB_TIMEOUT_MINUTES, MAX_STEP_TIMEOUT_MINUTES
+from .plan import (
+    CAPABILITY_VERSION,
+    DEFAULT_JOB_TIMEOUT_MINUTES,
+    MAX_JOB_TIMEOUT_MINUTES,
+    MAX_STEP_TIMEOUT_MINUTES,
+)
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
 
@@ -431,7 +436,7 @@ def _input_literal(value):
 def _plan_parts(plan):
     # One accepted capability version. A plan from the previous version is
     # rejected here and is not migrated.
-    if not isinstance(plan, dict) or plan.get("capability_version") != 9:
+    if not isinstance(plan, dict) or plan.get("capability_version") != CAPABILITY_VERSION:
         _setup("plan is not accepted")
     workflow = plan.get("workflow")
     jobs = plan.get("jobs")

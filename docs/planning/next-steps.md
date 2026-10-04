@@ -19,8 +19,10 @@ stores those objects. The original commit object stays excluded.
 NS-26 designs one synthesized commit for that tree, and NS-27 writes
 it. NS-28 designs one owned `.git` directory for the attempt workspace,
 and NS-29 writes it when the object store is present. NS-30 designs
-the `check.yml` dogfood path. Filling the `github` context is
-designed there and is not started.
+the `check.yml` dogfood path. NS-31 accepts read-only `permissions`
+and records the declared value. The capability version is 10. No
+token is created. Filling the `github` context is designed in NS-30
+and is not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -35,8 +37,9 @@ the captured base commit are stored beside the manifest. The original
 commit object stays excluded. One synthesized commit for that tree is
 stored. When the object store is present, the attempt workspace
 receives an owned `.git` directory. An absent store still has no
-`.git`. Filling the `github` context is designed in NS-30 and is
-not started. The act pin stays historical.
+`.git`. Read-only `permissions` are recorded and grant no token.
+Filling the `github` context is designed in NS-30 and is not started.
+The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -1354,7 +1357,8 @@ Acceptance criteria:
 
 **NS-31. Accept read-only `permissions`.**
 
-Status: not started.
+Status: implemented. The planner accepts a read-only `permissions`
+value and records it. No `GITHUB_TOKEN` is created.
 
 `permissions` is accepted at the workflow level and on a concrete job
 when its value is one of these:
@@ -1367,9 +1371,9 @@ when its value is one of these:
 `write`, `write-all`, and an unknown scope are `CAPABILITY_UNSUPPORTED`
 and name the field. A job that calls a reusable workflow still rejects
 `permissions`. The scopes are the list on the workflow syntax page on
-the day of the PR. No `GITHUB_TOKEN` is created, so a declared read
-scope grants nothing. The plan records the declared value. The
-capability version increases by one.
+2026-10-04. No `GITHUB_TOKEN` is created, so a declared read scope
+grants nothing. The plan records the declared value. The capability
+version is 10. A version 9 plan is not migrated.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 

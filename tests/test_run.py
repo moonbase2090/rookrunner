@@ -637,9 +637,9 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_previous_capability_version_is_not_migrated(self):
-        self.assertEqual(self.plan["capability_version"], 9)
+        self.assertEqual(self.plan["capability_version"], 10)
         stale = dict(self.plan)
-        stale["capability_version"] = 8
+        stale["capability_version"] = 9
         with self.assertRaises(RunError) as raised:
             run_job(
                 self.snapshot,
@@ -651,6 +651,35 @@ class SetupTests(unittest.TestCase):
                 docker=str(self.docker),
             )
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertFalse(self.marker.exists())
+
+    def test_read_only_permissions_are_accepted_before_docker(self):
+        workflow = """\
+permissions:
+  contents: read
+on: push
+jobs:
+  build:
+    permissions:
+      contents: read
+    steps:
+      - run: echo hi
+"""
+        plan = _plan(workflow)
+        self.assertEqual(plan["workflow"]["permissions"], {"contents": "read"})
+        self.assertEqual(plan["job"]["permissions"], {"contents": "read"})
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                plan,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.root / "missing-docker"),
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("Docker is missing", str(raised.exception))
         self.assertFalse(self.marker.exists())
 
 
@@ -725,6 +754,39 @@ class DockerRunTests(unittest.TestCase):
 
     def _calls(self):
         return [ast.literal_eval(line) for line in self.log.read_text().splitlines() if line]
+
+    def test_read_only_permissions_run_without_a_token(self):
+        workflow = """\
+permissions:
+  contents: read
+on: push
+jobs:
+  build:
+    permissions:
+      contents: none
+    steps:
+      - run: |
+          if [ -n "$GITHUB_TOKEN" ]; then exit 3; fi
+          printf '%s' ok > "$GITHUB_WORKSPACE/ran.txt"
+"""
+        root = self.root / "permissions"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        plan = _plan(workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan,
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual((workspace / "ran.txt").read_text(), "ok")
+        self.assertEqual(plan["workflow"]["permissions"], {"contents": "read"})
+        self.assertEqual(plan["job"]["permissions"], {"contents": "none"})
 
     def test_steps_run_in_one_pinned_container(self):
         (self.repo / "source.txt").write_text("mutated checkout\n")
@@ -823,7 +885,7 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual(digest_before, captured["digest"])
         planned = plan_snapshot(snapshot, "build")
         step = planned["plan"]["job"]["steps"][0]
-        self.assertEqual(planned["plan"]["capability_version"], 9)
+        self.assertEqual(planned["plan"]["capability_version"], 10)
         self.assertEqual(step["uses"], "actions/checkout@v4")
         self.assertEqual(step["checkout"], "captured")
         for absent in ("action_path", "action_digest", "steps", "inputs", "outputs"):
