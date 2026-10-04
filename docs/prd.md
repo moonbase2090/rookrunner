@@ -138,7 +138,11 @@ Implemented:
   (https://docs.github.com/en/actions/concepts/runners/private-networking).
   `worker --network none` turns it off. The Docker socket stays unmounted
   unless the worker is started with `--docker-socket`. That mount gives the
-  job the host Docker service. The job keeps the caller user, and the image
+  job the host Docker service. The job keeps the caller user. When the
+  socket is mounted, a private Docker volume is mounted into the job at
+  that volume's mountpoint, and `TMPDIR`, `TEMP`, and `TMP` default to
+  it. A later env layer can replace those three. The volume is removed
+  with the job container. The host `/tmp` is not mounted. The image
   must already contain the Docker client. GitHub requires that service to be installed
   and running for container-dependent work on a self-hosted runner
   (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
@@ -281,7 +285,7 @@ it. The worker is not an unattended production service.
 | Supported release platform | Linux x86_64 with Docker is the proposed first artifact target. Recorded tests do not cover Python 3.11 or other operating systems. | Artifact packaging |
 | Runner image | Workflow execution needs an image pinned by digest. `run_job` requires the caller to pass one and does not select a default. Selection and provenance of a project image remain open. | A project default image |
 | Workflow parser | PyYAML 6.0.3 parses workflow text for the planner. License and source are recorded. Parsing does not execute a workflow. | Closed for planning |
-| Git metadata for checkout | Capture copies working files and excludes `.git`. The allow-list is copied to a sibling `git.json` ([design](design/git-metadata.md)). An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([design](design/checkout.md)). Other checkout actions stay unsupported. The trees and blobs of the captured base commit are stored beside the manifest ([design](design/git-objects.md)). The original commit object stays excluded. One synthesized commit for that tree is stored ([design](design/synthesized-commit.md)). When the object store is present, the attempt workspace receives an owned `.git` directory ([design](design/git-directory.md)). An absent store still has no `.git`. The `check.yml` dogfood path was run from the CLI. The identified commit ended `failed` ([validation](validation/dogfood-check.md)). The design is [dogfood check](design/dogfood-check.md). | Claiming Git-dependent workflows |
+| Git metadata for checkout | Capture copies working files and excludes `.git`. The allow-list is copied to a sibling `git.json` ([design](design/git-metadata.md)). An owned checkout accepts `uses: actions/checkout@v4` and does not replace those files ([design](design/checkout.md)). Other checkout actions stay unsupported. The trees and blobs of the captured base commit are stored beside the manifest ([design](design/git-objects.md)). The original commit object stays excluded. One synthesized commit for that tree is stored ([design](design/synthesized-commit.md)). When the object store is present, the attempt workspace receives an owned `.git` directory ([design](design/git-directory.md)). An absent store still has no `.git`. The `check.yml` dogfood path was run from the CLI. NS-38's identified commit ended `failed`. The gap that record names is closed: a later run ended `succeeded` with exit code 0 ([validation](validation/dogfood-check.md)). The design is [dogfood check](design/dogfood-check.md). | Claiming Git-dependent workflows |
 | Submission-key retention once pruning exists | M1 retains keys for the life of the state directory. The workflow draft requires tombstones across a documented retry window. That window is undefined. | Workflow submission |
 | Secret provisioning | Disabled. Filename exclusions are not a secret system. | Any secret feature |
 | Dashboard direction | Runnable visual options, then a selection. | Dashboard implementation |

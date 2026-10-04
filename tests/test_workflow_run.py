@@ -14,6 +14,7 @@ import unittest
 
 from execution_core.cli import call
 from execution_core.protocol import canonical
+from dockerutil import foreign_ids, foreign_named
 from schema_support import validate_response, validator
 
 
@@ -121,7 +122,7 @@ class WorkflowRunTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        for container in names.stdout.split():
+        for container in foreign_ids(names.stdout):
             subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         self.tmp.cleanup()
 
@@ -308,13 +309,7 @@ jobs:
             self.assertTrue(directory.is_dir(), name)
             self.assertFalse(directory.is_symlink())
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
-        names = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertNotIn("rookrunner-", names.stdout)
+        self.assert_no_containers()
         development = self.rpc(
             "run.submit",
             {
@@ -413,7 +408,7 @@ jobs:
                 capture_output=True,
                 text=True,
             )
-            if record["state"] == "running" and names.stdout.strip():
+            if record["state"] == "running" and foreign_ids(names.stdout):
                 return record
             if record["state"] in {"succeeded", "failed", "cancelled", "lost"}:
                 self.fail(f"run finished before its container could be cancelled: {record}")
@@ -422,21 +417,21 @@ jobs:
 
     def container_names(self):
         names = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            ["docker", "ps", "-a", "--format", "{{.ID}} {{.Names}}"],
             check=True,
             capture_output=True,
             text=True,
         )
-        return [line for line in names.stdout.splitlines() if line.startswith("rookrunner-")]
+        return [name for name in foreign_named(names.stdout) if name.startswith("rookrunner-")]
 
     def assert_no_containers(self):
         names = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            ["docker", "ps", "-a", "--format", "{{.ID}} {{.Names}}"],
             check=True,
             capture_output=True,
             text=True,
         )
-        self.assertNotIn("rookrunner-", names.stdout)
+        self.assertNotIn("rookrunner-", "\n".join(foreign_named(names.stdout)))
 
     def test_explicit_timeout_allows_a_fast_job(self):
         self.write_workflow(
@@ -634,7 +629,7 @@ jobs:
             capture_output=True,
             text=True,
         )
-        self.assertTrue(names.stdout.strip())
+        self.assertTrue(foreign_ids(names.stdout))
         self.assertEqual(
             self.rpc("run.cancel", {"version": 0, "run_id": submitted["run_id"]}), lost
         )

@@ -11,9 +11,14 @@ mounts an operator-supplied Node 24 directory read-only at
 `/opt/node24`. NS-36 runs a remote `node24` `main` entry from a copy
 in the attempt. NS-37 runs that action's `post` after the job's main
 steps. The capability version stays 12. A version 11 plan is not
-migrated. NS-38 recorded a `check.yml` run. The identified commit
-ended `failed`. The next slice is the gap that record names, not
-NS-40. NS-39 through NS-43 are not started.
+migrated. NS-38 recorded a `check.yml` run of
+`bb634af7a211540ab54070179b7c6c873cf9c7d4` that ended `failed` with
+exit code 137. The gap that record names is closed. A later run of
+`21a3f5ad5058027fda62b2b9af6bbba9e336bf83` ended `succeeded` with
+exit code 0. A disposable ruff violation ended `failed` with exit
+code 1 at the Ruff step. The record is
+[dogfood check](../validation/dogfood-check.md). The next slice is
+NS-39. NS-39 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -95,8 +100,12 @@ and the jobs it needs. Job containers use Docker network `bridge` by default.
 `worker --network none` turns public internet access off. The job
 container does not mount the Docker socket unless the worker is started
 with `--docker-socket`. That flag gives the job the host Docker service.
-The job keeps the caller user. The image must already contain the Docker
-client. GitHub requires that service to be installed and running for
+The job keeps the caller user. When the socket is mounted, a private
+Docker volume is mounted into the job at that volume's mountpoint.
+`TMPDIR`, `TEMP`, and `TMP` default to that path, and a later env layer
+can replace them. The volume is removed with the job container. The
+host `/tmp` is not mounted. The image must
+already contain the Docker client. GitHub requires that service to be installed and running for
 container-dependent work on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 A job may declare service containers. The image must be digest-pinned.
@@ -205,8 +214,12 @@ GitHub-hosted runners have that access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
 The worker flag `--network none` turns it off. The Docker socket stays
 unmounted unless the worker is started with `--docker-socket`. That job
-keeps the caller user and can open the engine socket. Host
-credentials are not mounted. A nonzero
+keeps the caller user and can open the engine socket. When the socket
+is mounted, a private Docker volume is mounted into the job at that
+volume's mountpoint, and `TMPDIR`, `TEMP`, and `TMP` default to it. A
+later env layer can replace those three. The volume is removed with
+the job container. The host `/tmp` is not mounted. Host credentials
+are not mounted. A nonzero
 step fails the job. A later step runs only when its condition is true;
 otherwise it is skipped and does not run. The result names the first failed
 step, its exit code, and the image digest. Docker missing, an unresolvable
@@ -1707,8 +1720,11 @@ version stays 12. This slice adds no capability. `check.yml` is
 unchanged. The identified commit ended `failed` with exit code 137
 at the unit-test step. A disposable ruff violation ended `failed`
 with exit code 1 at the Ruff step. The record is
-[dogfood check](../validation/dogfood-check.md). The next slice is
-the gap that record names, not NS-40.
+[dogfood check](../validation/dogfood-check.md). The gap that record
+names is closed by a later run of
+`21a3f5ad5058027fda62b2b9af6bbba9e336bf83`, which ended `succeeded`
+with exit code 0. That record is in the same document. The next
+slice is NS-39.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.

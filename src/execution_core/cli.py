@@ -166,7 +166,9 @@ def main():
             "that socket. GitHub requires an active Docker service for "
             "container-dependent work on a self-hosted runner "
             "(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners). "
-            "Off by default. Host credential directories stay unmounted."
+            "Off by default. When set, a private Docker volume is mounted at "
+            "that volume's mountpoint and TMPDIR, TEMP, and TMP default to "
+            "it. Host credential directories stay unmounted."
         ),
     )
     worker.add_argument(

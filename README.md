@@ -48,7 +48,12 @@ public internet. GitHub-hosted runners have that access by default
 Start the worker with `--network none` to turn it off. The Docker socket
 stays unmounted unless you add `--docker-socket`. That flag gives the job
 the host Docker service, which container-dependent tests need. The job
-keeps the caller user. The image must already contain the Docker client.
+keeps the caller user. When the socket is mounted, a private Docker
+volume is mounted into the job at that volume's mountpoint, and
+`TMPDIR`, `TEMP`, and `TMP` default to it. A workflow env value can
+replace those three. The volume is removed with the job container. The
+host `/tmp` is not mounted. The image must already contain the Docker
+client.
 GitHub requires that service to be installed and running on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 

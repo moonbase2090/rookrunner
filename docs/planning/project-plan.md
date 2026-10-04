@@ -38,12 +38,14 @@ and history are preserved; no duplicate replacement tickets were created.
 
 The owner's 2026-10-03 priorities change the horizons:
 
-- **Now:** NS-38 recorded Rookrunner's own `check.yml` run from the
-  CLI. The identified commit ended `failed`. The next slice is the gap
-  that record names, not NS-40. The capability version stays 12. A
-  version 11 plan is not migrated. The `dogfood` epic, together with
-  the `check.yml` subset of RR-16, RR-17, and RR-18, does not yet have
-  a `succeeded` result with exit code 0.
+- **Now:** The gap named by NS-38 is closed. A later `check.yml` run
+  ended `succeeded` with exit code 0 for
+  `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. NS-38's run of
+  `bb634af7a211540ab54070179b7c6c873cf9c7d4` stays `failed` with exit
+  code 137. The next slice is NS-39. The capability version stays 12.
+  A version 11 plan is not migrated. The `dogfood` epic, together with
+  the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
+  result with exit code 0.
 - **Next:** the `ownerci` epic reports push and pull request results for
   owner repositories to GitHub as commit statuses (NS-39–NS-43).
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.

@@ -16,9 +16,11 @@ from execution_core.artifacts import written_files
 from execution_core.attempt import materialize_attempt
 from execution_core.disk import usage
 from execution_core.plan import plan_snapshot, plan_workflow
+from dockerutil import foreign_ids
 from execution_core.run import (
     ContainerLease,
     RunError,
+    _ATTEMPT,
     _CallInputError,
     _OUTPUT_JOB_BYTES,
     _OUTPUT_RUN_BYTES,
@@ -30,6 +32,7 @@ from execution_core.run import (
     _read_utf8,
     _resolve_call_inputs,
     _runner_arch,
+    _soft_defaults,
     _verify_workspace,
     _workflow_label,
     owned_container_present,
@@ -840,6 +843,29 @@ class ContextValueTests(unittest.TestCase):
             self.assertEqual((locked / "file").read_text(), "stay")
             os.chmod(locked, 0o700)
 
+    def test_soft_defaults_set_temp_only_for_a_socket_job(self):
+        shared = "/tmp/rookrunner-socket-example"
+        token = _ATTEMPT.set({"socket_temp": shared})
+        try:
+            self.assertEqual(
+                _soft_defaults(),
+                {
+                    "CI": "true",
+                    "HOME": "/github/home",
+                    "TMP": shared,
+                    "TEMP": shared,
+                    "TMPDIR": shared,
+                },
+            )
+        finally:
+            _ATTEMPT.reset(token)
+        token = _ATTEMPT.set({"arch": "ARM64"})
+        try:
+            self.assertEqual(_soft_defaults(), {"CI": "true", "HOME": "/github/home"})
+        finally:
+            _ATTEMPT.reset(token)
+        self.assertEqual(_soft_defaults(), {})
+
     def test_event_name_is_rejected_before_docker(self):
         for name in ("", "push\n", "push\r", "push\0more"):
             with self.assertRaises(RunError) as raised:
@@ -903,7 +929,7 @@ class DockerRunTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        for container in names.stdout.split():
+        for container in foreign_ids(names.stdout):
             subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         networks = subprocess.run(
             ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
@@ -1865,6 +1891,156 @@ jobs:
         rendered = "\n".join(repr(call) for call in self._calls())
         self.assertNotIn(".ssh", rendered)
 
+    def _same_path_mounts(self, create):
+        found = []
+        for item in create:
+            if not isinstance(item, str) or not item.startswith("type=bind,"):
+                continue
+            parts = {}
+            for piece in item.split(","):
+                if "=" not in piece:
+                    continue
+                key, value = piece.split("=", 1)
+                parts[key] = value
+            if "source" in parts and parts["source"] == parts.get("destination"):
+                found.append(parts["source"])
+        return found
+
+    def _volume_mounts(self, create):
+        found = []
+        for item in create:
+            if not isinstance(item, str) or not item.startswith("type=volume,"):
+                continue
+            parts = {}
+            for piece in item.split(","):
+                if "=" not in piece:
+                    continue
+                key, value = piece.split("=", 1)
+                parts[key] = value
+            if "source" in parts and "destination" in parts:
+                found.append((parts["source"], parts["destination"]))
+        return found
+
+    def _assert_socket_volume_removed(self, create):
+        mounts = self._volume_mounts(create)
+        self.assertEqual(len(mounts), 1)
+        name, destination = mounts[0]
+        self.assertTrue(name.startswith("rookrunner-socket-"))
+        self.assertTrue(destination.startswith("/"))
+        self.assertNotIn(",", destination)
+        listed = subprocess.run(
+            ["docker", "volume", "inspect", name],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(listed.returncode, 0)
+        return name, destination
+
+    def test_socket_volume_is_mounted_at_its_mountpoint(self):
+        probe = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: |
+          printf '%s\\n' "$TMPDIR"
+          test "$TEMP" = "$TMPDIR"
+          test "$TMP" = "$TMPDIR"
+          test -d "$TMPDIR"
+          test -w "$TMPDIR"
+          test "$(stat -c %a "$TMPDIR")" = 700
+          touch "$TMPDIR/probe"
+"""
+        root = self.root / "socket-temp"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, probe)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(probe),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            docker_socket=True,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        path = result["steps"][0]["stdout"].strip()
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        _name, destination = self._assert_socket_volume_removed(creates[-1])
+        self.assertEqual(destination, path)
+        # The engine socket is also a same-path mount when it is already
+        # `/var/run/docker.sock`. The temporary directory is the volume.
+        self.assertNotIn(path, self._same_path_mounts(creates[-1]))
+        self.assertNotIn("--privileged", creates[-1])
+
+    def test_socket_off_does_not_share_a_temp_directory(self):
+        probe = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: |
+          if [ -n "${TMPDIR:-}" ]; then exit 1; fi
+          if [ -n "${TEMP:-}" ]; then exit 1; fi
+          if [ -n "${TMP:-}" ]; then exit 1; fi
+          printf unset
+"""
+        root = self.root / "socket-off"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, probe)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(probe),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["steps"][0]["stdout"], "unset")
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        self.assertEqual(self._volume_mounts(creates[-1]), [])
+        self.assertEqual(self._same_path_mounts(creates[-1]), [])
+
+    def test_workflow_env_replaces_the_socket_temp(self):
+        probe = """\
+on: push
+env:
+  TMPDIR: /tmp/from-workflow
+  TEMP: /tmp/from-workflow
+  TMP: /tmp/from-workflow
+jobs:
+  build:
+    steps:
+      - run: printf '%s %s %s\\n' "$TMPDIR" "$TEMP" "$TMP"
+"""
+        root = self.root / "socket-override"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, probe)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(probe),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            docker_socket=True,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(
+            result["steps"][0]["stdout"],
+            "/tmp/from-workflow /tmp/from-workflow /tmp/from-workflow\n",
+        )
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        _name, destination = self._assert_socket_volume_removed(creates[-1])
+        self.assertNotEqual(destination, "/tmp/from-workflow")
+
     def test_nonzero_step_stops_and_names_the_digest(self):
         fail_root = self.root / "fail"
         fail_root.mkdir()
@@ -2133,7 +2309,7 @@ jobs:
             capture_output=True,
             text=True,
         )
-        self.assertEqual(listed.stdout.strip(), "")
+        self.assertEqual(foreign_ids(listed.stdout), [])
 
     def test_remote_composite_runs_and_stays_out_of_the_workspace_git(self):
         remote = self.root / "remote"
@@ -2770,7 +2946,7 @@ jobs:
             capture_output=True,
             text=True,
         )
-        self.assertEqual(listed.stdout.strip(), "")
+        self.assertEqual(foreign_ids(listed.stdout), [])
         left = subprocess.run(
             ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
             check=True,
@@ -2832,7 +3008,7 @@ jobs:
             capture_output=True,
             text=True,
         )
-        self.assertEqual(listed.stdout.strip(), "")
+        self.assertEqual(foreign_ids(listed.stdout), [])
 
     def test_network_none_does_not_start_services(self):
         workflow = self._service_workflow(
@@ -2913,6 +3089,10 @@ jobs:
         )
         self.assertFalse(any("docker.sock" in item for item in service))
         self.assertNotIn("--privileged", service)
+        self.assertEqual(self._volume_mounts(service), [])
+        self.assertEqual(self._same_path_mounts(service), [])
+        self.assertEqual(len(self._volume_mounts(job)), 1)
+        self.assertNotIn("rookrunner-socket-", " ".join(service))
 
     def test_cancel_removes_the_service_container(self):
         workflow = self._service_workflow(
@@ -2965,7 +3145,7 @@ jobs:
             capture_output=True,
             text=True,
         )
-        self.assertEqual(listed.stdout.strip(), "")
+        self.assertEqual(foreign_ids(listed.stdout), [])
         left = subprocess.run(
             ["docker", "network", "ls", "-q", "--filter", "name=rookrunner-net-"],
             check=True,
