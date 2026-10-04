@@ -3,7 +3,9 @@
 The order after NS-29 was re-prioritized on 2026-10-03. See
 [Re-prioritization](#re-prioritization-2026-10-03) for what moved, why,
 and what is deferred. NS-30 designs the dogfood path and does not
-change the engine. NS-31 through NS-43 are not started.
+change the engine. NS-31 accepts read-only `permissions`. NS-32 accepts
+a SHA-pinned `actions/checkout` as the owned checkout. NS-33 through
+NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -20,9 +22,12 @@ NS-26 designs one synthesized commit for that tree, and NS-27 writes
 it. NS-28 designs one owned `.git` directory for the attempt workspace,
 and NS-29 writes it when the object store is present. NS-30 designs
 the `check.yml` dogfood path. NS-31 accepts read-only `permissions`
-and records the declared value. The capability version is 10. No
-token is created. Filling the `github` context is designed in NS-30
-and is not started.
+and records the declared value. No token is created. NS-32 accepts
+`uses: actions/checkout@<sha>` when `<sha>` is 40 lowercase hexadecimal
+characters. The plan stores that string and sets `checkout` to
+`captured`. The SHA is not fetched and is not verified. The capability
+version is 11. A version 10 plan is not migrated. Filling the `github`
+context is designed in NS-30 and is not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -31,8 +36,10 @@ Capture of working files already exists and is not repeated here. Roadmap
 step 2's Git-dependent and checkout verification does not. Sanitized Git
 metadata is copied to a sibling `git.json`. Credentials and remote URLs
 stay excluded. An owned checkout accepts `uses: actions/checkout@v4`
-and does not replace those files, persist a credential, or create
-`.git`. Other checkout inputs stay rejected. The trees and blobs of
+and a full 40-character lowercase SHA pin. It stores that `uses`
+string, does not fetch or verify the SHA, and does not replace those
+files, persist a credential, or create `.git`. Other checkout inputs
+stay rejected. The trees and blobs of
 the captured base commit are stored beside the manifest. The original
 commit object stays excluded. One synthesized commit for that tree is
 stored. When the object store is present, the attempt workspace
@@ -1389,17 +1396,18 @@ Acceptance criteria:
 
 **NS-32. Accept a SHA-pinned `actions/checkout` as the owned checkout.**
 
-Status: not started.
+Status: implemented. `uses: actions/checkout@<sha>` is the same owned
+step as `actions/checkout@v4` when `<sha>` is a full-length commit SHA
+of 40 lowercase hexadecimal characters.
 
-`uses: actions/checkout@<sha>` becomes the same owned step as
-`actions/checkout@v4` when `<sha>` is a full-length commit SHA of 40
-lowercase hexadecimal characters. GitHub's secure-use guidance calls a
-full-length commit SHA the only way to use an action as an immutable
-release. The plan stores the `uses` string verbatim, with `checkout` set
-to `captured`. The step does not fetch that commit, read its action
-file, or run its JavaScript. The SHA is recorded and is not verified.
-The `with` policy from NS-23 is unchanged. Short SHAs, branches, and
-other tags stay rejected. The capability version increases by one.
+GitHub's secure-use guidance calls a full-length commit SHA the only
+way to use an action as an immutable release. The plan stores the
+`uses` string verbatim, with `checkout` set to `captured`. The step
+does not fetch that commit, read its action file, or run its
+JavaScript. The SHA is recorded and is not verified. The `with` policy
+from NS-23 is unchanged. Short SHAs, branches, and other tags stay
+rejected. The capability version is 11. A version 10 plan is not
+migrated.
 
 https://docs.github.com/en/actions/reference/security/secure-use
 https://github.com/actions/checkout

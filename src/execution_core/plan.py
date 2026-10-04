@@ -5,9 +5,10 @@ run. Capability version 10 records declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
 snapshot, a literal job matrix, a local reusable workflow, service
 containers, an owned checkout of the captured files for
-`uses: actions/checkout@v4`, and a read-only `permissions` value.
+`uses: actions/checkout@v4` and for `actions/checkout` pinned by a full
+commit SHA, and a read-only `permissions` value.
 That checkout does not fetch a ref, replace
-those files, or persist a credential. It checks that expressions can be
+those files, or persist a credential. The SHA is stored and is not verified. It checks that expressions can be
 parsed and does not evaluate them. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
 snapshot. A remote workflow reference is rejected. Secrets are not passed
@@ -40,7 +41,7 @@ from .expr import (
 )
 from .protocol import canonical
 
-CAPABILITY_VERSION = 10
+CAPABILITY_VERSION = 11
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -162,12 +163,26 @@ STEP_KEYS = {
     "uses",
     "with",
 }
-# Owned checkout of files already in the workspace. This does not read an
-# action file, fetch a ref, or run the JavaScript action. An omitted `clean`
-# or `persist-credentials` does not mean the upstream default of true.
+# Owned checkout of files already in the workspace. `actions/checkout@v4`
+# and `actions/checkout@` plus 40 lowercase hex digits are that step. The
+# SHA is stored and is not fetched or verified. This does not read an
+# action file or run the JavaScript action. An omitted `clean` or
+# `persist-credentials` does not mean the upstream default of true.
+# https://docs.github.com/en/actions/reference/security/secure-use
 # https://github.com/actions/checkout
 CHECKOUT_USES = "actions/checkout@v4"
+_CHECKOUT_SHA = re.compile(r"actions/checkout@[0-9a-f]{40}")
 CHECKOUT_WITH = {"clean", "persist-credentials"}
+
+
+def owned_checkout_uses(text):
+    """Return whether `text` is the owned checkout reference."""
+
+    return text == CHECKOUT_USES or (
+        isinstance(text, str) and _CHECKOUT_SHA.fullmatch(text) is not None
+    )
+
+
 # permissions scopes on the workflow syntax page, read 2026-10-04.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
 # The page lists `id-token` as `write|none` and `vulnerability-alerts` as
@@ -1364,8 +1379,8 @@ class _Planner:
             else:
                 uses_field = _join(step_field, "uses")
                 uses_text = self._string_scalar(body["uses"][1], uses_field)
-                if uses_text == CHECKOUT_USES:
-                    recorded.update(self._checkout(body, step_field))
+                if owned_checkout_uses(uses_text):
+                    recorded.update(self._checkout(body, step_field, uses_text))
                 else:
                     action = self._composite(uses_text, uses_field)
                     recorded["uses"] = uses_text
@@ -1405,16 +1420,17 @@ class _Planner:
             _invalid(f"{field} must be a boolean", field)
         return value
 
-    def _checkout(self, body, step_field):
+    def _checkout(self, body, step_field, uses_text):
         """Record an owned checkout of the captured files.
 
         `actions/checkout` fetches a ref and, by default, persists a
         credential and resets the work tree
-        (https://github.com/actions/checkout). This step does neither. An
-        omitted key does not mean the upstream default of true.
+        (https://github.com/actions/checkout). This step does neither. The
+        `uses` string is stored as written. An omitted key does not mean
+        the upstream default of true.
         """
 
-        recorded = {"uses": CHECKOUT_USES, "checkout": "captured"}
+        recorded = {"uses": uses_text, "checkout": "captured"}
         if "with" not in body:
             return recorded
         path = _join(step_field, "with")

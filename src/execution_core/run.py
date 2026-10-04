@@ -106,8 +106,10 @@ job deadline; the step timeout is not a shared budget across inner steps.
 This is not a GitHub-equivalence claim.
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 
-`uses: actions/checkout@v4` is an owned checkout of the files already in
-the workspace. The plan stores `checkout` as `captured`. The step does not
+`uses: actions/checkout@v4` and a full 40-character lowercase SHA pin of
+`actions/checkout` are an owned checkout of the files already in the
+workspace. The plan stores that `uses` string and `checkout` as
+`captured`. The SHA is not fetched and is not verified. The step does not
 start a process, does not modify the workspace, does not create `.git`,
 does not delete one that materialize already wrote, does not read
 `git.json` or the object store, and does not contact a
@@ -151,6 +153,7 @@ from .plan import (
     DEFAULT_JOB_TIMEOUT_MINUTES,
     MAX_JOB_TIMEOUT_MINUTES,
     MAX_STEP_TIMEOUT_MINUTES,
+    owned_checkout_uses,
 )
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
@@ -494,7 +497,7 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
 def _accept_checkout(step):
     """Accept an owned checkout. It has no action path and no inner steps."""
 
-    if step.get("uses") != "actions/checkout@v4" or step.get("checkout") != "captured":
+    if not owned_checkout_uses(step.get("uses")) or step.get("checkout") != "captured":
         _setup("plan is not accepted")
     for key in ("run", "action_path", "action_digest", "steps", "inputs", "outputs"):
         if key in step:

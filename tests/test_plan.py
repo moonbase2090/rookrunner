@@ -70,7 +70,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 10)
+        self.assertEqual(plan["capability_version"], 11)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertIsNone(plan["job"]["strategy"])
@@ -836,7 +836,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 10)
+            self.assertEqual(first["plan"]["capability_version"], 11)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -1446,7 +1446,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             b"on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
             "build",
         )["plan"]
-        self.assertEqual(plan["capability_version"], 10)
+        self.assertEqual(plan["capability_version"], 11)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertEqual(plan["workflow"]["on"], "workflow_call")
@@ -1913,7 +1913,7 @@ class CheckoutPlanTests(unittest.TestCase):
         return raised.exception
 
     def test_owned_checkout_records_captured_files(self):
-        self.assertEqual(CAPABILITY_VERSION, 10)
+        self.assertEqual(CAPABILITY_VERSION, 11)
         self.assertNotIn("checkout", STEP_KEYS)
         workflow = """\
 on: push
@@ -1931,7 +1931,7 @@ jobs:
         uses: actions/checkout@v4
 """
         plan = self.plan(workflow)
-        self.assertEqual(plan["capability_version"], 10)
+        self.assertEqual(plan["capability_version"], 11)
         step = plan["job"]["steps"][0]
         self.assertEqual(step["uses"], "actions/checkout@v4")
         self.assertEqual(step["checkout"], "captured")
@@ -2039,6 +2039,77 @@ jobs:
                 self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
                 self.assertEqual(error.field, "jobs.build.steps.0.uses")
 
+    def test_check_yml_sha_is_the_owned_checkout(self):
+        sha = "11d5960a326750d5838078e36cf38b85af677262"
+        check = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "check.yml"
+        self.assertIn(f"uses: actions/checkout@{sha}", check.read_text())
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@{sha}
+"""
+        step = self.plan(workflow)["job"]["steps"][0]
+        self.assertEqual(step["uses"], f"actions/checkout@{sha}")
+        self.assertEqual(step["checkout"], "captured")
+        self.assertEqual(step["name"], "Checkout")
+        for absent in ("action_path", "action_digest", "steps", "inputs", "outputs", "run"):
+            self.assertNotIn(absent, step)
+
+    def test_unverified_sha_is_recorded_verbatim(self):
+        sha = "a" * 40
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@{sha}
+        with:
+          clean: false
+"""
+        step = self.plan(workflow)["job"]["steps"][0]
+        self.assertEqual(step["uses"], f"actions/checkout@{sha}")
+        self.assertEqual(step["checkout"], "captured")
+        self.assertEqual(step["with"], {"clean": False})
+
+    def test_sha_checkout_rejects_the_same_with_keys(self):
+        sha = "b" * 40
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@{sha}
+        with:
+          clean: true
+"""
+        error = self.reject(workflow)
+        self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(error.field, "jobs.build.steps.0.with.clean")
+
+    def test_short_sha_branch_and_other_tags_stay_rejected(self):
+        real = "11d5960a326750d5838078e36cf38b85af677262"
+        for uses in (
+            f"actions/checkout@{real[:39]}",
+            "actions/checkout@main",
+            "actions/checkout@v5",
+            f"actions/checkout@{real.upper()}",
+            f"actions/checkout@{'c' * 41}",
+        ):
+            workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: {uses}
+"""
+            with self.subTest(uses=uses):
+                error = self.reject(workflow)
+                self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
+                self.assertEqual(error.field, "jobs.build.steps.0.uses")
+
 
 class PermissionsPlanTests(unittest.TestCase):
     def plan(self, workflow, job_id="build"):
@@ -2085,7 +2156,7 @@ jobs:
       - run: echo hi
 """
         plan = self.plan(workflow)
-        self.assertEqual(plan["capability_version"], 10)
+        self.assertEqual(plan["capability_version"], 11)
         self.assertEqual(plan["workflow"]["permissions"], {"contents": "read"})
         self.assertEqual(plan["job"]["permissions"], {"contents": "read"})
         self.assertNotIn("token", plan["workflow"])

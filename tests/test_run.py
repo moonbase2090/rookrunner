@@ -637,9 +637,9 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_previous_capability_version_is_not_migrated(self):
-        self.assertEqual(self.plan["capability_version"], 10)
+        self.assertEqual(self.plan["capability_version"], 11)
         stale = dict(self.plan)
-        stale["capability_version"] = 9
+        stale["capability_version"] = 10
         with self.assertRaises(RunError) as raised:
             run_job(
                 self.snapshot,
@@ -681,6 +681,51 @@ jobs:
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
         self.assertIn("Docker is missing", str(raised.exception))
         self.assertFalse(self.marker.exists())
+
+    def test_sha_pinned_checkout_is_accepted_before_docker(self):
+        sha = "11d5960a326750d5838078e36cf38b85af677262"
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@{sha}
+"""
+        plan = _plan(workflow)
+        step = plan["job"]["steps"][0]
+        self.assertEqual(step["uses"], f"actions/checkout@{sha}")
+        self.assertEqual(step["checkout"], "captured")
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                plan,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.root / "missing-docker"),
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("Docker is missing", str(raised.exception))
+        rejected = dict(plan)
+        rejected_job = dict(plan["job"])
+        rejected_step = dict(step)
+        rejected_step["uses"] = "actions/checkout@main"
+        rejected_job["steps"] = [rejected_step]
+        rejected["job"] = rejected_job
+        rejected["jobs"] = [rejected_job]
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                rejected,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.root / "missing-docker"),
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertIn("plan is not accepted", str(raised.exception))
 
 
 class DockerRunTests(unittest.TestCase):
@@ -847,7 +892,7 @@ jobs:
         self.assertEqual(listed.stdout.strip(), "")
         self.assertEqual(stat.S_IMODE((self.workspace / "order.txt").stat().st_mode) & 0o777, 0o644)
 
-    def _owned_checkout(self, workflow, label):
+    def _owned_checkout(self, workflow, label, uses="actions/checkout@v4"):
         root = self.root / label
         root.mkdir()
         repo = root / "repo"
@@ -885,8 +930,8 @@ jobs:
         self.assertEqual(digest_before, captured["digest"])
         planned = plan_snapshot(snapshot, "build")
         step = planned["plan"]["job"]["steps"][0]
-        self.assertEqual(planned["plan"]["capability_version"], 10)
-        self.assertEqual(step["uses"], "actions/checkout@v4")
+        self.assertEqual(planned["plan"]["capability_version"], 11)
+        self.assertEqual(step["uses"], uses)
         self.assertEqual(step["checkout"], "captured")
         for absent in ("action_path", "action_digest", "steps", "inputs", "outputs"):
             self.assertNotIn(absent, step)
@@ -972,6 +1017,31 @@ jobs:
         )
         stored = plan_workflow(flagged.encode(), "build")["plan"]["job"]["steps"][0]
         self.assertEqual(stored["with"], {"clean": False, "persist-credentials": False})
+
+    def test_check_yml_sha_leaves_captured_files(self):
+        sha = "11d5960a326750d5838078e36cf38b85af677262"
+        check = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "check.yml"
+        self.assertIn(f"uses: actions/checkout@{sha}", check.read_text())
+        workflow = f"""\
+on: push
+jobs:
+  build:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@{sha}
+      - id: see
+        if: github.sha == '' && github.token == ''
+        run: |
+          cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
+          if [ ! -d "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
+"""
+        result = self._owned_checkout(workflow, "sha", uses=f"actions/checkout@{sha}")
+        self.assertEqual(
+            [(step["status"], step["exit_code"]) for step in result["steps"]],
+            [("succeeded", 0), ("succeeded", 0)],
+        )
+        self.assertEqual(result["steps"][0]["stdout"], "")
+        self.assertNotIn("outputs", result["steps"][0])
 
     def test_network_none_is_an_explicit_create_argument(self):
         offline = "on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"

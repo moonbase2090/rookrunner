@@ -69,7 +69,7 @@ Proposed 2026-10-03 from the owner's priorities. The slices are NS-30
 through NS-43 in [next steps](planning/next-steps.md).
 
 1. Design the dogfood path, with one document for every `check.yml` gap (NS-30, designed).
-2. Accept read-only `permissions` (NS-31, implemented) and a SHA-pinned `actions/checkout` (NS-32).
+2. Accept read-only `permissions` (NS-31, implemented) and a SHA-pinned `actions/checkout` (NS-32, implemented).
 3. Fill the `github` and `runner` contexts and the default variables (NS-33).
 4. Resolve remote actions pinned by full commit SHA, provide Node 24, and
    run `node24` JavaScript actions through `main` and `post` (NS-34–NS-37).

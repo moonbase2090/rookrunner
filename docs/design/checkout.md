@@ -2,7 +2,9 @@
 
 Status: accepted, 2026-10-03. The planner accepts
 `uses: actions/checkout@v4` as an owned step that does not replace the
-captured files. It does not read an action file, fetch a ref, or run the
+captured files. NS-32 also accepts `actions/checkout` pinned by 40
+lowercase hexadecimal characters. That SHA is stored and is not
+verified. The step does not read an action file, fetch a ref, or run the
 JavaScript action. This is not a GitHub-equivalence claim.
 
 The workspace already holds the captured working files before the first
@@ -14,10 +16,15 @@ captured dirty bytes. This engine does not do that.
 
 ## What is accepted
 
-The only accepted `uses` string is `actions/checkout@v4`. The planner
-records it as an owned checkout of the captured files. It does not read
-an action file, does not fetch a ref, and does not run the JavaScript
-action.
+The accepted `uses` strings are `actions/checkout@v4` and
+`actions/checkout@` followed by 40 lowercase hexadecimal characters.
+The planner records that string as an owned checkout of the captured
+files and sets `checkout` to `captured`. It does not read an action
+file, does not fetch a ref, and does not run the JavaScript action.
+The SHA is not verified against a remote.
+
+Short SHAs, branches, and other tags stay rejected, including a
+39-character SHA, `@main`, and `@v5`.
 
 `with` may be omitted. The only accepted keys are:
 
@@ -54,10 +61,10 @@ process, because the step does no work.
 
 ## What the step does
 
-The plan stores `uses` as `actions/checkout@v4` and `checkout` as
+The plan stores the accepted `uses` string and `checkout` as
 `captured`. It does not store an action path, an action digest, or
-inner steps. The capability version is 10. The runner accepts only that
-version. Plans from version 9 are not migrated. Every plan
+inner steps. The capability version is 11. The runner accepts only that
+version. Plans from version 10 are not migrated. Every plan
 digest changes because the version field changes.
 
 When the step runs, the runner does not start a process, does not
