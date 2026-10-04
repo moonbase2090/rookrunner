@@ -1,10 +1,9 @@
 # Copy of the captured base tree
 
-Status: design, 2026-10-03. This slice does not copy objects. The
-following PR may copy the trees and blobs of the single commit named by
-the captured `base_commit`. Commit objects, remotes, credentials, and
-the `.git` directory stay excluded. This is not a GitHub-equivalence
-claim.
+Status: accepted, 2026-10-03. Capture copies the trees and blobs of the
+single commit named by the captured `base_commit`. Commit objects,
+remotes, credentials, and the `.git` directory stay excluded. This is
+not a GitHub-equivalence claim.
 
 Decision 0002 still holds: the snapshot is plain working files and a
 canonical manifest, and `.git` is not copied. This design does not
@@ -12,12 +11,12 @@ rewrite that decision and does not authorize copying that directory.
 Objects are read through the existing capture Git environment, not by
 copying `.git/objects`.
 
-## What the following PR may copy
+## What capture copies
 
-When `base_commit` is a stored commit id, the following PR may copy the
-root tree of that commit and the trees and blobs reachable from it.
-When `base_commit` is null, the repository is unborn, the following PR
-stores nothing, and capture still succeeds.
+When `base_commit` is a stored commit id, capture copies the root tree
+of that commit and the trees and blobs reachable from it. When
+`base_commit` is null, the repository is unborn, capture stores
+nothing, and capture still succeeds.
 
 Parent commits are not walked. Tags, notes, and reflogs are not walked.
 Commit objects are not copied. A commit object carries an author, a
@@ -30,7 +29,7 @@ workspace. The two copies may differ. That difference is intentional.
 
 ## How the objects are read
 
-The following PR may add only these commands, and only through the
+Capture adds only these commands, and only through the
 capture Git environment that already exists:
 
 - `git rev-parse --verify <base>^{tree}`
@@ -53,7 +52,7 @@ The capture environment already sets `GIT_CONFIG_NOSYSTEM`,
 `SOURCE_INVALID`. It is not a fetch.
 https://git-scm.com/docs/git
 
-The following PR does not add `git config --list`, `git remote -v`,
+Capture does not add `git config --list`, `git remote -v`,
 fetch, or clone. It does not copy pack files. A pack can contain
 objects that this commit does not reach.
 
@@ -63,7 +62,7 @@ No new error kind is added.
 
 ## Where the objects live
 
-The following PR stores loose objects in the standard loose form, so
+Capture stores loose objects in the standard loose form, so
 the Git object id matches the stored bytes. The stored bytes are zlib
 applied to the type, a space, the decimal size, a NUL, and the payload
 (https://git-scm.com/book/en/v2/Git-Internals-Git-Objects). The path is
@@ -80,7 +79,7 @@ no partial snapshot. If the id of the stored loose object does not
 match the id Git reported, the result is `SOURCE_INVALID` and nothing
 is published.
 
-The snapshot command may return `git_objects_digest`: the SHA-256 of
+The snapshot command returns `git_objects_digest`: the SHA-256 of
 `protocol.canonical` applied to the sorted list of those object ids.
 The field is null when the store is absent. It is not part of the
 manifest digest, the plan, the run record, or describe. The worker
@@ -95,26 +94,28 @@ receives neither `.git`, nor `git.json`, nor `objects/`.
 ## What stays excluded
 
 If the base tree contains any path the existing capture exclusions
-would reject, the following PR stores no objects and capture still
-succeeds. It does not drop entries out of a tree. Dropping entries
+would reject, capture stores no objects and still succeeds. It does
+not drop entries out of a tree. Dropping entries
 would write a new tree object, and that is synthesizing. The
 working-file capture is unchanged, including its record of excluded
 tracked paths. A symlink in the tree is a blob. It is copied with the
 other blobs and is not followed.
 
-The following PR opens `.git/objects/info/alternates` with
+Capture opens `.git/objects/info/alternates` with
 `O_NOFOLLOW` before `cat-file`. A missing path or an empty regular
 file is accepted. A non-empty regular file is `CAPABILITY_UNSUPPORTED`
 and the error names that situation. A symlink, a directory, or any
 other type is `SOURCE_INVALID`. The file is not followed and is not
-copied. The same observation joins the two inventory reads. A change
-between those reads is `SOURCE_UNSTABLE`.
+copied. A linked worktree stores its objects through a gitfile.
+Capture classifies alternates in that common directory and still does
+not follow a symlink. The same observation joins the two inventory
+reads. A change between those reads is `SOURCE_UNSTABLE`.
 
 Replace refs are not copied. The capture environment already sets
 `GIT_NO_REPLACE_OBJECTS`.
 
 A gitlink, a submodule, and an LFS pointer stay the existing capture
-failures. The object copy is not reached. The following PR does not
+failures. The object copy is not reached. Capture does not
 smudge and does not download LFS objects. An `ls-tree` entry whose
 type is `commit` is that existing submodule rejection, and no objects
 are stored. Any other type that is not `tree` or `blob` is
@@ -140,7 +141,7 @@ the run record, or describe.
 
 ## Limits
 
-This design adds no numeric limit and no object-count cap. GitHub's
+This copy adds no numeric limit and no object-count cap. GitHub's
 Actions limits page does not publish an object-count cap
 (https://docs.github.com/en/actions/reference/limits).
 
@@ -156,11 +157,16 @@ Object-store bytes live under the state directory, so the existing
 disk budget counts them. The default budget stays
 `10 * 1024 * 1024 * 1024` bytes.
 
-## Acceptance for this design
+## Acceptance
 
-- A written design names the objects a later PR may copy.
-- That design does not copy commit objects, remotes, credentials, or
-  the `.git` directory.
+- The trees and blobs of the captured base commit are stored as loose
+  objects. The commit object is not stored.
+- An unborn repository, and a base tree that contains an excluded path,
+  store no objects. Capture still succeeds.
+- Dirty captured files stay the working bytes. The copied blob stays
+  the committed bytes.
+- A non-empty alternates file fails capture and publishes nothing.
+- The workspace has no `.git`, no `git.json`, and no `objects`.
 - Synthesizing a commit, creating a `.git` directory, and filling the
   `github` context remain unstarted.
 

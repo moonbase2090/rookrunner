@@ -8,8 +8,10 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zlib
 
 from execution_core.plan import PlanError, plan_workflow
+from execution_core.protocol import canonical
 from execution_core.snapshot import CaptureError, SourceCapture
 
 
@@ -57,6 +59,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(metadata["dirty"], manifest["dirty"])
         self.assertEqual(metadata["git_object_format"], manifest["git_object_format"])
         self.assertNotIn("@", git_bytes.decode())
+        self._assert_objects(location, result, manifest)
         for entry in manifest["entries"]:
             path = location / "files" / entry["path"]
             contents = (
@@ -64,6 +67,58 @@ class SnapshotTests(unittest.TestCase):
             )
             self.assertEqual(hashlib.sha256(contents).hexdigest(), entry["sha256"])
         return result, manifest, location / "files"
+
+    def _assert_objects(self, location, result, manifest):
+        names = sorted(path.name for path in location.iterdir())
+        store = location / "objects"
+        if result["git_objects_digest"] is None:
+            self.assertEqual(names, ["files", "git.json", "manifest.json"])
+            self.assertFalse(store.exists())
+            return []
+        self.assertEqual(names, ["files", "git.json", "manifest.json", "objects"])
+        self.assertFalse((location / "HEAD").exists())
+        self.assertFalse((store / "info").exists())
+        self.assertFalse((store / "pack").exists())
+        algorithm = manifest["git_object_format"]
+        width = 40 if algorithm == "sha1" else 64
+        ids = []
+        for bucket in store.iterdir():
+            self.assertTrue(bucket.is_dir())
+            self.assertEqual(stat.S_IMODE(bucket.stat().st_mode), 0o700)
+            self.assertEqual(len(bucket.name), 2)
+            for leaf in bucket.iterdir():
+                self.assertTrue(leaf.is_file())
+                self.assertFalse(leaf.is_symlink())
+                self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o600)
+                oid = bucket.name + leaf.name
+                self.assertEqual(len(oid), width)
+                raw = zlib.decompress(leaf.read_bytes())
+                header, payload = raw.split(b"\0", 1)
+                kind, size = header.split(b" ")
+                self.assertIn(kind, (b"blob", b"tree"))
+                self.assertEqual(int(size), len(payload))
+                self.assertEqual(hashlib.new(algorithm, raw).hexdigest(), oid)
+                self.assertNotIn(b"fixture@example.invalid", payload)
+                ids.append(oid)
+        ids.sort()
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(
+            hashlib.sha256(canonical(ids).encode()).hexdigest(),
+            result["git_objects_digest"],
+        )
+        self.assertNotIn(manifest["base_commit"], ids)
+        return ids
+
+    def _commit(self, message):
+        self.capture.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            message,
+        )
 
     def assert_rejected(self, kind, include=()):
         with self.assertRaises(CaptureError) as raised:
@@ -271,6 +326,7 @@ class SnapshotTests(unittest.TestCase):
         recorded = reply["snapshot"]
         git_bytes = (self.state / "snapshots" / recorded["snapshot_id"] / "git.json").read_bytes()
         self.assertEqual(hashlib.sha256(git_bytes).hexdigest(), recorded["git_metadata_digest"])
+        self.assertIsNotNone(recorded["git_objects_digest"])
         self.assertFalse((self.state / "runs.sqlite3").exists())
 
     def test_unborn_repository_captures_staged_source(self):
@@ -293,6 +349,8 @@ class SnapshotTests(unittest.TestCase):
             ).hexdigest(),
             result["git_metadata_digest"],
         )
+        self.assertIsNone(result["git_objects_digest"])
+        self.assertFalse((self.state / "snapshots" / result["snapshot_id"] / "objects").exists())
 
     def test_attribute_changes_during_capture_are_rejected(self):
         original = self.capture.scan
@@ -415,6 +473,119 @@ class SnapshotTests(unittest.TestCase):
         capture = SourceCapture(worktree, self.state)
         result = capture.capture(".github/workflows/test.yml")
         self.assertFalse(result["dirty"])
-        files = self.state / "snapshots" / result["snapshot_id"] / "files"
+        snapshot = self.state / "snapshots" / result["snapshot_id"]
+        files = snapshot / "files"
         self.assertFalse((files / ".git").exists())
+        self.assertFalse((snapshot / "HEAD").exists())
+        self.assertIsNotNone(result["git_objects_digest"])
         self.assertEqual((files / "source.txt").read_text(), "original\n")
+
+    def test_dirty_file_keeps_the_committed_blob(self):
+        self.write("source.txt", "dirty-bytes\n")
+        result, _, files = self.snapshot()
+        self.assertTrue(result["dirty"])
+        self.assertEqual((files / "source.txt").read_text(), "dirty-bytes\n")
+        payloads = []
+        store = files.parent / "objects"
+        for bucket in store.iterdir():
+            for leaf in bucket.iterdir():
+                raw = zlib.decompress(leaf.read_bytes())
+                _, payload = raw.split(b"\0", 1)
+                payloads.append(payload)
+        self.assertIn(b"original\n", payloads)
+        self.assertNotIn(b"dirty-bytes\n", payloads)
+
+    def test_excluded_tree_path_stores_no_objects(self):
+        self.write(".env", "not-a-secret\n")
+        self.capture.git("add", ".env")
+        self._commit("exclude")
+        result, manifest, _ = self.snapshot()
+        self.assertIsNone(result["git_objects_digest"])
+        self.assertIn(".env", manifest["excluded"])
+        self.assertNotIn(".env", {entry["path"] for entry in manifest["entries"]})
+
+    def test_parent_commit_and_removed_blob_are_not_copied(self):
+        self.write("old.txt", "old-blob\n")
+        self.capture.git("add", "old.txt")
+        self._commit("add old")
+        parent = self.capture.git("rev-parse", "HEAD").stdout.decode().strip()
+        old = self.capture.git("rev-parse", "HEAD:old.txt").stdout.decode().strip()
+        self.capture.git("rm", "old.txt")
+        self._commit("remove old")
+        _, _, files = self.snapshot()
+        ids = []
+        for bucket in (files.parent / "objects").iterdir():
+            ids.extend(bucket.name + leaf.name for leaf in bucket.iterdir())
+        self.assertNotIn(parent, ids)
+        self.assertNotIn(old, ids)
+        self.assertNotIn(
+            b"old-blob\n",
+            b"".join(
+                zlib.decompress(leaf.read_bytes())
+                for bucket in (files.parent / "objects").iterdir()
+                for leaf in bucket.iterdir()
+            ),
+        )
+
+    def test_empty_alternates_file_still_copies_objects(self):
+        info = self.repo / ".git" / "objects" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "alternates").write_bytes(b"")
+        result, _, _ = self.snapshot()
+        self.assertIsNotNone(result["git_objects_digest"])
+
+    def test_nonempty_alternates_file_is_rejected(self):
+        info = self.repo / ".git" / "objects" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "alternates").write_text("../outside\n")
+        with self.assertRaises(CaptureError) as raised:
+            self.capture.capture(".github/workflows/test.yml")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("alternate", str(raised.exception))
+        self.assertEqual(list((self.state / "snapshots").iterdir()), [])
+
+    def test_alternates_symlink_is_rejected(self):
+        info = self.repo / ".git" / "objects" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "alternates").symlink_to("unused")
+        self.assert_rejected("SOURCE_INVALID")
+
+    def test_alternates_directory_is_rejected(self):
+        info = self.repo / ".git" / "objects" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "alternates").mkdir()
+        self.assert_rejected("SOURCE_INVALID")
+
+    def test_alternates_change_during_capture_is_unstable(self):
+        original = self.capture._alternates
+        seen = False
+
+        def flip():
+            nonlocal seen
+            if not seen:
+                seen = True
+                return original()
+            return "nonempty"
+
+        with patch.object(self.capture, "_alternates", side_effect=flip):
+            self.assert_rejected("SOURCE_UNSTABLE")
+
+    def test_missing_blob_is_invalid_and_publishes_nothing(self):
+        oid = self.capture.git("rev-parse", "HEAD:source.txt").stdout.decode().strip()
+        loose = self.repo / ".git" / "objects" / oid[:2] / oid[2:]
+        self.assertTrue(loose.is_file())
+        loose.unlink()
+        self.assert_rejected("SOURCE_INVALID")
+
+    def test_committed_symlink_blob_is_copied(self):
+        (self.repo / "link.txt").symlink_to("source.txt")
+        self.capture.git("add", "link.txt")
+        self._commit("link")
+        _, _, files = self.snapshot()
+        self.assertEqual((files / "link.txt").read_text(), "original\n")
+        payloads = [
+            zlib.decompress(leaf.read_bytes()).split(b"\0", 1)[1]
+            for bucket in (files.parent / "objects").iterdir()
+            for leaf in bucket.iterdir()
+        ]
+        self.assertIn(b"source.txt", payloads)

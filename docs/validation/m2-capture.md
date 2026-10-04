@@ -83,7 +83,8 @@ The allow-list is copied to a sibling `git.json`
 ([design](../design/git-metadata.md)). An owned checkout accepts
 `uses: actions/checkout@v4` and does not replace those files
 ([design](../design/checkout.md)). Other checkout actions stay rejected.
-Copying the trees and blobs of the captured base commit is designed
-([design](../design/git-objects.md)) and is not implemented.
+The trees and blobs of the captured base commit are stored beside the
+manifest ([design](../design/git-objects.md)). Commit objects stay
+excluded.
 See the
 [implemented capture contract](../design/source-capture.md).

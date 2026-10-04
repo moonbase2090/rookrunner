@@ -89,8 +89,8 @@ added.
 
 ## Out of scope
 
-Copying the trees and blobs of the captured base commit is designed in
-[git objects](git-objects.md) and is not implemented. Synthesizing a
+The trees and blobs of the captured base commit are copied
+([git objects](git-objects.md)). Synthesizing a
 commit, creating a `.git` directory, fetching, persisting a credential,
 and filling the `github` context each need their own design. A later
 `run` step still has no Git repository. This design does not authorize

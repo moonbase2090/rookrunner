@@ -72,15 +72,15 @@ added.
 
 ## What stays excluded
 
-Capture does not copy, and does not run a Git command whose output
-would reveal:
+Capture does not copy the items below. The base commit's trees and
+blobs are copied separately ([git objects](git-objects.md)).
 
 - `.git` itself, including config, hooks, objects, packs, alternates,
   replace refs, packed-refs, and worktree pointers
 - remote URLs, remote names, and remote-tracking refs
 - credential helpers, tokens, and `http.extraheader`
 - `user.name` and `user.email`, from configuration or from a commit
-- commit objects, trees, blobs, messages, authors, and committers
+- commit objects, and therefore authors, committers, and messages
 - tags, notes, and reflogs
 - `github.token` or `GITHUB_TOKEN`
 
@@ -106,7 +106,9 @@ reset the workspace.
 
 No capture command may print configuration or remotes.
 `git config --list` and `git remote -v` are not allowed.
-`symbolic-ref` and `check-ref-format` are the only Git commands added.
+`symbolic-ref` and `check-ref-format` read the branch name. The base
+tree is read with `rev-parse`, `ls-tree`, and `cat-file`
+([git objects](git-objects.md)).
 
 ## Checkout fixture
 
@@ -143,9 +145,9 @@ and reports no metadata digest.
 
 ## Out of scope
 
-Copying the trees and blobs of the captured base commit is designed in
-[git objects](git-objects.md) and is not implemented. Synthesizing a
-commit, filling the `github` context, and publishing a
+The trees and blobs of the captured base commit are copied
+([git objects](git-objects.md)). Commit objects stay excluded.
+Synthesizing a commit, filling the `github` context, and publishing a
 GitHub-equivalence claim are later work. Each of those still needs its
 own design. The owned checkout in [checkout](checkout.md) does not
 authorize them.
