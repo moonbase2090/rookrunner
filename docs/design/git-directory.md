@@ -159,7 +159,8 @@ The checkout step still does not replace captured files.
 
 ## Out of scope
 
-Filling the `github` context, fetching, and persisting a credential
-each still need their own design. This design does not authorize those
-behaviors. A `run` step has the owned directory when the store is
-present.
+Filling the `github` context is designed in
+[dogfood check](dogfood-check.md) and is not started. Fetching an
+action and persisting a credential still need their implementing
+slices. This design does not authorize those behaviors. A `run` step
+has the owned directory when the store is present.

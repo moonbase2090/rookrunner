@@ -154,7 +154,7 @@ The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). The original commit object stays
 excluded. One synthesized commit for that tree is stored
 ([synthesized commit](synthesized-commit.md)). When the object store is present, materialize writes an owned `.git`
-([Git directory](git-directory.md)). Filling the `github` context and publishing a
-GitHub-equivalence claim are later work. Each of those still needs its
-own design. The owned checkout in [checkout](checkout.md) does not
-authorize them.
+([Git directory](git-directory.md)). Filling the `github` context is
+designed in [dogfood check](dogfood-check.md) and is not started.
+Publishing a GitHub-equivalence claim remains later work. The owned
+checkout in [checkout](checkout.md) does not authorize either.

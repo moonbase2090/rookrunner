@@ -183,7 +183,8 @@ disk budget counts them. The default budget stays
 
 One synthesized commit for the stored tree is written
 ([synthesized commit](synthesized-commit.md)). When the object store is present, materialize writes an owned `.git`
-([Git directory](git-directory.md)). Fetching, persisting a credential,
-and filling the `github` context each still need their own design. A
-`run` step has that directory when the store is present. This design
-does not authorize fetching or a credential.
+([Git directory](git-directory.md)). Filling the `github` context is
+designed in [dogfood check](dogfood-check.md) and is not started.
+Fetching an action and persisting a credential still need their
+implementing slices. A `run` step has that directory when the store is
+present. This design does not authorize fetching or a credential.

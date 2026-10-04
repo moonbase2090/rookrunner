@@ -96,6 +96,7 @@ The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). One synthesized commit for that tree
 is stored ([synthesized commit](synthesized-commit.md)). When the store is present, materialize writes an owned `.git`
 ([Git directory](git-directory.md)). The checkout step does not create
-it. Fetching, persisting a credential, and filling the `github`
-context each need their own design. This design does not authorize
-those behaviors.
+it. Filling the `github` context is designed in
+[dogfood check](dogfood-check.md) and is not started. Fetching an
+action and persisting a credential still need their implementing
+slices. This design does not authorize those behaviors.

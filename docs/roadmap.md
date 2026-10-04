@@ -12,7 +12,7 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | Not started. Scheduled 2026-10-03 as NS-30–NS-43, after NS-29 |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31–NS-43 are not started |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
 
@@ -68,7 +68,7 @@ claim implies complete GitHub Actions compatibility.
 Proposed 2026-10-03 from the owner's priorities. The slices are NS-30
 through NS-43 in [next steps](planning/next-steps.md).
 
-1. Design the dogfood path, with one document for every `check.yml` gap (NS-30).
+1. Design the dogfood path, with one document for every `check.yml` gap (NS-30, designed).
 2. Accept read-only `permissions` and a SHA-pinned `actions/checkout` (NS-31, NS-32).
 3. Fill the `github` and `runner` contexts and the default variables (NS-33).
 4. Resolve remote actions pinned by full commit SHA, provide Node 24, and
