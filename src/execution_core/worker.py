@@ -8,7 +8,8 @@ caller-pinned container. That container uses Docker network `bridge` unless
 this worker was started with network `none`. It mounts the Docker engine
 socket only when this worker was started with the docker socket flag. The
 job then keeps the caller uid and is added to the groups that can open
-that socket.
+that socket. `worker --node24 DIR` mounts that directory read-only at
+`/opt/node24`. It is not added to `PATH`. The worker does not download Node.
 Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
@@ -42,6 +43,8 @@ from .actions import DEFAULT_ACTION_REMOTE, ActionStore
 from .artifacts import ArtifactError, file_identity, read_bytes, written_files
 from .attempt import AttemptError, materialize_attempt
 from .disk import DEFAULT_DISK_BUDGET, usage
+from .node24 import MOUNT as _NODE24_MOUNT
+from .node24 import inspect_node24
 from .plan import PlanError, plan_snapshot, remote_action_records
 from .run import (
     CONTAINER_NAME,
@@ -230,6 +233,7 @@ class Worker:
         network=DEFAULT_NETWORK,
         docker_socket=False,
         action_remote=None,
+        node24=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
@@ -246,6 +250,7 @@ class Worker:
             action_remote = str(remote_root)
         self.network = network
         self.docker_socket = docker_socket
+        self.node24 = None if node24 is None else inspect_node24(node24)
         self.action_remote = action_remote
         self._action_store = None
         if disk_budget is None:
@@ -755,6 +760,7 @@ class Worker:
             network=self.network,
             docker_socket=self.docker_socket,
             event_name=event_name,
+            node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
         )
 
     def _abandoned(self, run_id):
@@ -827,6 +833,8 @@ class Worker:
                 },
                 steps=steps,
             )
+        if "node24" in outcome:
+            current["node24"] = outcome["node24"]
         current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
         self.db.execute(
             "UPDATE runs SET log=? WHERE id=?",
@@ -1167,7 +1175,7 @@ class Worker:
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
-            return {
+            described = {
                 "protocol_versions": [0, 1],
                 "worker_id": self.worker_id,
                 "repository": self.repository,
@@ -1195,6 +1203,12 @@ class Worker:
                 },
                 "retention": "runs and submission keys retained indefinitely; pruning unsupported",
             }
+            if self.node24 is not None:
+                described["node24"] = {
+                    "digest": self.node24["digest"],
+                    "mount": _NODE24_MOUNT,
+                }
+            return described
         if method == "run.submit":
             if isinstance(p, dict) and is_integer(p.get("version")) and int(p["version"]) == 1:
                 return self.submit_workflow(p)
@@ -1474,8 +1488,22 @@ class Worker:
             self.close()
 
 
-def serve(repository, state, disk_budget=None, network=DEFAULT_NETWORK, docker_socket=False):
-    worker = Worker(repository, state, disk_budget, network=network, docker_socket=docker_socket)
+def serve(
+    repository,
+    state,
+    disk_budget=None,
+    network=DEFAULT_NETWORK,
+    docker_socket=False,
+    node24=None,
+):
+    worker = Worker(
+        repository,
+        state,
+        disk_budget,
+        network=network,
+        docker_socket=docker_socket,
+        node24=node24,
+    )
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()

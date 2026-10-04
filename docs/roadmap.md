@@ -12,7 +12,7 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-34 implemented. NS-35–NS-43 are not started |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-35 implemented. NS-36–NS-43 are not started |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
 
@@ -71,8 +71,9 @@ through NS-43 in [next steps](planning/next-steps.md).
 1. Design the dogfood path, with one document for every `check.yml` gap (NS-30, designed).
 2. Accept read-only `permissions` (NS-31, implemented) and a SHA-pinned `actions/checkout` (NS-32, implemented).
 3. Fill the `github` and `runner` contexts and the default variables (NS-33, implemented).
-4. Resolve remote actions pinned by full commit SHA (NS-34, implemented), provide Node 24, and
-   run `node24` JavaScript actions through `main` and `post` (NS-35–NS-37). Next is NS-35.
+4. Resolve remote actions pinned by full commit SHA (NS-34, implemented) and provide Node 24
+   (NS-35, implemented). Run `node24` JavaScript actions through `main` and `post` (NS-36–NS-37).
+   Next is NS-36.
 5. Record this repository's `check.yml` run from the CLI (NS-38).
 6. Design owner CI. Report runs as commit statuses, evaluate `on` for push
    and pull request, and poll owner repositories from an OS-scheduled pass

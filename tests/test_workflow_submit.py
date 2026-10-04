@@ -173,6 +173,7 @@ class WorkflowSubmitTests(unittest.TestCase):
         )
         for name in ("uses", "secrets", "matrix", "services", "actions", "checkout"):
             self.assertNotIn(name, described["capabilities"])
+        self.assertNotIn("node24", described)
 
     def test_acceptance_binds_digests_and_ignores_later_checkout_edits(self):
         self.write_workflows()
