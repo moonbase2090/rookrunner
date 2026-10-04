@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-09-24",
+  "as_of": "2026-10-03",
   "project": "rookrunner",
   "epics": [
     {
@@ -246,7 +246,7 @@
       "key": "actions",
       "title": "Run checkout and reusable action steps",
       "milestone": "Compatibility-2",
-      "horizon": "Next",
+      "horizon": "Now",
       "outcome": "Authors can run a checkout/setup/build workflow with owned action resolution and runtimes.",
       "exit_evidence": "A pinned checkout plus setup plus build fixture completes with action provenance, lifecycle and cleanup evidence.",
       "owner": "codex-rr",
@@ -268,7 +268,10 @@
           "owner": "codex-rr",
           "size": "M",
           "kind": "story",
-          "id": "RR-16"
+          "id": "RR-16",
+          "next_steps": [
+            "NS-34"
+          ]
         },
         {
           "key": "checkout",
@@ -287,7 +290,11 @@
           "owner": "codex-rr",
           "size": "M",
           "kind": "story",
-          "id": "RR-17"
+          "id": "RR-17",
+          "next_steps": [
+            "NS-23",
+            "NS-32"
+          ]
         },
         {
           "key": "javascript",
@@ -306,7 +313,12 @@
           "owner": "codex-rr",
           "size": "M",
           "kind": "story",
-          "id": "RR-18"
+          "id": "RR-18",
+          "next_steps": [
+            "NS-35",
+            "NS-36",
+            "NS-37"
+          ]
         },
         {
           "key": "composite",
@@ -330,6 +342,212 @@
         }
       ],
       "id": "RR-15"
+    },
+    {
+      "key": "dogfood",
+      "title": "Run this repository's check.yml end to end from the CLI",
+      "milestone": "CI-1",
+      "horizon": "Now",
+      "outcome": "Rookrunner runs its own .github/workflows/check.yml (checkout, setup-uv, uv sync, ruff, unittest) and reports a terminal result tied to an identified commit.",
+      "exit_evidence": "NS-38 validation record: succeeded with exit_code 0 for an identified commit, a forced ruff failure ends failed, all digests recorded.",
+      "owner": "build-seat",
+      "stories": [
+        {
+          "key": "dogfooddesign",
+          "title": "Design the check.yml dogfood path",
+          "role": "engine implementer",
+          "value": "settle github.sha, runner directories, action fetch, Node provisioning and node20 policy once",
+          "acceptance": [
+            "Each check.yml element maps to a slice or to existing behavior.",
+            "Each answer cites GitHub documentation or is labeled an intentional local difference.",
+            "No limit without a cited GitHub limit; no code change."
+          ],
+          "depends_on": [],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "spike",
+          "next_steps": [
+            "NS-30"
+          ]
+        },
+        {
+          "key": "permissions",
+          "title": "Accept read-only permissions",
+          "role": "workflow author",
+          "value": "plan workflows that declare least-privilege permissions",
+          "acceptance": [
+            "read-all, {}, and read or none scopes plan and run.",
+            "write, write-all and unknown scopes fail planning by name and create no run."
+          ],
+          "depends_on": [
+            "dogfooddesign"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "story",
+          "next_steps": [
+            "NS-31"
+          ]
+        },
+        {
+          "key": "context",
+          "title": "Fill the github and runner contexts and default variables",
+          "role": "workflow author",
+          "value": "use actions and tools that read documented default variables",
+          "acceptance": [
+            "Documented default variables and matching context properties are set per the NS-30 design.",
+            "event_name is an optional normalized submit field; github.token stays empty.",
+            "Attempt directories are removed with the attempt and count toward the disk budget."
+          ],
+          "depends_on": [
+            "dogfooddesign"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "story",
+          "next_steps": [
+            "NS-33"
+          ]
+        },
+        {
+          "key": "dogfoodproof",
+          "title": "Record check.yml running under Rookrunner",
+          "role": "developer",
+          "value": "trust Rookrunner with this repository's own checks",
+          "acceptance": [
+            "One succeeded+0 run and one failed run for a ruff violation, with commit, snapshot, plan, image, Node and action digests.",
+            "Queued, running, cancelled, lost and unknown are never reported as success.",
+            "The GitHub-hosted result for the same commit is recorded as an observed reference."
+          ],
+          "depends_on": [
+            "permissions",
+            "checkout",
+            "context",
+            "resolve",
+            "javascript"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "verification",
+          "next_steps": [
+            "NS-38"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "ownerci",
+      "title": "Report CI results for owner repositories to GitHub",
+      "milestone": "CI-1",
+      "horizon": "Next",
+      "outcome": "Pushes and same-repository pull requests on owner repositories run under Rookrunner and receive a truthful commit status.",
+      "exit_evidence": "NS-43 validation record: statuses posted for this repository match Rookrunner terminal results beside the GitHub-hosted result for the same SHAs.",
+      "owner": "build-seat",
+      "stories": [
+        {
+          "key": "cidesign",
+          "title": "Design CI for owner repositories",
+          "role": "project owner",
+          "value": "decide trigger, source, trust, reporting and credential before posting anything",
+          "acceptance": [
+            "Trigger, source, event payload, reporting, credential, limits and coexistence are answered with citations.",
+            "Owner decisions stay open until recorded.",
+            "A planner gap inventory covers Rookrunner, Scorecard and website push/PR workflows."
+          ],
+          "depends_on": [
+            "dogfoodproof"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "spike",
+          "next_steps": [
+            "NS-39"
+          ]
+        },
+        {
+          "key": "status",
+          "title": "Report a run as a commit status",
+          "role": "developer",
+          "value": "see Rookrunner's result on the commit in GitHub",
+          "acceptance": [
+            "Only a clean capture whose base_commit equals the SHA is reported.",
+            "Only succeeded with exit_code 0 maps to success.",
+            "The credential never reaches state, logs, snapshots or job containers."
+          ],
+          "depends_on": [
+            "cidesign"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "story",
+          "next_steps": [
+            "NS-40"
+          ]
+        },
+        {
+          "key": "ontriggers",
+          "title": "Evaluate on filters for push and pull_request",
+          "role": "workflow author",
+          "value": "run only the workflows GitHub would run for an event",
+          "acceptance": [
+            "Branch, tag, path and type filters, including ignore forms, are tested.",
+            "The documented 1,000-commit and 3,000-file rules are tested.",
+            "A non-matching workflow creates no run and does not consume the key."
+          ],
+          "depends_on": [
+            "cidesign",
+            "context"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "story",
+          "next_steps": [
+            "NS-41"
+          ]
+        },
+        {
+          "key": "poll",
+          "title": "Poll an owner repository and run its CI",
+          "role": "machine owner",
+          "value": "get CI without a listener or resident service",
+          "acceptance": [
+            "A pass submits each new same-repository push and pull request once and posts pending, then the final status.",
+            "Fork pull requests never run.",
+            "The 24-hour self-hosted queue time and rate-limit headers are honored."
+          ],
+          "depends_on": [
+            "status",
+            "ontriggers"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "story",
+          "next_steps": [
+            "NS-42"
+          ]
+        },
+        {
+          "key": "ciproof",
+          "title": "Record Rookrunner reporting its own CI",
+          "role": "project owner",
+          "value": "rely on Rookrunner statuses for this repository",
+          "acceptance": [
+            "Statuses for one push and one pull request match Rookrunner terminal results.",
+            "A forced ruff failure posts failure.",
+            "No credential appears in the record or state."
+          ],
+          "depends_on": [
+            "poll",
+            "dogfoodproof"
+          ],
+          "owner": "build-seat",
+          "size": "M",
+          "kind": "verification",
+          "next_steps": [
+            "NS-43"
+          ]
+        }
+      ]
     },
     {
       "key": "advanced",
@@ -490,7 +708,7 @@
       "key": "agents",
       "title": "Give coding agents reliable execution tools",
       "milestone": "M3",
-      "horizon": "Next",
+      "horizon": "Later",
       "outcome": "Agents can submit, reconnect, inspect and cancel through the same contract as CLI users.",
       "exit_evidence": "CLI and MCP agree on identifiers, outcomes, bounded logs and errors in end-to-end fixtures.",
       "owner": "codex-rr",
