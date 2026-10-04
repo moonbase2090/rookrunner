@@ -10,9 +10,9 @@ those captured files. NS-23 accepts `uses: actions/checkout@v4` as that
 checkout. It does not replace captured files, persist a credential, or
 create `.git`. Other checkout inputs stay rejected. NS-24 designs a
 copy of the trees and blobs of the captured base commit, and NS-25
-stores those objects. Commit objects stay excluded. Synthesizing a
-commit, creating a `.git` directory, and filling the `github` context
-are not started.
+stores those objects. Commit objects stay excluded. NS-26 designs
+one synthesized commit for that tree and does not write it. Creating
+a `.git` directory and filling the `github` context are not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -24,7 +24,8 @@ stay excluded. An owned checkout accepts `uses: actions/checkout@v4`
 and does not replace those files, persist a credential, or create
 `.git`. Other checkout inputs stay rejected. The trees and blobs of
 the captured base commit are stored beside the manifest. Commit
-objects stay excluded. The act pin stays historical.
+objects stay excluded. A synthesized commit for that tree is designed
+and is not implemented. The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -1013,11 +1014,38 @@ Acceptance criteria:
 - A non-empty alternates file fails capture and publishes nothing.
 - The workspace has no `.git`, no `git.json`, and no object store.
 
+**NS-26. Synthesize a commit for the captured tree.**
+
+Status: designed. The design is
+[synthesized commit](../design/synthesized-commit.md). This slice does
+not write a commit object.
+
+When the object store is present, the following PR may write one new
+commit whose tree is the stored base tree. The name, email, timestamp,
+and message are fixed. They are not read from the original commit.
+The commit has no parents. An unborn repository and an excluded path
+still store nothing. The original commit object stays excluded. The
+capability version stays 9.
+
+https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
+https://www.rfc-editor.org/rfc/rfc2606
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- A written design names the one commit a later PR may write.
+- That commit does not copy the original author, committer, message,
+  timestamp, or parents.
+- Creating a `.git` directory and filling the `github` context remain
+  unstarted.
+
 ## After the first path
 
-The trees and blobs of the captured base commit are copied.
-Synthesizing a commit, creating a `.git` directory, and filling the
-`github` context are not started. A later `run` step still has no Git
+The trees and blobs of the captured base commit are copied. A
+synthesized commit for that tree is designed in NS-26 and is not
+implemented. Creating a `.git` directory and filling the `github`
+context are not started. A later `run` step still has no Git
 repository. None of this work is authorized to call the result
 GitHub-equivalent.
 

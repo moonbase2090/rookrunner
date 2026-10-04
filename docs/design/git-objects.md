@@ -20,8 +20,9 @@ nothing, and capture still succeeds.
 
 Parent commits are not walked. Tags, notes, and reflogs are not walked.
 Commit objects are not copied. A commit object carries an author, a
-committer, and a message. Copying one belongs to synthesizing a commit,
-and that design is not started.
+committer, and a message. A synthesized commit for the stored tree is
+designed in [synthesized commit](synthesized-commit.md) and is not
+implemented.
 
 The copied blobs are the committed bytes of that one tree. Captured
 files stay the dirty working bytes. The object copy does not reset the
@@ -167,12 +168,15 @@ disk budget counts them. The default budget stays
   the committed bytes.
 - A non-empty alternates file fails capture and publishes nothing.
 - The workspace has no `.git`, no `git.json`, and no `objects`.
-- Synthesizing a commit, creating a `.git` directory, and filling the
-  `github` context remain unstarted.
+- Creating a `.git` directory and filling the `github` context remain
+  unstarted. A synthesized commit is designed separately and is not
+  implemented.
 
 ## Out of scope
 
-Synthesizing a commit, creating a `.git` directory, fetching,
-persisting a credential, and filling the `github` context each still
-need their own design. A later `run` step still has no Git repository.
-This design does not authorize those behaviors.
+A synthesized commit for the stored tree is designed in
+[synthesized commit](synthesized-commit.md) and is not implemented.
+Creating a `.git` directory, fetching, persisting a credential, and
+filling the `github` context each still need their own design. A later
+`run` step still has no Git repository. This design does not authorize
+those behaviors.

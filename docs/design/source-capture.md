@@ -81,7 +81,9 @@ optional index locks, prompts, and lazy fetching. No local `.git` configuration,
 credentials, hooks, or remote URLs are copied. The trees and blobs of
 the captured base commit are stored as loose objects beside the manifest
 ([git objects](git-objects.md)). That directory is not a Git
-repository. A later Git command inside the workspace still has no
+repository. A synthesized commit for that tree is designed in
+[synthesized commit](synthesized-commit.md) and is not implemented.
+A later Git command inside the workspace still has no
 repository. `uses: actions/checkout@v4`
 is an owned checkout of the captured files and does not fetch or replace
 them. Other checkout actions stay rejected. The

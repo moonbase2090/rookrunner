@@ -146,8 +146,9 @@ and reports no metadata digest.
 ## Out of scope
 
 The trees and blobs of the captured base commit are copied
-([git objects](git-objects.md)). Commit objects stay excluded.
-Synthesizing a commit, filling the `github` context, and publishing a
-GitHub-equivalence claim are later work. Each of those still needs its
-own design. The owned checkout in [checkout](checkout.md) does not
-authorize them.
+([git objects](git-objects.md)). The original commit object stays
+excluded. A synthesized commit is designed in
+[synthesized commit](synthesized-commit.md) and is not implemented.
+Filling the `github` context and publishing a GitHub-equivalence claim
+are later work. Each of those still needs its own design. The owned
+checkout in [checkout](checkout.md) does not authorize them.
