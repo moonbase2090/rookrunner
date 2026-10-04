@@ -118,12 +118,14 @@ workspace receives neither `.git`, nor `git.json`, nor `objects/`.
   timestamp, or parents. `base_commit` and `git.json` stay unchanged.
 - An unborn repository, and a base tree that contains an excluded
   path, store no commit. Capture still succeeds.
-- Creating a `.git` directory and filling the `github` context remain
-  unstarted.
+- An owned `.git` directory is designed in
+  [Git directory](git-directory.md) and is not written. Filling the
+  `github` context remains unstarted.
 
 ## Out of scope
 
-Creating a `.git` directory, fetching, persisting a credential, and
-filling the `github` context each still need their own design. A later
-`run` step still has no Git repository. This design does not authorize
-those behaviors.
+An owned `.git` directory is designed in
+[Git directory](git-directory.md) and is not written. Fetching,
+persisting a credential, and filling the `github` context each still
+need their own design. A later `run` step still has no Git repository.
+This design does not authorize those behaviors.

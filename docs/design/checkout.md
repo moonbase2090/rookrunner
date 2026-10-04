@@ -91,7 +91,9 @@ added.
 
 The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). One synthesized commit for that tree
-is stored ([synthesized commit](synthesized-commit.md)). Creating a
-`.git` directory, fetching, persisting a credential, and filling the
-`github` context each need their own design. A later `run` step still
-has no Git repository. This design does not authorize those behaviors.
+is stored ([synthesized commit](synthesized-commit.md)). An owned
+`.git` directory for the attempt workspace is designed
+([Git directory](git-directory.md)) and is not written. Fetching,
+persisting a credential, and filling the `github` context each need
+their own design. A later `run` step still has no Git repository.
+This design does not authorize those behaviors.
