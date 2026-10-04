@@ -20,8 +20,9 @@ code 1 at the Ruff step. The record is
 [dogfood check](../validation/dogfood-check.md). NS-39 designs owner
 CI in [owner CI](../design/owner-ci.md). The credential stays an
 owner decision. NS-40 posts one commit status. NS-41 evaluates `on`
-for push and pull request. The next slice is NS-42. NS-42 and NS-43
-are not started.
+for push and pull request. A tag push skips the path filters. Tags
+under `pull_request` are ignored. NS-42 polls one owner repository.
+The next slice is NS-43.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1728,7 +1729,9 @@ names is closed by a later run of
 `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`, which ended `succeeded`
 with exit code 0. That record is in the same document. NS-39 designs
 owner CI. NS-40 posts one commit status. NS-41 evaluates `on` for
-push and pull request. The next slice is NS-42.
+push and pull request. A tag push skips the path filters. Tags under
+`pull_request` are ignored. NS-42 polls one owner repository. The
+next slice is NS-43.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.
@@ -1904,18 +1907,22 @@ Acceptance criteria:
 
 Status: implemented. Submission checks `on` when `event_name` is
 `push` or `pull_request`. A non-match returns `{"triggered": false}`,
-creates no run, and does not consume the key. The capability version
-stays 12. A version 11 plan is not migrated. The next slice is NS-42.
+creates no run, and does not consume the key. A tag push skips the
+path filters. `tags` and `tags-ignore` under `pull_request` are
+ignored. The capability version stays 12. A version 11 plan is not
+migrated.
 
 When `event_name` (NS-33) is `push` or `pull_request`, submission
 checks `on` before acceptance:
 
 - The event name must be listed.
 - `push` checks `branches`, `branches-ignore`, `tags`, `tags-ignore`,
-  `paths`, and `paths-ignore`.
+  `paths`, and `paths-ignore`. A tag push skips the path filters. A
+  matching tag runs even when the changed-file list is empty.
 - `pull_request` checks `types`, `branches`, `branches-ignore`,
   `paths`, and `paths-ignore`. The default types are `opened`,
-  `synchronize`, and `reopened`.
+  `synchronize`, and `reopened`. `tags` and `tags-ignore` under
+  `pull_request` are ignored. They are not rejected.
 
 Patterns follow the workflow syntax filter rules. The snapshot has no
 history, so the caller supplies the changed-file list. When the push
@@ -1940,7 +1947,10 @@ Acceptance criteria:
 
 **NS-42. Poll an owner repository and run its CI.**
 
-Status: not started. It depends on NS-40 and NS-41. NS-41 is implemented.
+Status: implemented. The CLI command is `poll`. It runs one pass for
+one configured repository and then exits. The capability version stays
+12. A version 11 plan is not migrated. The next slice is NS-43. It
+depends on NS-40 and NS-41.
 
 A one-shot poll command handles one configured repository. The OS
 scheduler starts it. Each pass:
@@ -1976,6 +1986,21 @@ Acceptance criteria:
   - A fork pull request runs nothing.
 - The 24-hour queue rule and rate-limit exhaustion are tested.
 - The credential rules from NS-40 hold.
+
+The `poll` command is that pass. Each list request is one conditional
+page of 100 and does not send the credential. The credential is read only when a status is
+posted. The first observation of a branch uses forty `0` characters as
+`before` and reports the diff unavailable, so path filters are skipped.
+A later push diffs the stored tip. A pull request is `opened` on its
+first observation and `synchronize` when the head or base SHA changes.
+A missing merge ref is recorded and runs nothing. The submission key
+is `poll-` plus the SHA-256 of the repository, event, tested SHA,
+workflow, and job. Poll state is `poll.json` in the state directory
+and does not store the credential. A response with nothing remaining
+on `x-ratelimit-remaining` is not applied; the next pass resumes from
+the last checkpoint. This pass lists branches and open pull requests.
+It does not list tags. An older queued run is not cancelled when a
+newer SHA arrives. This is not a GitHub-equivalence claim.
 
 **NS-43. Rookrunner reports its own CI.**
 

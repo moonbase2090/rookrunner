@@ -128,6 +128,23 @@ class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
         raise StatusError("STATUS_REJECTED", f"GitHub status request failed with HTTP {code}")
 
 
+def header_remaining(headers):
+    """Return x-ratelimit-remaining, or None when the header is absent."""
+
+    if headers is None:
+        return None
+    raw = headers.get("x-ratelimit-remaining")
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return value
+
+
 def _rate_limited(code, headers):
     if code == 429:
         return True
@@ -155,6 +172,7 @@ def post_status(api_base, repository, sha, state, context, token):
     try:
         with opener.open(request, timeout=STATUS_TIMEOUT_SECONDS) as response:
             code = response.status
+            remaining = header_remaining(response.headers)
             response.read(64)
     except StatusError:
         raise
@@ -176,3 +194,4 @@ def post_status(api_base, repository, sha, state, context, token):
         raise StatusError("STATUS_REJECTED", "GitHub status request failed") from None
     if code not in {200, 201}:
         raise StatusError("STATUS_REJECTED", f"GitHub status request failed with HTTP {code}")
+    return remaining

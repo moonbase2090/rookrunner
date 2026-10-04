@@ -44,7 +44,9 @@ The owner's 2026-10-03 priorities change the horizons:
   `bb634af7a211540ab54070179b7c6c873cf9c7d4` stays `failed` with exit
   code 137. NS-39 designs owner CI. The credential stays an owner
   decision. NS-40 posts one commit status. NS-41 evaluates `on` for
-  push and pull request. The next slice is NS-42.
+  push and pull request. A tag push skips the path filters. Tags under
+  `pull_request` are ignored. NS-42 polls one owner repository. The
+  next slice is NS-43.
   The capability version stays 12.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
@@ -52,7 +54,7 @@ The owner's 2026-10-03 priorities change the horizons:
 - **Next:** the `ownerci` epic reports push and pull request results for
   owner repositories to GitHub as commit statuses. NS-39 designs that
   path. NS-40 posts one commit status. NS-41 evaluates `on` for push
-  and pull request. NS-42 and NS-43 implement the rest and are not
+  and pull request. NS-42 polls one owner repository. NS-43 is not
   started.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
 

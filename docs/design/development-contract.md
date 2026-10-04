@@ -71,7 +71,7 @@ submission key. `workflow_dispatch` and `schedule` are not evaluated.
 Without `event_name`, `on` is not evaluated. The caller supplies the
 changed-file list. A push with `commit_count` above 1,000, or
 `diff_unavailable`, skips path filters. Only the first 3,000 changed
-files count. Branch, tag, and activity-type filters still apply. The stored image digest keeps the `sha256:` prefix.
+files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. The next slice is NS-43. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
