@@ -10,7 +10,12 @@ containers, an owned checkout of the captured files for
 commit SHA, and a read-only `permissions` value.
 That checkout does not fetch a ref, replace
 those files, or persist a credential. The SHA is stored and is not verified. It checks that expressions can be
-parsed and does not evaluate them. Matrix `include` and `exclude` are expanded here. A matrix value that
+parsed and does not evaluate them. `run`, `env`, `with`, and step and
+job `name` are checked, including mixed text. The plan stores the
+source. Workflow `name`, service `env`, and action output `value`
+that is not one whole expression stay unchecked. `secrets` is not
+available in the checked text positions. `hashFiles` is unsupported.
+Status functions are not accepted there. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
 snapshot. A remote workflow reference is rejected. Secrets are not passed
 to a called workflow. A service image must be pinned by digest. GitHub
@@ -43,9 +48,13 @@ from .expr import (
     check_call_default,
     check_call_output,
     check_call_with,
+    check_job_env,
     check_job_if,
+    check_job_name,
     check_job_output,
     check_step_if,
+    check_step_text,
+    check_workflow_env,
 )
 from .protocol import canonical
 
@@ -433,7 +442,7 @@ class _Planner:
             "name": self._optional_string(body, "", "name"),
             "on": self._on(body) if "on" in body else None,
             "defaults": self._defaults(body, ""),
-            "env": self._env(body, ""),
+            "env": self._env(body, "", check_workflow_env),
         }
         permissions = self._permissions(body, "")
         if permissions is not None:
@@ -586,14 +595,18 @@ class _Planner:
         )
         return declared
 
-    def _env(self, items, field):
+    def _env(self, items, field, check=None):
         if "env" not in items:
             return {}
         path = _join(field, "env")
         body = self._mapping(items["env"][1], path)
-        return {
+        recorded = {
             key: self._string_scalar(value, _join(path, key)) for key, (_, value) in body.items()
         }
+        if check is not None:
+            for key, value in recorded.items():
+                self._check_expression(value, _join(path, key), check)
+        return recorded
 
     def _services(self, items, field):
         """Record service containers. An omitted key is an empty list.
@@ -780,11 +793,11 @@ class _Planner:
         recorded = {
             "id": job_id,
             "location": _location(job_node),
-            "name": self._optional_string(job_body, job_field, "name"),
+            "name": self._checked_name(job_body, job_field, check_job_name),
             "needs": self._needs(job_body, job_field, job_id),
             "runs_on": self._runs_on(job_body, job_field),
             "defaults": self._defaults(job_body, job_field),
-            "env": self._env(job_body, job_field),
+            "env": self._env(job_body, job_field, check_job_env),
             "outputs": self._outputs(job_body, job_field),
             "timeout_minutes": self._timeout_minutes(job_body, job_field),
             "strategy": self._strategy(job_body, job_field),
@@ -868,7 +881,7 @@ class _Planner:
         recorded = {
             "id": job_id,
             "location": _location(node),
-            "name": self._optional_string(items, field, "name"),
+            "name": self._checked_name(items, field, check_job_name),
             "needs": self._needs(items, field, job_id),
             "outputs": {},
             "call": {
@@ -975,7 +988,7 @@ class _Planner:
     def _called_workflow(self, body):
         recorded = {
             "name": self._optional_string(body, "", "name"),
-            "env": self._env(body, ""),
+            "env": self._env(body, "", check_workflow_env),
             "defaults": self._defaults(body, ""),
         }
         permissions = self._permissions(body, "")
@@ -1386,13 +1399,15 @@ class _Planner:
                 "index": index,
                 "location": _location(child),
                 "id": self._optional_string(body, step_field, "id"),
-                "name": self._optional_string(body, step_field, "name"),
+                "name": self._checked_name(body, step_field, check_step_text),
                 "shell": self._optional_string(body, step_field, "shell"),
                 "working_directory": self._optional_string(body, step_field, "working-directory"),
-                "env": self._env(body, step_field),
+                "env": self._env(body, step_field, check_step_text),
             }
             if has_run:
-                recorded["run"] = self._string_scalar(body["run"][1], _join(step_field, "run"))
+                run_field = _join(step_field, "run")
+                recorded["run"] = self._string_scalar(body["run"][1], run_field)
+                self._check_expression(recorded["run"], run_field, check_step_text)
             else:
                 uses_field = _join(step_field, "uses")
                 uses_text = self._string_scalar(body["uses"][1], uses_field)
@@ -1708,9 +1723,9 @@ class _Planner:
                     spec["required"][1], _join(item_field, "required")
                 )
             if "default" in spec:
-                item["default"] = self._string_scalar(
-                    spec["default"][1], _join(item_field, "default")
-                )
+                default_field = _join(item_field, "default")
+                item["default"] = self._string_scalar(spec["default"][1], default_field)
+                self._check_expression(item["default"], default_field, check_step_text)
             if "deprecationMessage" in spec:
                 item["deprecation_message"] = self._string_scalar(
                     spec["deprecationMessage"][1],
@@ -1846,31 +1861,31 @@ class _Planner:
                 if step_id in seen_ids:
                     _invalid(f"{step_field}: duplicate step id", step_field)
                 seen_ids.add(step_id)
+            run_field = _join(step_field, "run")
             recorded = {
                 "index": index,
                 "location": _location(child),
                 "id": step_id,
-                "name": self._optional_string(step_body, step_field, "name"),
-                "run": self._string_scalar(step_body["run"][1], _join(step_field, "run")),
+                "name": self._checked_name(step_body, step_field, check_step_text),
+                "run": self._string_scalar(step_body["run"][1], run_field),
                 "shell": shell,
                 "working_directory": self._optional_string(
                     step_body, step_field, "working-directory"
                 ),
-                "env": self._checked_env(step_body, step_field),
+                "env": self._env(step_body, step_field, check_step_text),
             }
+            self._check_expression(recorded["run"], run_field, check_step_text)
             condition = self._if_text(step_body, step_field, check_step_if)
             if condition is not None:
                 recorded["if"] = condition
             steps.append(recorded)
         return steps
 
-    def _checked_env(self, items, field):
-        recorded = self._env(items, field)
-        path = _join(field, "env")
-        for key, value in recorded.items():
-            if _whole_expression(value):
-                self._check_expression(value, _join(path, key), check_step_if)
-        return recorded
+    def _checked_name(self, items, field, check):
+        name = self._optional_string(items, field, "name")
+        if name is not None:
+            self._check_expression(name, _join(field, "name"), check)
+        return name
 
     def _action_with(self, items, field, inputs):
         if "with" not in items:
@@ -1883,8 +1898,7 @@ class _Planner:
             if key not in inputs:
                 _invalid(f"{key_field}: input is not defined", key_field)
             text = self._string_scalar(value, key_field)
-            if _whole_expression(text):
-                self._check_expression(text, key_field, check_step_if)
+            self._check_expression(text, key_field, check_step_text)
             recorded[key] = text
         return recorded
 

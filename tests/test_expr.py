@@ -4,12 +4,17 @@ from pathlib import Path
 
 from execution_core.expr import (
     ExprError,
+    check_job_env,
     check_job_if,
+    check_job_name,
     check_job_output,
     check_step_if,
+    check_step_text,
+    check_workflow_env,
     evaluate,
     job_is_enabled,
     mentions_context,
+    render_text,
     step_is_enabled,
 )
 from execution_core import expr
@@ -166,3 +171,55 @@ class ExpressionTests(unittest.TestCase):
         with self.assertRaises(ExprError) as raised:
             check_job_output("hashFiles('*.txt')")
         self.assertIn("function is not available: hashFiles", str(raised.exception))
+
+
+class TextExpressionTests(unittest.TestCase):
+    def test_mixed_text_inserts_string_forms(self):
+        self.assertEqual(render_text("plain", VALUES), "plain")
+        self.assertEqual(render_text("  ${{ true }}  ", VALUES), "true")
+        self.assertEqual(render_text("${{ false }}", VALUES), "false")
+        self.assertEqual(render_text("${{ null }}", VALUES), "")
+        self.assertEqual(render_text("${{ 7 }}", VALUES), "7")
+        self.assertEqual(
+            render_text("hello ${{ 'Mona' }} ${{ env.MODE }}", VALUES),
+            "hello Mona ci",
+        )
+        self.assertEqual(render_text("echo ${{ 'a}b' }}", VALUES), "echo a}b")
+        self.assertEqual(render_text("pre ${{ 'a${{b' }} post", VALUES), "pre a${{b post")
+        inserted = dict(VALUES)
+        inserted["env"] = {"MODE": "${{ github.sha }}"}
+        self.assertEqual(render_text("v=${{ env.MODE }}", inserted), "v=${{ github.sha }}")
+
+    def test_unclosed_and_nested_expressions_are_errors(self):
+        for source in ("echo ${{ github.sha", "echo ${{ 1 ${{ 2 }} }}", "${{ }}", "${{   }}"):
+            with self.assertRaises(ExprError):
+                render_text(source, VALUES)
+            with self.assertRaises(ExprError):
+                check_step_text(source)
+
+    def test_text_positions_withhold_secrets_status_and_hashfiles(self):
+        check_step_text("echo ${{ github.sha }}")
+        check_step_text("hello ${{ inputs.who }}")
+        with self.assertRaises(ExprError) as raised:
+            check_step_text("echo ${{ secrets.TOKEN }}")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_step_text("echo ${{ hashFiles('*.txt') }}")
+        self.assertIn("function is not available: hashFiles", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_step_text("echo ${{ success() }}")
+        self.assertIn("expression is not accepted", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_job_env("${{ env.LEVEL }}")
+        self.assertIn("context is not available: env", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_job_env("${{ secrets.TOKEN }}")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_workflow_env("${{ needs.build.result }}")
+        self.assertIn("context is not available: needs", str(raised.exception))
+        with self.assertRaises(ExprError) as raised:
+            check_job_name("build ${{ secrets.TOKEN }}")
+        self.assertIn("context is not available: secrets", str(raised.exception))
+        check_job_name("build ${{ matrix.os }}")
+        check_workflow_env("${{ github.workflow }}")

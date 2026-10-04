@@ -46,7 +46,8 @@ The owner's 2026-10-03 priorities change the horizons:
   decision. NS-40 posts one commit status. NS-41 evaluates `on` for
   push and pull request. A tag push skips the path filters. Tags under
   `pull_request` are ignored. NS-42 polls one owner repository. NS-43
-  recorded those statuses.
+  recorded those statuses. NS-44 evaluates expressions in `run`,
+  `env`, `with`, and step and job `name`, including mixed text.
   The capability version stays 12.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
@@ -55,9 +56,10 @@ The owner's 2026-10-03 priorities change the horizons:
   owner repositories to GitHub as commit statuses. NS-39 designs that
   path. NS-40 posts one commit status. NS-41 evaluates `on` for push
   and pull request. NS-42 polls one owner repository. NS-43 recorded
-  the statuses. The next work is the provisional list in
-  [next steps](next-steps.md), which is not numbered yet. The first
-  item is concurrency.
+  the statuses. NS-44 evaluates expressions in `run`, `env`, `with`,
+  and step and job `name`, including mixed text. The next work is the
+  rest of the provisional list in [next steps](next-steps.md), which is
+  not numbered yet. The next item is concurrency.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
 
 The `dogfood` and `ownerci` stories in the [backlog manifest](backlog.json)
