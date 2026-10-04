@@ -635,7 +635,7 @@ class Worker:
             self.save(record)
 
     def _execute_workflow(self, record, request, lease):
-        workspace = Path(self.state) / "attempts" / record["attempt_id"]
+        attempt_root = Path(self.state) / "attempts" / record["attempt_id"]
         try:
             if self._blocked_attempt(record.get("attempt_id")):
                 self._refuse_reused_attempt(record)
@@ -643,7 +643,7 @@ class Worker:
             try:
                 outcome = self._run_accepted(record, request, lease)
             except _Abandoned:
-                self._remove_workspace(workspace)
+                self._remove_workspace(attempt_root)
                 return
             except Exception as exc:
                 message = (
@@ -708,19 +708,32 @@ class Worker:
         # for the attempt workspace. Do not delete the snapshot or other evidence.
         if self._over_budget(reserve):
             raise RunError("SETUP_FAILED", _STORAGE_FULL)
-        materialize_attempt(snapshot, pinned["digest"], attempts / record["attempt_id"])
+        attempt_root = attempts / record["attempt_id"]
+        workspace = attempt_root / "workspace"
+        try:
+            attempt_root.mkdir(mode=0o700)
+        except FileExistsError as exc:
+            raise RunError("SETUP_FAILED", "attempt directory is not accepted") from exc
+        try:
+            os.chmod(attempt_root, 0o700)
+            materialize_attempt(snapshot, pinned["digest"], workspace)
+        except Exception:
+            self._remove_workspace(attempt_root)
+            raise
         if self._abandoned(record["run_id"]):
             raise _Abandoned()
+        event_name = request.get("event_name") if isinstance(request, dict) else None
         return run_job(
             snapshot,
             pinned["digest"],
-            attempts / record["attempt_id"],
+            workspace,
             planned["plan"],
             image,
             event,
             owner=owner,
             network=self.network,
             docker_socket=self.docker_socket,
+            event_name=event_name,
         )
 
     def _abandoned(self, run_id):
@@ -894,12 +907,23 @@ class Worker:
             return current
 
     def submit_workflow(self, p):
-        fields(p, ("version", "submission_key", "workflow", "job_id", "event", "image"))
+        fields(
+            p,
+            ("version", "submission_key", "workflow", "job_id", "event", "image"),
+            ("event_name",),
+        )
         key = p["submission_key"]
         if not utf8_string(key, 1, 128):
             invalid("submission_key must be a UTF-8 string of 1 to 128 characters")
         if not utf8_string(p["workflow"], 1, 1024) or not utf8_string(p["job_id"], 1, 128):
             invalid("workflow and job_id must be UTF-8 strings within their limits")
+        if "event_name" in p and (
+            not utf8_string(p["event_name"], 1, 128)
+            or "\0" in p["event_name"]
+            or "\n" in p["event_name"]
+            or "\r" in p["event_name"]
+        ):
+            invalid("event_name must be a UTF-8 string of 1 to 128 characters")
         if not isinstance(p["image"], str) or not (
             _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
         ):
@@ -908,15 +932,16 @@ class Worker:
             event_text = canonical(p["event"])
         except (TypeError, ValueError, UnicodeError):
             invalid("event input is not accepted")
-        normalized = canonical(
-            {
-                "version": 1,
-                "workflow": p["workflow"],
-                "job_id": p["job_id"],
-                "event": p["event"],
-                "image": p["image"],
-            }
-        )
+        submitted = {
+            "version": 1,
+            "workflow": p["workflow"],
+            "job_id": p["job_id"],
+            "event": p["event"],
+            "image": p["image"],
+        }
+        if "event_name" in p:
+            submitted["event_name"] = p["event_name"]
+        normalized = canonical(submitted)
         existing = self.db.execute(
             "SELECT request, record FROM runs WHERE submission_key=?", (key,)
         ).fetchone()
@@ -1057,7 +1082,7 @@ class Worker:
             "SELECT 1 FROM artifacts WHERE run_id=? LIMIT 1", (record["run_id"],)
         ).fetchone():
             return
-        workspace = self.state / "attempts" / attempt_id
+        workspace = self.state / "attempts" / attempt_id / "workspace"
         snapshot_id = record["input"].get("snapshot_id")
         if not isinstance(snapshot_id, str) or not _ATTEMPT_ID.fullmatch(snapshot_id):
             return
@@ -1300,7 +1325,7 @@ class Worker:
                 raise Fault(
                     "CAPABILITY_UNSUPPORTED", "development fixtures do not publish artifacts"
                 )
-            workspace = self.state / "attempts" / record["attempt_id"]
+            workspace = self.state / "attempts" / record["attempt_id"] / "workspace"
             try:
                 size, digest = file_identity(workspace, row[1])
                 if size != row[2] or digest != row[3]:

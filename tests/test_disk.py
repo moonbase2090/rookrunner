@@ -9,6 +9,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+from execution_core.attempt import AttemptError
 from execution_core.cli import call
 from execution_core.disk import DEFAULT_DISK_BUDGET, usage
 from execution_core.protocol import canonical
@@ -265,6 +266,71 @@ class DiskBudgetTests(unittest.TestCase):
                 worker.disk_budget = 0
                 again = self._workflow(worker, "wf-run")
                 self.assertEqual(again["result"]["run_id"], record["run_id"])
+            finally:
+                worker.close()
+
+    def test_materialize_failure_removes_the_attempt_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-run")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                with patch(
+                    "execution_core.worker.materialize_attempt",
+                    side_effect=AttemptError(
+                        "ATTEMPT_FAILED",
+                        "attempt workspace could not be materialized",
+                    ),
+                ):
+                    worker._execute_workflow(record, request, ContainerLease())
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "failed")
+                self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
+                self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
+    def test_home_file_bytes_count_toward_the_disk_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-a")
+                self.assertEqual(accepted["result"]["state"], "queued")
+                home = state / "attempts" / "11111111-1111-4111-8111-111111111111" / "home"
+                home.mkdir(parents=True)
+                before = usage(state)
+                (home / "blob").write_bytes(b"h" * 8192)
+                self.assertGreaterEqual(usage(state) - before, 8192)
+                worker.disk_budget = before
+                refused = self._workflow(worker, "wf-b")
+                self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
+                self.assertIsNone(
+                    worker.db.execute(
+                        "SELECT 1 FROM runs WHERE submission_key=?", ("wf-b",)
+                    ).fetchone()
+                )
+                worker._remove_workspace(home.parent)
+                self.assertFalse(home.parent.exists())
             finally:
                 worker.close()
 

@@ -8,6 +8,8 @@ import tempfile
 import time
 import unittest
 
+from jsonschema import ValidationError
+
 from execution_core.cli import call
 from execution_core.plan import MAX_WORKFLOW_BYTES
 from execution_core.protocol import canonical
@@ -206,6 +208,55 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assertEqual(
             self.await_state(development["run_id"], {"succeeded"})["state"], "succeeded"
         )
+
+    def test_event_name_is_part_of_the_submission_and_not_the_record(self):
+        self.write_workflows()
+        validator("run.submit.request").validate(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "run.submit",
+                "params": self.params(submission_key="named", event_name="push"),
+            }
+        )
+        first = self.rpc("run.submit", self.params(submission_key="named", event_name="push"))
+        self.assertNotIn("event_name", first["input"])
+        retry = self.rpc("run.submit", self.params(submission_key="named", event_name="push"))
+        self.assertEqual(retry["run_id"], first["run_id"])
+        for params in (
+            self.params(submission_key="named", event_name="pull"),
+            self.params(submission_key="named"),
+        ):
+            conflict = call(self.state, "run.submit", params)
+            self.assert_fault(conflict, "IDEMPOTENCY_CONFLICT")
+        self.assertEqual(len(self.rpc("run.list", {})["runs"]), 1)
+        listed = len(self.rpc("run.list", {})["runs"])
+        omitted = self.rpc("run.submit", self.params(submission_key="plain"))
+        self.assertNotEqual(omitted["run_id"], first["run_id"])
+        self.assertNotIn("event_name", omitted["input"])
+        for name in ("", "push\n", "push\r", "push\0more", "x" * 129, 1):
+            refused = call(
+                self.state,
+                "run.submit",
+                self.params(submission_key=f"bad-{name!r}"[:120], event_name=name),
+            )
+            self.assert_fault(refused, "INVALID_PARAMS", -32602)
+        self.assertEqual(len(self.rpc("run.list", {})["runs"]), listed + 1)
+        with self.assertRaises(ValidationError):
+            validator("run.submit.request").validate(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "run.submit",
+                    "params": self.params(event_name="push\n"),
+                }
+            )
+        accepted = self.rpc(
+            "run.submit",
+            self.params(submission_key="after-invalid", event_name="name=push"),
+        )
+        self.assertEqual(accepted["state"], "queued")
+        self.assertNotIn("event_name", accepted["input"])
 
     def test_invalid_workflow_creates_no_run(self):
         self.write_workflows()

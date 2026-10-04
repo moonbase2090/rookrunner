@@ -118,9 +118,14 @@ class ArtifactManifestTests(unittest.TestCase):
                 record = accepted["result"]
                 attempt_id = str(uuid.uuid4())
                 snapshot = state / "snapshots" / record["input"]["snapshot_id"]
-                workspace = state / "attempts" / attempt_id
+                attempt = state / "attempts" / attempt_id
+                attempt.mkdir(parents=True)
+                workspace = attempt / "workspace"
                 shutil.copytree(snapshot / "files", workspace, symlinks=True)
                 (workspace / "source.txt").write_bytes(b"changed")
+                home = attempt / "home"
+                home.mkdir(mode=0o700)
+                (home / "secret.txt").write_bytes(b"not-an-artifact")
                 payload = b"x" * 50
                 (workspace / "out").mkdir()
                 (workspace / "out" / "demo.txt").write_bytes(payload)
@@ -170,6 +175,8 @@ class ArtifactManifestTests(unittest.TestCase):
                 self.assertNotIn("keep.txt", json.dumps(listed))
                 self.assertNotIn("leak", json.dumps(listed))
                 self.assertNotIn("secret-bytes", json.dumps(listed))
+                self.assertNotIn("secret.txt", json.dumps(listed))
+                self.assertNotIn("not-an-artifact", json.dumps(listed))
                 blob = bytearray()
                 offset = 0
                 ended = False
@@ -228,7 +235,9 @@ class ArtifactManifestTests(unittest.TestCase):
                 record = accepted["result"]
                 attempt_id = str(uuid.uuid4())
                 snapshot = state / "snapshots" / record["input"]["snapshot_id"]
-                workspace = state / "attempts" / attempt_id
+                attempt = state / "attempts" / attempt_id
+                attempt.mkdir(parents=True)
+                workspace = attempt / "workspace"
                 shutil.copytree(snapshot / "files", workspace, symlinks=True)
                 (workspace / "out").mkdir()
                 (workspace / "out" / "from-run.txt").write_bytes(b"kept")

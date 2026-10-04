@@ -54,9 +54,18 @@ def submit_params(parser, args):
             event = strict_json(args.event)
         except (ValueError, RecursionError, UnicodeError):
             parser.error("--event must be one JSON value")
+        event_name = args.event_name
+        if event_name is not None and (
+            event_name == ""
+            or len(event_name) > 128
+            or "\0" in event_name
+            or "\n" in event_name
+            or "\r" in event_name
+        ):
+            parser.error("--event-name must be 1 to 128 characters without a newline")
         # Version 1 has no backend field. --backend is accepted so the
         # fixture-shaped command can add the workflow flags.
-        return {
+        params = {
             "version": 1,
             "submission_key": args.key,
             "workflow": args.workflow,
@@ -64,6 +73,11 @@ def submit_params(parser, args):
             "event": event,
             "image": args.image,
         }
+        if event_name is not None:
+            params["event_name"] = event_name
+        return params
+    if args.event_name is not None:
+        parser.error("--event-name is only accepted with a workflow submit")
     if args.backend is None:
         parser.error("fixture submit requires --backend development")
     return {
@@ -175,6 +189,13 @@ def main():
     submit.add_argument("--workflow", help="workflow path inside the worker's repository")
     submit.add_argument("--job-id", help="job to run from that workflow")
     submit.add_argument("--event", help="one JSON value stored as the version 1 event input")
+    submit.add_argument(
+        "--event-name",
+        help=(
+            "optional event name for a version 1 workflow submit. "
+            "It is part of the submission. Omit it to leave github.event_name unset"
+        ),
+    )
     submit.add_argument("--image", help="digest-pinned image id or name@sha256 pin")
     follow = commands.add_parser(
         "follow", help="poll status and log pages until the run is terminal"
