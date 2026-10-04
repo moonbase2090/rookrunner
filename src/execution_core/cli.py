@@ -6,6 +6,7 @@ import sys
 import time
 
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
+from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
 from .worker import serve
 from .snapshot import CaptureError, SourceCapture
 
@@ -130,6 +131,71 @@ def follow_run(state, run_id):
         time.sleep(POLL_SECONDS)
 
 
+def _status_params(args, record=None):
+    params = {
+        "run_id": args.run_id,
+        "tested_commit": args.tested_commit,
+        "status_sha": args.status_sha,
+        "context": args.context,
+    }
+    if record is not None:
+        params["record"] = record
+    return params
+
+
+def _print_status_error(error):
+    print(
+        canonical(
+            {
+                "error": {
+                    "kind": error.kind,
+                    "message": str(error),
+                    "retryable": error.retryable,
+                }
+            }
+        ),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def report_status(args):
+    """Post one status after the worker accepts the run. Skip a repeated terminal state."""
+
+    reply = call(args.state, "run.status", _status_params(args))
+    if "error" in reply:
+        print(canonical(reply))
+        sys.exit(1)
+    decision = reply["result"]
+    if decision["action"] == "skip":
+        print(canonical(reply))
+        return
+    if decision["action"] != "post":
+        raise ValueError("worker status decision was not post or skip")
+    described = call(args.state, "worker.describe", {})
+    if "error" in described:
+        print(canonical(described))
+        sys.exit(1)
+    try:
+        token = read_credential(args.credential_file, args.state, described["result"]["repository"])
+        try:
+            post_status(
+                args.api_base,
+                args.repository,
+                args.status_sha,
+                decision["state"],
+                args.context,
+                token,
+            )
+        finally:
+            token = None
+    except StatusError as error:
+        _print_status_error(error)
+    recorded = call(args.state, "run.status", _status_params(args, decision["state"]))
+    print(canonical(recorded))
+    sys.exit(1 if "error" in recorded else 0)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rookrunner development execution contract")
     parser.add_argument("--state", required=True, help="private worker state directory")
@@ -225,11 +291,34 @@ def main():
     listing.add_argument("--cursor")
     listing.add_argument("--limit", type=int)
     listing.add_argument("--filter-state", dest="state_filter")
+    status = commands.add_parser("status", help="post one commit status for one workflow run")
+    status.add_argument("run_id")
+    status.add_argument("--repository", required=True, help="GitHub repository as owner/name")
+    status.add_argument("--status-sha", required=True, help="commit that receives the status")
+    status.add_argument(
+        "--tested-commit",
+        required=True,
+        help="commit the snapshot base must equal; the pull-request merge commit",
+    )
+    status.add_argument("--context", required=True)
+    status.add_argument(
+        "--credential-file",
+        required=True,
+        help="operator token file read only when a status is posted",
+    )
+    status.add_argument(
+        "--api-base",
+        default=DEFAULT_API_BASE,
+        help=f"GitHub API origin (default {DEFAULT_API_BASE})",
+    )
     args = parser.parse_args()
     try:
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)
             print(canonical({"snapshot": result}))
+            return
+        if args.command == "status":
+            report_status(args)
             return
         if args.command == "worker":
             serve(

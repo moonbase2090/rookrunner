@@ -44,6 +44,7 @@ repository lock. The repository must exist but need not yet be a Git checkout.
 | `run.artifacts` | `run_id` | `cursor`, `limit` |
 | `artifact.read` | `artifact_id` | `offset`, `limit` |
 | `run.cancel` | `version: 0`, `run_id` | none |
+| `run.status` | `run_id`, `tested_commit`, `status_sha`, `context` | `record` |
 
 `run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
 On a workflow run it returns a page of artifact entries and `next_cursor`.
@@ -51,6 +52,11 @@ An entry has `id`, workspace-relative `path`, `size`, and SHA-256 `digest`.
 A workflow run that wrote no files returns an empty list, not a capability
 error. `artifact.read` returns base64 bytes, `next_offset`, and
 `end_of_stream`. A path that leaves the attempt workspace is rejected.
+`run.status` decides whether one commit status may be posted. It refuses,
+with no recorded post, unless the run is a workflow run, the snapshot is
+clean, `included` is empty, and `base_commit` equals `tested_commit`. The
+credential is not a parameter. `record` stores the state that was posted.
+The same terminal state for that run, context, and status SHA is `skip`.
 Unknown methods return `METHOD_NOT_FOUND`. On version 0, workflow, command,
 secret, and source selection parameters are unsupported and rejected.
 

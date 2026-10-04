@@ -403,5 +403,21 @@
       }
     },
     "valid": true
+  },
+  {
+    "name": "run.status",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.status",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "tested_commit": "0123456789abcdef0123456789abcdef01234567",
+        "status_sha": "abcdef0123456789abcdef0123456789abcdef01",
+        "context": "rookrunner/check.yml/check"
+      }
+    },
+    "valid": true
   }
 ]

@@ -93,7 +93,8 @@ Implemented:
 
 - A user-owned Unix socket and SQLite state for one bound repository.
 - Protocol version 0 methods: `worker.describe`, `run.submit`, `run.get`,
-  `run.list`, `run.logs`, `run.artifacts`, `artifact.read`, and `run.cancel`.
+  `run.list`, `run.logs`, `run.artifacts`, `artifact.read`, `run.cancel`,
+  and `run.status`.
   The CLI submits an explicit `development` fixture, or a version 1 workflow
   job with `--workflow`, `--job-id`, `--event`, and `--image`. `follow` polls
   that run's status and log pages until the run is terminal. Fixture text is
@@ -291,7 +292,7 @@ it. The worker is not an unattended production service.
 | Dashboard direction | Runnable visual options, then a selection. | Dashboard implementation |
 | Private remote workers and managed capacity | Discovery only. Each needs its own requirements. Neither blocks the local preview. | Any remote or hosted design |
 | Event payload and workflow wire version | The workflow methods in the protocol draft are not the implemented v0 submit body. They need a negotiated version. | Workflow acceptance |
-| Reporting results to GitHub | Designed 2026-10-04 as CI-1 in [owner CI](design/owner-ci.md): commit statuses for the owner's own repositories, from a clean capture of the tested commit. Outbound HTTPS only. No listener. Commit statuses are the reporting form. The credential type stays an owner decision. | Posting any status |
+| Reporting results to GitHub | NS-40 posts one commit status for one clean workflow run ([owner CI](design/owner-ci.md)). The status SHA and the tested commit may differ. Outbound HTTPS only. No listener. The credential type stays an owner decision and is read at call time from an operator file. | Choosing the credential and polling owner repositories |
 
 Source capture of tracked working files plus explicitly included untracked
 files is no longer an open product choice. It is the implemented capture

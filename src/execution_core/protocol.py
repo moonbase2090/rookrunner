@@ -21,6 +21,7 @@ METHODS = [
     "run.artifacts",
     "artifact.read",
     "run.cancel",
+    "run.status",
 ]
 ERROR_CODES = {
     "PARSE_ERROR": -32700,
@@ -38,6 +39,7 @@ ERROR_CODES = {
     "STORAGE_FULL": -32000,
     "SOURCE_UNSTABLE": -32000,
     "ACTION_UNAVAILABLE": -32000,
+    "STATUS_REFUSED": -32000,
 }
 
 

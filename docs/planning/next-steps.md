@@ -19,8 +19,8 @@ exit code 0. A disposable ruff violation ended `failed` with exit
 code 1 at the Ruff step. The record is
 [dogfood check](../validation/dogfood-check.md). NS-39 designs owner
 CI in [owner CI](../design/owner-ci.md). The credential stays an
-owner decision. The next slice is NS-40. NS-40 through NS-43 are
-not started.
+owner decision. NS-40 posts one commit status. The next slice is
+NS-41. NS-41 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1726,7 +1726,7 @@ with exit code 1 at the Ruff step. The record is
 names is closed by a later run of
 `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`, which ended `succeeded`
 with exit code 0. That record is in the same document. NS-39 designs
-owner CI. The next slice is NS-40.
+owner CI. NS-40 posts one commit status. The next slice is NS-41.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.
@@ -1850,7 +1850,9 @@ Acceptance criteria:
 
 **NS-40. Report a run to GitHub as a commit status.**
 
-Status: not started. It follows NS-39.
+Status: implemented. The CLI command is `status`. The capability version
+stays 12. A version 11 plan is not migrated. The credential type stays
+the open owner decision. It follows NS-39.
 
 A CLI command posts one commit status for one run. The command takes
 the run, the repository, the status SHA, and the context. The status
