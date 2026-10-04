@@ -95,6 +95,8 @@ at `/github/runner-temp` and `/github/tool-cache`. `HOME` is `/github/home`.
 `CI` is `true`. Jobs in one plan share that container and the attempt
 workspace. They run one at a time. `RUNNER_TEMP` is emptied at the start
 of each job. `HOME` and `RUNNER_TOOL_CACHE` are not.
+An optional Node 24 directory is mounted read-only at `/opt/node24`.
+It is not added to `PATH`. This module does not download Node.
 
 A step may name a local composite action with `uses` instead of `run`.
 Planning a snapshot reads `action.yml` (or `action.yaml`) from that
@@ -156,6 +158,8 @@ import threading
 import time
 
 from .commands import ENV_NAME as _ENV_NAME
+from .node24 import BINARY as _NODE24_BINARY
+from .node24 import inspect_node24, node_version
 from .commands import mask_text, parse_env, parse_output, parse_path, process_stdout
 from .expr import ExprError, evaluate, job_is_enabled, mentions_context, step_is_enabled
 from .plan import (
@@ -926,6 +930,46 @@ def _discover_socket(docker):
     return _CONTAINER_SOCKET
 
 
+def _accept_node24(node24):
+    """Return the inspected directory, or None when the caller omits it."""
+
+    if node24 is None:
+        return None
+    if not isinstance(node24, tuple) or len(node24) != 2 or not isinstance(node24[1], str):
+        _setup("node directory is not accepted")
+    try:
+        inspected = inspect_node24(node24[0])
+    except ValueError as exc:
+        _setup("node directory is not accepted", exc)
+    if inspected["digest"] != node24[1]:
+        _setup("node directory changed")
+    return inspected
+
+
+def _read_node_version(docker, name, deadline):
+    """Return the version line from the mounted Node 24 binary."""
+
+    try:
+        code, stdout, _stderr = _invoke_within(
+            docker,
+            ["exec", name, _NODE24_BINARY, "--version"],
+            30,
+            deadline,
+        )
+    except _Timeout:
+        _setup("Node 24 did not start")
+    if code != 0:
+        _setup("Node 24 did not start")
+    try:
+        text = stdout.decode("utf-8")
+    except UnicodeError as exc:
+        _setup("node is not Node 24", exc)
+    try:
+        return node_version(text)
+    except ValueError as exc:
+        _setup("node is not Node 24", exc)
+
+
 def _job_socket(docker, docker_socket):
     """Return `(host path, gid)` or `(None, None)` when the job gets no socket."""
 
@@ -949,7 +993,16 @@ def _job_socket(docker, docker_socket):
 
 
 def _create_args(
-    name, workspace, private, commands, reference, network, socket_path, socket_gid, runner_dirs
+    name,
+    workspace,
+    private,
+    commands,
+    reference,
+    network,
+    socket_path,
+    socket_gid,
+    runner_dirs,
+    node_root,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -989,6 +1042,13 @@ def _create_args(
             f"type=bind,source={runner_dirs['tool-cache']},destination={_TOOL_CACHE}",
         ]
     )
+    if node_root is not None:
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={node_root},destination=/opt/node24,readonly",
+            ]
+        )
     if socket_path is not None:
         args.extend(
             [
@@ -1746,6 +1806,7 @@ def run_job(
     network=DEFAULT_NETWORK,
     docker_socket=False,
     event_name=None,
+    node24=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -1768,12 +1829,15 @@ def run_job(
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
     `docker_socket` is off unless the caller passes true or a socket path.
+    `node24` is omitted, or a `(directory, digest)` pair. The directory is
+    mounted read-only at `/opt/node24` and is not placed on `PATH`.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket.
     """
 
     if network not in _NETWORKS:
         _setup("container network is not accepted")
+    node_mount = _accept_node24(node24)
     if event_name is not None and (
         not isinstance(event_name, str)
         or event_name == ""
@@ -1798,6 +1862,7 @@ def run_job(
     created = False
     graceful = False
     outcome = None
+    mounted = None
     failure = None
     records = []
     service_cleanup = 0
@@ -1836,6 +1901,7 @@ def run_job(
                 socket_path,
                 socket_gid,
                 runner_dirs,
+                None if node_mount is None else node_mount["root"],
             ),
             60,
             deadline,
@@ -1855,6 +1921,11 @@ def run_job(
             docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30, deadline
         )
         bash_ok = probe == 0
+        if node_mount is not None:
+            mounted = {
+                "digest": node_mount["digest"],
+                "version": _read_node_version(docker_bin, name, deadline),
+            }
         failed = None
         output_bytes = 0
 
@@ -2206,6 +2277,8 @@ def run_job(
         raise failure
     if cleanup_code != 0 or service_cleanup != 0:
         _setup("container cleanup failed")
+    if outcome is not None and mounted is not None:
+        outcome["node24"] = mounted
     return outcome
 
 

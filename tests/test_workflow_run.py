@@ -125,18 +125,21 @@ class WorkflowRunTests(unittest.TestCase):
             subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         self.tmp.cleanup()
 
-    def spawn(self, env=None):
+    def spawn(self, env=None, extra=None):
+        command = [
+            sys.executable,
+            "-m",
+            "execution_core",
+            "--state",
+            str(self.state),
+            "worker",
+            "--repository",
+            str(self.repo),
+        ]
+        if extra:
+            command.extend(extra)
         process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "execution_core",
-                "--state",
-                str(self.state),
-                "worker",
-                "--repository",
-                str(self.repo),
-            ],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -155,8 +158,8 @@ class WorkflowRunTests(unittest.TestCase):
                 process.communicate(timeout=5)
         self.processes.clear()
 
-    def start_worker(self, env=None, timeout=5):
-        process = self.spawn(env)
+    def start_worker(self, env=None, timeout=5, extra=None):
+        process = self.spawn(env, extra=extra)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -239,6 +242,51 @@ class WorkflowRunTests(unittest.TestCase):
         }
         body.update(overrides)
         return body
+
+    def test_node24_is_recorded_on_the_run_and_stays_read_only(self):
+        self.assertNotIn("node24", self.rpc("worker.describe", {}))
+        self.worker.terminate()
+        self.worker.communicate(timeout=5)
+        node = self.root / "node24"
+        binary = node / "bin" / "node"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.0.0'\n")
+        binary.chmod(0o755)
+        self.worker = self.start_worker(extra=["--node24", str(node)])
+        described = self.rpc("worker.describe", {})
+        self.assertEqual(described["node24"]["mount"], "/opt/node24")
+        self.assertNotIn(str(node), json.dumps(described))
+        self.write_workflow(
+            """\
+name: demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - id: version
+        run: /opt/node24/bin/node --version
+      - id: path
+        run: printf '%s' "$PATH"
+      - id: write
+        run: |
+          if touch /opt/node24/probe 2>/dev/null; then exit 4; fi
+          printf '%s' kept
+"""
+        )
+        submitted = self.rpc("run.submit", self.params(submission_key="node24"))
+        self.assertNotIn("node24", submitted)
+        done = self.await_state(submitted["run_id"], {"succeeded", "failed"})
+        self.assertEqual(done["state"], "succeeded", done.get("error"))
+        self.assertEqual(done["exit_code"], 0)
+        self.assertEqual(done["node24"]["digest"], described["node24"]["digest"])
+        self.assertEqual(done["node24"]["version"], "v24.0.0")
+        self.assertEqual(done["steps"][0]["stdout"], "v24.0.0\n")
+        self.assertNotIn("/opt/node24", done["steps"][1]["stdout"])
+        self.assertEqual(done["steps"][2]["stdout"], "kept")
+        self.assertFalse((node / "probe").exists())
+        self.assertTrue(binary.read_text().startswith("#!/bin/sh\n"))
+        self.assertNotIn(str(node), json.dumps(done))
 
     def test_success_uses_captured_bytes_and_records_digests(self):
         self.write_workflow(SUCCESS)

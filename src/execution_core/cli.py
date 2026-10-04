@@ -169,6 +169,14 @@ def main():
             "Off by default. Host credential directories stay unmounted."
         ),
     )
+    worker.add_argument(
+        "--node24",
+        help=(
+            "unpacked Node.js 24 Linux distribution for the image architecture. "
+            "Mounted read-only at /opt/node24 and not added to PATH. "
+            "The worker does not download Node."
+        ),
+    )
     commands.add_parser("describe")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
@@ -228,6 +236,7 @@ def main():
                 args.disk_budget_bytes,
                 args.network,
                 args.docker_socket,
+                node24=args.node24,
             )
             return
         if args.command == "describe":

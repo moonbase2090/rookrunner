@@ -843,6 +843,25 @@
             "unresolved"
           ]
         },
+        "node24": {
+          "type": "object",
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^v24\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?\\Z"
+            }
+          },
+          "required": [
+            "digest",
+            "version"
+          ],
+          "additionalProperties": false
+        },
         "steps": {
           "description": "Stored step records. GitHub documents no per-job step limit. https://docs.github.com/en/actions/reference/limits",
           "type": "array",
@@ -1260,6 +1279,22 @@
         },
         "retention": {
           "const": "runs and submission keys retained indefinitely; pruning unsupported"
+        },
+        "node24": {
+          "type": "object",
+          "properties": {
+            "digest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "mount": {
+              "const": "/opt/node24"
+            }
+          },
+          "required": [
+            "digest",
+            "mount"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

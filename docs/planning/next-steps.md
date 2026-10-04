@@ -6,8 +6,10 @@ and what is deferred. NS-30 designs the dogfood path and does not
 change the engine. NS-31 accepts read-only `permissions`. NS-32 accepts
 a SHA-pinned `actions/checkout` as the owned checkout. NS-33 fills the
 `github` and `runner` contexts and the default variables. NS-34 fetches
-a remote action pinned by a 40-character lowercase commit SHA. The
-capability version stays 11. NS-35 through NS-43 are not started.
+a remote action pinned by a 40-character lowercase commit SHA. NS-35
+mounts an operator-supplied Node 24 directory read-only at
+`/opt/node24`. The capability version stays 11. NS-36 through NS-43
+are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -45,7 +47,12 @@ repository, path, commit, and that digest. A later submission reuses the
 stored copy after the digest matches. A tag, a branch, a short SHA, and
 a 64-character pin are `CAPABILITY_UNSUPPORTED` and ask for a full SHA
 pin. A failed fetch is `ACTION_UNAVAILABLE`. It creates no run and does
-not consume the key. `node24` and `docker` still produce no plan. The
+not consume the key. `node24` and `docker` still produce no plan.
+`worker --node24 DIR` mounts that directory read-only at `/opt/node24`
+and does not put it on `PATH`. `worker.describe` reports its digest
+only when the flag is set. A run that uses the mount records that
+digest and the version `node --version` prints in the job container.
+The worker does not download Node. The
 fetched tree is not copied into the workspace `.git`.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
@@ -1550,7 +1557,17 @@ Acceptance criteria:
 
 **NS-35. Provide Node 24 to the job container.**
 
-Status: not started.
+Status: implemented. The capability version stays 11.
+
+`worker --node24 DIR` mounts that directory read-only at `/opt/node24`.
+The binary is `/opt/node24/bin/node`. It is not on `PATH`.
+`worker.describe` reports the content digest and that mount only when
+the flag is set. A run that starts the mount records the digest and
+the `node --version` line when that line is Node 24. A directory
+without an executable `bin/node`, a version that is not Node 24, or a
+directory that changes after the worker reads it fails without a
+successful run. The worker does not download Node. A `node24` action
+still produces no plan.
 
 `worker --node24 DIR` names an unpacked Node.js 24 Linux distribution
 for the image architecture, as NS-30 decides. The worker records a

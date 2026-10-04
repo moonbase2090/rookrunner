@@ -118,7 +118,11 @@ Implemented:
   a captured digest. A remote action pinned by 40 lowercase hexadecimal
   characters is fetched before acceptance and stored under its content
   digest. A remote composite's `run` steps execute from that plan.
-  `node24` and Docker actions are still rejected.
+  `node24` and Docker actions are still rejected. `worker --node24 DIR`
+  mounts that directory read-only at `/opt/node24` and does not put it
+  on `PATH`. `worker.describe` reports its digest only when the flag is
+  set. A run that uses the mount records that digest and the version
+  `node --version` prints. The worker does not download Node.
 - Version 1 `run.submit` accepts that job only after capture, verification,
   and planning. The worker records an attempt, then executes it with `run_job`
   in one caller-pinned container. Success is `succeeded` and exit code 0. A

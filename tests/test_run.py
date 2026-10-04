@@ -11,6 +11,7 @@ import time
 import unittest
 
 from execution_core.actions import ActionStore
+from execution_core.node24 import inspect_node24
 from execution_core.artifacts import written_files
 from execution_core.attempt import materialize_attempt
 from execution_core.disk import usage
@@ -910,6 +911,111 @@ jobs:
         self.assertEqual((workspace / "ran.txt").read_text(), "ok")
         self.assertEqual(plan["workflow"]["permissions"], {"contents": "read"})
         self.assertEqual(plan["job"]["permissions"], {"contents": "none"})
+
+    def test_node24_is_read_only_and_leaves_path_unchanged(self):
+        node = self.root / "node24"
+        binary = node / "bin" / "node"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.0.0'\n")
+        binary.chmod(0o755)
+        inspected = inspect_node24(node)
+        mounted_text = """\
+name: demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - id: version
+        run: /opt/node24/bin/node --version
+      - id: path
+        run: printf '%s' "$PATH"
+      - id: write
+        run: |
+          if touch /opt/node24/probe 2>/dev/null; then exit 4; fi
+          if printf x >> /opt/node24/bin/node 2>/dev/null; then exit 5; fi
+          printf '%s' kept
+"""
+        plain_text = """\
+name: demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - id: path
+        run: printf '%s' "$PATH"
+"""
+        mounted_root = self.root / "mounted"
+        mounted_root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(mounted_root, mounted_text)
+        before = len(self._calls()) if self.log.exists() else 0
+        mounted = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(mounted_text),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            node24=(inspected["root"], inspected["digest"]),
+        )
+        creates = [call for call in self._calls()[before:] if call and call[0] == "create"]
+        self.assertEqual(len(creates), 1)
+        mounts = [
+            item
+            for item in creates[0]
+            if item.startswith("type=bind,") and "destination=/opt/node24" in item
+        ]
+        self.assertEqual(
+            mounts,
+            [f"type=bind,source={inspected['root']},destination=/opt/node24,readonly"],
+        )
+        self.assertEqual(mounted["status"], "succeeded")
+        self.assertEqual(mounted["exit_code"], 0)
+        self.assertEqual(
+            mounted["node24"],
+            {"digest": inspected["digest"], "version": "v24.0.0"},
+        )
+        self.assertEqual(mounted["steps"][0]["stdout"], "v24.0.0\n")
+        self.assertEqual(mounted["steps"][2]["stdout"], "kept")
+        self.assertFalse((node / "probe").exists())
+        self.assertTrue(binary.read_text().startswith("#!/bin/sh\n"))
+        plain_root = self.root / "plain"
+        plain_root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(plain_root, plain_text)
+        plain = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(plain_text),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+        )
+        self.assertNotIn("node24", plain)
+        self.assertNotIn("/opt/node24", mounted["steps"][1]["stdout"])
+        self.assertEqual(mounted["steps"][1]["stdout"], plain["steps"][0]["stdout"])
+        wrong = self.root / "node20"
+        wrong_bin = wrong / "bin" / "node"
+        wrong_bin.parent.mkdir(parents=True)
+        wrong_bin.write_text("#!/bin/sh\nprintf '%s\\n' 'v20.0.0'\n")
+        wrong_bin.chmod(0o755)
+        wrong_info = inspect_node24(wrong)
+        with self.assertRaises(RunError) as caught:
+            run_job(
+                snapshot,
+                digest,
+                workspace,
+                _plan(plain_text),
+                self.image,
+                EVENT,
+                docker=str(self.docker),
+                node24=(wrong_info["root"], wrong_info["digest"]),
+            )
+        self.assertEqual(caught.exception.kind, "SETUP_FAILED")
+        self.assertEqual(str(caught.exception), "node is not Node 24")
+        self.assertNotIn(str(wrong), str(caught.exception))
 
     def test_steps_run_in_one_pinned_container(self):
         (self.repo / "source.txt").write_text("mutated checkout\n")

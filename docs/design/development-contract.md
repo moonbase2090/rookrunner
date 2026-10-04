@@ -192,7 +192,11 @@ not implemented. This is not a GitHub-equivalence claim.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,
-repository, version, readiness, and limits. A scheduler failure makes `ready=false`
+repository, version, readiness, and limits. `worker --node24 DIR` adds `node24`
+to that result, with the directory's content digest and mount `/opt/node24`.
+Without the flag the property is absent. A workflow run that uses the mount
+records the same digest and the Node 24 version printed in the job container.
+A scheduler failure makes `ready=false`
 with a `readiness_error`; new submissions then return `WORKER_NOT_READY`.
 Existing idempotent submissions can still retrieve their original record.
 Inspect records and restart to reconcile interrupted attempts before submitting
