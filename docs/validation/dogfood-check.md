@@ -147,10 +147,11 @@ Job: <https://github.com/moonbase2090/rookrunner/actions/runs/37217343292/job/11
 
 ## Command lines
 
-Worker, from the clean clone, state mode `0700`. `--network` omitted:
+Worker, from the clean clone, state mode `0700`. `--network` omitted.
+`$REPO` is the checkout root:
 
 ```
-PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state worker --repository /tmp/rookrunner-ns38-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64
+PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state worker --repository /tmp/rookrunner-ns38-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64
 ```
 
 Submit and follow used that state directory, submission key

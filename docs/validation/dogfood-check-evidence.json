@@ -283,15 +283,15 @@
   "host": {
     "uname_machine": "arm64",
     "docker": "linux/aarch64 29.8.0",
-    "cli_python": "/Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python"
+    "cli_python": "$REPO/.venv/bin/python"
   },
   "commands": {
-    "worker": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state worker --repository /tmp/rookrunner-ns38-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
-    "submit": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state submit --key ns38-check-bb634af-py3 --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for bb634af> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
-    "follow": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state follow f271e3b2-e92b-47d8-9751-063402fbf7e6",
-    "ruff_worker": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff worker --repository /tmp/rookrunner-ns38-ruff --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
-    "ruff_submit": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff submit --key ns38-ruff-violation --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for 4648b3e> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
-    "ruff_follow": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff follow 5770752f-7e8f-447e-97a1-cb5f910d53c5",
+    "worker": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state worker --repository /tmp/rookrunner-ns38-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
+    "submit": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state submit --key ns38-check-bb634af-py3 --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for bb634af> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "follow": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state follow f271e3b2-e92b-47d8-9751-063402fbf7e6",
+    "ruff_worker": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff worker --repository /tmp/rookrunner-ns38-ruff --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
+    "ruff_submit": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff submit --key ns38-ruff-violation --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for 4648b3e> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "ruff_follow": "PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff follow 5770752f-7e8f-447e-97a1-cb5f910d53c5",
     "network_flag": "omitted; the CLI default is bridge"
   }
 }
