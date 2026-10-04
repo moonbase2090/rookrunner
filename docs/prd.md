@@ -118,14 +118,15 @@ Implemented:
   a captured digest. A remote action pinned by 40 lowercase hexadecimal
   characters is fetched before acceptance and stored under its content
   digest. A remote composite's `run` steps execute from that plan.
-  A remote `node24` action with `main` and no `pre` or `post` runs as
-  one step from a copy mounted read-write at `/actions`. The store is
-  not mounted. `pre`, `post`, `node20`, and Docker actions are still
-  rejected. `worker --node24 DIR` mounts that directory read-only at
+  A remote `node24` action with `main` runs as one step from a copy
+  mounted read-write at `/actions`. Its `post` runs after the job's
+  main steps when that main ran. The store is not mounted. `pre`,
+  `node20`, and Docker actions are still rejected.
+  `worker --node24 DIR` mounts that directory read-only at
   `/opt/node24` and does not put it on `PATH`. `worker.describe`
   reports its digest only when the flag is set. A run that uses the
   mount records that digest and the version `node --version` prints.
-  The worker does not download Node. The capability version is 12.
+  The worker does not download Node. The capability version stays 12.
   A version 11 plan is not migrated.
 - Version 1 `run.submit` accepts that job only after capture, verification,
   and planning. The worker records an attempt, then executes it with `run_job`
@@ -176,7 +177,7 @@ the same job are implemented. Local composite actions from the snapshot are
 implemented. The differences are in the [next steps](planning/next-steps.md).
 A local reusable workflow is called from a job `uses` in the same
 snapshot. Inputs are boolean, number, or string. Secrets are not passed.
-A remote `node24` `main` is implemented. `post`, `node20`, and Docker
+A remote `node24` `main` and its `post` are implemented. `pre`, `node20`, and Docker
 actions remain later increments of the same engine. Those later increments are not promised in the first slice, and
 they are not permanently excluded. An owned checkout accepts
 `uses: actions/checkout@v4` and does not replace the captured files. A job may run service containers from

@@ -9,8 +9,9 @@ a SHA-pinned `actions/checkout` as the owned checkout. NS-33 fills the
 a remote action pinned by a 40-character lowercase commit SHA. NS-35
 mounts an operator-supplied Node 24 directory read-only at
 `/opt/node24`. NS-36 runs a remote `node24` `main` entry from a copy
-in the attempt. The capability version is 12. A version 11 plan is
-not migrated. NS-37 through NS-43 are not started.
+in the attempt. NS-37 runs that action's `post` after the job's main
+steps. The capability version stays 12. A version 11 plan is not
+migrated. NS-38 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -48,10 +49,16 @@ repository, path, commit, and that digest. A later submission reuses the
 stored copy after the digest matches. A tag, a branch, a short SHA, and
 a 64-character pin are `CAPABILITY_UNSUPPORTED` and ask for a full SHA
 pin. A failed fetch is `ACTION_UNAVAILABLE`. It creates no run and does
-not consume the key. A remote action with `runs.using: node24` and
-`main`, and no `pre` or `post`, runs as one step. The capability
-version is 12. A version 11 plan is not migrated. `pre`, `post`,
-`node20`, and `docker` still produce no plan.
+not consume the key. A remote action with `runs.using: node24` and `main` runs as one
+step. Its `post` runs after the job's main steps, in reverse order,
+when that main ran. An omitted `post-if` is `always()` and is
+evaluated against those main steps. `post-if: success()` skips the
+post when a main step failed. The post receives that action's
+`INPUT_*` values and `STATE_<name>` from its own `GITHUB_STATE`.
+A failed post fails the job. The first failed main step stays the
+reported failure. A caller cancel or a job deadline does not run
+post. The capability version stays 12. A version 11 plan is not
+migrated. `pre`, `node20`, and `docker` still produce no plan.
 `worker --node24 DIR` mounts that directory read-only at `/opt/node24`
 and does not put it on `PATH`. `worker.describe` reports its digest
 only when the flag is set. A run that uses the mount records that
@@ -1650,7 +1657,18 @@ Acceptance criteria:
 
 **NS-37. Run JavaScript `post` entries with `post-if`.**
 
-Status: not started.
+Status: implemented. The capability version stays 12. A version 11
+plan is not migrated.
+
+After a job's main steps, each `post` whose `main` ran executes in
+reverse order of those steps. An omitted `post-if` is `always()`.
+`post-if` is evaluated against the main steps' status. The post
+process receives the inputs its main received and `STATE_<name>` from
+that action's `GITHUB_STATE` only. Each post is its own step record
+after the main steps. A failed post fails the job. The first failed
+main step stays the reported failure. A caller cancel or a job
+deadline does not run post. `pre`, `node20`, and Docker stay rejected.
+`check.yml` does not run.
 
 After a job's main steps, `post` entries run in reverse order of their
 `main` steps. This applies to each action whose `main` ran. `post-if`

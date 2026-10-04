@@ -1327,6 +1327,267 @@ jobs:
         self.assertEqual(failed["steps"][1]["status"], "succeeded")
         self.assertEqual((fail_workspace / "still.txt").read_text(), "still")
 
+    def test_node24_post_runs_after_main_in_reverse_order(self):
+        node = self.root / "node24"
+        binary = node / "bin" / "node"
+        binary.parent.mkdir(parents=True)
+        binary.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--version" ]; then\n'
+            "  printf '%s\\n' v24.0.0\n"
+            "  exit 0\n"
+            "fi\n"
+            'exec /bin/sh "$@"\n'
+        )
+        binary.chmod(0o755)
+        inspected = inspect_node24(node)
+        remote = self.root / "remote"
+        main_js = (
+            "#!/bin/sh\n"
+            'case "$INPUT_KIND" in\n'
+            "  a)\n"
+            "    printf '%s\\n' main-a\n"
+            "    printf '%s\\n' main-a >> \"$GITHUB_WORKSPACE/order.txt\"\n"
+            "    printf '%s\\n' 'token=from-a' >> \"$GITHUB_STATE\"\n"
+            "    ;;\n"
+            "  b)\n"
+            "    printf '%s\\n' main-b\n"
+            "    printf '%s\\n' main-b >> \"$GITHUB_WORKSPACE/order.txt\"\n"
+            "    printf '%s\\n' 'token=from-b' >> \"$GITHUB_STATE\"\n"
+            "    ;;\n"
+            "  skip) printf '%s\\n' skipped-main ;;\n"
+            "  always) printf '%s\\n' always-main ;;\n"
+            "  success) printf '%s\\n' success-main ;;\n"
+            "  badpost) exit 0 ;;\n"
+            "  badmain) exit 3 ;;\n"
+            "esac\n"
+        )
+        post_js = (
+            "#!/bin/sh\n"
+            'case "$INPUT_KIND" in\n'
+            "  a)\n"
+            "    printf '%s\\n' post-a\n"
+            "    printf '%s\\n' post-a >> \"$GITHUB_WORKSPACE/order.txt\"\n"
+            '    printf \'%s\' "$STATE_token" > "$GITHUB_WORKSPACE/state-a.txt"\n'
+            "    ;;\n"
+            "  b)\n"
+            "    printf '%s\\n' post-b\n"
+            "    printf '%s\\n' post-b >> \"$GITHUB_WORKSPACE/order.txt\"\n"
+            '    printf \'%s\' "$STATE_token" > "$GITHUB_WORKSPACE/state-b.txt"\n'
+            "    ;;\n"
+            "  skip) printf '%s\\n' skipped-post ;;\n"
+            "  always) printf '%s\\n' always-post ;;\n"
+            "  success) printf '%s\\n' success-post ;;\n"
+            "  badpost) exit 7 ;;\n"
+            "  badmain) exit 9 ;;\n"
+            "esac\n"
+        )
+        plain_yml = (
+            "name: Plain\n"
+            "description: post\n"
+            "inputs:\n"
+            "  kind:\n"
+            "    description: Kind\n"
+            "    required: true\n"
+            "runs:\n"
+            "  using: node24\n"
+            "  main: main.js\n"
+            "  post: post.js\n"
+        )
+
+        def commit(repository, action_yml):
+            repo = remote / "acme" / f"{repository}.git"
+            repo.mkdir(parents=True)
+            _git(repo, "init", "--initial-branch=main")
+            _git(repo, "config", "uploadpack.allowReachableSHA1InWant", "true")
+            _git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+            (repo / "action.yml").write_text(action_yml)
+            (repo / "main.js").write_text(main_js)
+            (repo / "post.js").write_text(post_js)
+            _git(repo, "add", ".")
+            _git(
+                repo,
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                repository,
+            )
+            return subprocess.run(
+                ["git", "-C", repo, "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        plain = commit("plain", plain_yml)
+        gated = commit("gated", plain_yml + "  post-if: success()\n")
+
+        def execute(workflow, label):
+            root = self.root / label
+            root.mkdir()
+            _repo, snapshot, digest, workspace = _capture(root, workflow)
+            store = ActionStore(root / "state", remote, 10 * 1024**3)
+            planned = plan_snapshot(snapshot, "build", action_store=store)
+            staged = stage_node24_actions(
+                planned["plan"],
+                store,
+                workspace.parent / "actions",
+                lambda _size: False,
+            )
+            before = len(self._calls()) if self.log.exists() else 0
+            result = run_job(
+                snapshot,
+                digest,
+                workspace,
+                planned["plan"],
+                self.image,
+                EVENT,
+                docker=str(self.docker),
+                step_timeout=60,
+                node24=(inspected["root"], inspected["digest"]),
+                actions=staged,
+            )
+            return result, workspace, self._calls()[before:]
+
+        ordered, workspace, calls = execute(
+            (
+                "name: demo\n"
+                "on: push\n"
+                "jobs:\n"
+                "  build:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - id: first\n"
+                "        working-directory: missing-dir\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: a\n"
+                "      - id: second\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: b\n"
+                "      - id: skipped\n"
+                "        if: 'false'\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: skip\n"
+                "      - id: middle\n"
+                "        run: |\n"
+                '          if [ -n "${STATE_token-}" ]; then exit 5; fi\n'
+                "          printf '%s\\n' middle\n"
+                "          printf '%s\\n' middle >> \"$GITHUB_WORKSPACE/order.txt\"\n"
+            ),
+            "order",
+        )
+        self.assertEqual(ordered["status"], "succeeded", ordered)
+        self.assertEqual(ordered["exit_code"], 0)
+        self.assertEqual(
+            (workspace / "order.txt").read_text(),
+            "main-a\nmain-b\nmiddle\npost-b\npost-a\n",
+        )
+        self.assertEqual((workspace / "state-a.txt").read_text(), "from-a")
+        self.assertEqual((workspace / "state-b.txt").read_text(), "from-b")
+        self.assertNotIn("skipped", (workspace / "order.txt").read_text())
+        self.assertEqual(
+            [step["stdout"] for step in ordered["steps"]],
+            ["main-a\n", "main-b\n", "", "middle\n", "post-b\n", "post-a\n"],
+        )
+        self.assertEqual(ordered["steps"][2]["status"], "skipped")
+        self.assertEqual(
+            [step["id"] for step in ordered["steps"][4:]],
+            ["second", "first"],
+        )
+        self.assertEqual([step["index"] for step in ordered["steps"][4:]], [4, 5])
+        posts = [
+            call
+            for call in calls
+            if "/opt/node24/bin/node" in call and call[-1].endswith("/post.js")
+        ]
+        first_post = next(call for call in posts if "INPUT_KIND=a" in call)
+        second_post = next(call for call in posts if "INPUT_KIND=b" in call)
+        self.assertIn("STATE_token=from-a", first_post)
+        self.assertNotIn("STATE_token=from-b", first_post)
+        self.assertIn("STATE_token=from-b", second_post)
+        self.assertNotIn("STATE_token=from-a", second_post)
+        self.assertEqual(first_post[first_post.index("--workdir") + 1], "/workspace")
+        self.assertFalse(any(item.startswith("GITHUB_TOKEN=") for item in first_post))
+        self.assertFalse(any(item.startswith("GITHUB_ACTION_PATH=") for item in first_post))
+
+        skipped, _workspace, _calls = execute(
+            (
+                "name: demo\n"
+                "on: push\n"
+                "jobs:\n"
+                "  build:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - id: gated\n"
+                f"        uses: acme/gated@{gated}\n"
+                "        with:\n"
+                "          kind: success\n"
+                "      - id: always\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: always\n"
+                "      - id: fail\n"
+                "        run: exit 1\n"
+            ),
+            "gated",
+        )
+        self.assertEqual(skipped["status"], "failed", skipped)
+        self.assertEqual(skipped["exit_code"], 1)
+        self.assertEqual(skipped["failed_step"]["index"], 2)
+        self.assertEqual(skipped["steps"][3]["status"], "succeeded")
+        self.assertEqual(skipped["steps"][3]["stdout"], "always-post\n")
+        self.assertEqual(skipped["steps"][4]["status"], "skipped")
+        self.assertEqual(skipped["steps"][4]["id"], "gated")
+        self.assertNotIn("success-post", "".join(step["stdout"] for step in skipped["steps"]))
+
+        failed_post, _workspace, _calls = execute(
+            (
+                "name: demo\n"
+                "on: push\n"
+                "jobs:\n"
+                "  build:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - id: bad\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: badpost\n"
+            ),
+            "badpost",
+        )
+        self.assertEqual(failed_post["status"], "failed", failed_post)
+        self.assertEqual(failed_post["exit_code"], 7)
+        self.assertEqual(failed_post["failed_step"]["index"], 1)
+        self.assertEqual(failed_post["steps"][0]["exit_code"], 0)
+        self.assertEqual(failed_post["steps"][1]["exit_code"], 7)
+
+        failed_main, _workspace, _calls = execute(
+            (
+                "name: demo\n"
+                "on: push\n"
+                "jobs:\n"
+                "  build:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - id: bad\n"
+                f"        uses: acme/plain@{plain}\n"
+                "        with:\n"
+                "          kind: badmain\n"
+            ),
+            "badmain",
+        )
+        self.assertEqual(failed_main["status"], "failed", failed_main)
+        self.assertEqual(failed_main["exit_code"], 3)
+        self.assertEqual(failed_main["failed_step"]["index"], 0)
+        self.assertEqual(failed_main["steps"][1]["exit_code"], 9)
+        self.assertNotEqual(failed_main["status"], "succeeded")
+
     def test_steps_run_in_one_pinned_container(self):
         (self.repo / "source.txt").write_text("mutated checkout\n")
         result = run_job(

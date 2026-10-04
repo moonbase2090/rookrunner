@@ -105,7 +105,10 @@ action. `run_job` executes the stored steps in the same container and
 workspace. It does not read the action file again and it does not fetch a
 remote ref. `./path` and `$/path` are the accepted forms. A remote
 ``node24`` action with ``main`` runs from a copy mounted at ``/actions``.
-``node20``, ``pre``, ``post``, and Docker actions are rejected. Nested
+Its ``post`` runs after the job's main steps, in reverse order, when
+that main ran. An omitted ``post-if`` is ``always()``. ``node20``,
+``pre``, and Docker actions are rejected. A caller cancel or a job
+deadline does not run ``post``. Nested
 ``uses`` is rejected. Composite `run`
 text stays literal, so `${{ github.action_path }}` inside `run` is not
 expanded. A whole-string expression is evaluated in a composite step's
@@ -239,7 +242,10 @@ class _JobRuntime:
         self.masks = []
         self.base_path = None
         # GITHUB_STATE for one action instance. Later steps do not receive it.
+        # The post entry of that same action receives it as STATE_<name>.
         self.action_state = {}
+        self.javascript_inputs = {}
+        self.javascript_ran = set()
 
 
 def _reserved_env(script_name):
@@ -782,7 +788,17 @@ def _accept_javascript(step):
     timeout = step.get("timeout_minutes")
     if timeout is not None and type(timeout) is not int:
         _setup("plan is not accepted")
+    post = step.get("post")
+    post_if = step.get("post_if")
+    if post is None and post_if is not None:
+        _setup("plan is not accepted")
+    if post is not None and not isinstance(post, str):
+        _setup("plan is not accepted")
+    if post_if is not None and (not isinstance(post_if, str) or post_if == "" or "\0" in post_if):
+        _setup("plan is not accepted")
     _node_main_path(step)
+    if post is not None:
+        _node_entry_path(step, post)
 
 
 def _shell_command(shell, bash_ok, script):
@@ -2319,6 +2335,48 @@ def run_job(
                                 outcome = _cancelled(resolved, reference, records)
                                 cancelled_run = True
                                 break
+                            posts = _node24_posts(job, runtime)
+                            if posts and deadline - time.monotonic() <= 0:
+                                raise _JobDeadline()
+                            post_index = len(job["steps"])
+                            for step in posts:
+                                if owner is not None and owner.cancelled():
+                                    graceful = True
+                                    outcome = _cancelled(resolved, reference, records)
+                                    cancelled_run = True
+                                    break
+                                if deadline - time.monotonic() <= 0:
+                                    raise _JobDeadline()
+                                record = _consider_post(
+                                    docker_bin,
+                                    name,
+                                    step,
+                                    level_workflow,
+                                    job,
+                                    event,
+                                    workspace,
+                                    bash_ok,
+                                    step_timeout,
+                                    deadline,
+                                    prior,
+                                    needs,
+                                    scripts[(path + (job["id"],), step["index"])],
+                                    runtime,
+                                    commands,
+                                    post_index,
+                                    job.get("id"),
+                                    matrix=matrix,
+                                    strategy=strategy_context,
+                                    inputs=inputs,
+                                )
+                                records.append(record)
+                                post_index += 1
+                                if record["status"] == "failed":
+                                    job_failed = True
+                                    if failed is None:
+                                        failed = record
+                            if cancelled_run:
+                                break
                             if publish:
                                 produced, output_bytes = _job_outputs(
                                     job,
@@ -3035,19 +3093,24 @@ def _input_env_name(name):
 def _node_main_path(step):
     """Container path of one node24 main file under /actions."""
 
+    return _node_entry_path(step, step.get("main"))
+
+
+def _node_entry_path(step, entry):
+    """Container path of one node24 entry file under /actions."""
+
     owner = step.get("action_owner")
     repository = step.get("action_repository")
     commit = step.get("action_commit")
     action_path = step.get("action_path")
-    main = step.get("main")
-    if not all(isinstance(item, str) and item != "" for item in (owner, repository, commit, main)):
+    if not all(isinstance(item, str) and item != "" for item in (owner, repository, commit, entry)):
         _setup("plan is not accepted")
     if not isinstance(action_path, str):
         _setup("plan is not accepted")
     parts = [owner, repository, commit]
     if action_path:
         parts.extend(action_path.split("/"))
-    parts.extend(main.split("/"))
+    parts.extend(entry.split("/"))
     if any(part in {"", ".", ".."} or "\\" in part or "\0" in part for part in parts):
         _setup("plan is not accepted")
     if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
@@ -3126,9 +3189,12 @@ def _run_javascript(
         extra = _javascript_env(step, values)
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
+    runtime.javascript_inputs[step["index"]] = {
+        key: value for key, value in extra.items() if key.startswith("INPUT_")
+    }
     extra["GITHUB_STATE"] = f"/run/rookrunner-cmd/{script_name}-state"
     extra["GITHUB_STEP_SUMMARY"] = f"/run/rookrunner-cmd/{script_name}-summary"
-    return _run_step(
+    result = _run_step(
         docker,
         name,
         step,
@@ -3144,6 +3210,117 @@ def _run_javascript(
         commands,
         extra_reserved=extra,
         argv=[_NODE24_BINARY, _node_main_path(step)],
+        workdir_override="/workspace",
+        command_extra=("state", "summary"),
+    )
+    if isinstance(result.get("exit_code"), int):
+        runtime.javascript_ran.add(step["index"])
+    return result
+
+
+def _node24_posts(job, runtime):
+    """Node24 steps whose main ran and that declare post, last main first."""
+
+    found = []
+    for step in job.get("steps") or []:
+        if step.get("javascript") != "node24" or "post" not in step:
+            continue
+        if step.get("index") not in runtime.javascript_ran:
+            continue
+        found.append(step)
+    found.reverse()
+    return found
+
+
+def _post_state_env(runtime, index):
+    """STATE_<name> for one action. Other actions do not receive it."""
+
+    extra = {}
+    stored = runtime.action_state.get(index, {})
+    if not isinstance(stored, dict):
+        return extra
+    for key, value in stored.items():
+        if not isinstance(key, str) or not isinstance(value, str) or "\0" in value:
+            continue
+        name = "STATE_" + key
+        if not _ENV_NAME.fullmatch(name):
+            continue
+        extra[name] = value
+    return extra
+
+
+def _consider_post(
+    docker,
+    name,
+    step,
+    workflow,
+    job,
+    event,
+    workspace,
+    bash_ok,
+    step_timeout,
+    deadline,
+    prior,
+    needs,
+    script_name,
+    runtime,
+    commands,
+    index,
+    job_id,
+    matrix=None,
+    strategy=None,
+    inputs=None,
+):
+    """Run one node24 post from /workspace. An omitted post-if is always()."""
+
+    if not isinstance(script_name, str) or script_name == "":
+        _setup("plan is not accepted")
+    saved = runtime.javascript_inputs.get(step["index"])
+    if not isinstance(saved, dict):
+        _setup("plan is not accepted")
+    posted = dict(step)
+    posted["index"] = index
+    post_script = f"{script_name}-post"
+    try:
+        values = _expression_values(
+            event,
+            workflow,
+            job,
+            step,
+            prior,
+            False,
+            needs,
+            runtime,
+            inputs=inputs,
+            matrix=matrix,
+            strategy=strategy,
+        )
+        source = step.get("post_if")
+        enabled = True if source is None else step_is_enabled(source, values, prior, False)
+    except ExprError as exc:
+        return _step_result(posted, "failed", None, "", "", str(exc)[:512], job_id)
+    if not enabled:
+        return _step_result(posted, "skipped", None, "", "", None, job_id)
+    extra = dict(saved)
+    extra.update(_post_state_env(runtime, step["index"]))
+    extra["GITHUB_STATE"] = f"/run/rookrunner-cmd/{post_script}-state"
+    extra["GITHUB_STEP_SUMMARY"] = f"/run/rookrunner-cmd/{post_script}-summary"
+    return _run_step(
+        docker,
+        name,
+        posted,
+        workflow,
+        job,
+        workspace,
+        bash_ok,
+        step_timeout,
+        deadline,
+        post_script,
+        job_id,
+        runtime,
+        commands,
+        extra_reserved=extra,
+        argv=[_NODE24_BINARY, _node_entry_path(step, step.get("post"))],
         workdir_override="/workspace",
         command_extra=("state", "summary"),
     )
