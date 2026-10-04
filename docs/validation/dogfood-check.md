@@ -163,7 +163,7 @@ success.
 The ruff run is the failure criterion. The success criterion of this
 NS-38 run is not met. The gap is below. The closure is the run
 recorded above. NS-39 designs owner CI. NS-40 posts one commit status.
-The next slice is NS-41.
+NS-41 evaluates `on` for push and pull request. The next slice is NS-42.
 
 ## Gap
 

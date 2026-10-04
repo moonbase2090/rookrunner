@@ -54,7 +54,18 @@ from .attempt import AttemptError, materialize_attempt
 from .disk import DEFAULT_DISK_BUDGET, usage
 from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
-from .plan import PlanError, plan_snapshot, remote_action_records
+from .plan import (
+    PlanError,
+    plan_snapshot,
+    remote_action_records,
+    snapshot_workflow_bytes,
+    workflow_on,
+)
+from .trigger import (
+    MAX_CHANGED_FILES,
+    MAX_PATH_LENGTH,
+    submission_triggered,
+)
 from .run import (
     CONTAINER_NAME,
     DEFAULT_NETWORK,
@@ -974,7 +985,7 @@ class Worker:
         fields(
             p,
             ("version", "submission_key", "workflow", "job_id", "event", "image"),
-            ("event_name",),
+            ("event_name", "activity_type", "changed_files", "commit_count", "diff_unavailable"),
         )
         key = p["submission_key"]
         if not utf8_string(key, 1, 128):
@@ -988,6 +999,30 @@ class Worker:
             or "\r" in p["event_name"]
         ):
             invalid("event_name must be a UTF-8 string of 1 to 128 characters")
+        if "activity_type" in p and (
+            not utf8_string(p["activity_type"], 1, 128)
+            or "\0" in p["activity_type"]
+            or "\n" in p["activity_type"]
+            or "\r" in p["activity_type"]
+        ):
+            invalid("activity_type must be a UTF-8 string of 1 to 128 characters")
+        if "changed_files" in p:
+            files = p["changed_files"]
+            if not isinstance(files, list) or len(files) > MAX_CHANGED_FILES:
+                invalid("changed_files must be a list of at most 10000 paths")
+            for path in files:
+                if (
+                    not utf8_string(path, 1, MAX_PATH_LENGTH)
+                    or "\0" in path
+                    or "\n" in path
+                    or "\r" in path
+                    or path.startswith("/")
+                ):
+                    invalid("changed_files entries must be relative paths")
+        if "commit_count" in p:
+            integer(p["commit_count"], 0, 1_000_000_000, "commit_count")
+        if "diff_unavailable" in p and type(p["diff_unavailable"]) is not bool:
+            invalid("diff_unavailable must be a boolean")
         if not isinstance(p["image"], str) or not (
             _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
         ):
@@ -1030,19 +1065,46 @@ class Worker:
                 "WORKER_NOT_READY",
                 "an unresolved owned container blocks a new attempt",
             )
-        queued = self.db.execute(
-            "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
-        ).fetchone()[0]
-        if queued >= MAX_QUEUE:
-            raise Fault("QUEUE_FULL", "queued run limit reached")
         try:
             captured = SourceCapture(self.repository, self.state).capture(p["workflow"])
         except CaptureError as exc:
             self._capture_fault(exc)
         snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+        try:
+            if p.get("event_name") in ("push", "pull_request") and not self._event_triggered(
+                p, snapshot
+            ):
+                self._drop_snapshot(captured["snapshot_id"])
+                return {"triggered": False}
+        except Fault:
+            self._drop_snapshot(captured["snapshot_id"])
+            raise
+        queued = self.db.execute(
+            "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
+        ).fetchone()[0]
+        if queued >= MAX_QUEUE:
+            self._drop_snapshot(captured["snapshot_id"])
+            raise Fault("QUEUE_FULL", "queued run limit reached")
         store = self.action_store()
         with store.guard:
             return self._accept_planned(p, key, normalized, event_text, snapshot, captured, store)
+
+    def _event_triggered(self, p, snapshot):
+        try:
+            on = workflow_on(snapshot_workflow_bytes(snapshot))
+        except PlanError as exc:
+            raise self._plan_fault(exc) from exc
+        except (OSError, UnicodeError, ValueError):
+            raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from None
+        return submission_triggered(
+            on,
+            p["event_name"],
+            p["event"],
+            p.get("activity_type"),
+            p.get("changed_files", []),
+            p.get("commit_count"),
+            p.get("diff_unavailable", False),
+        )
 
     def _accept_planned(self, p, key, normalized, event_text, snapshot, captured, store):
         try:

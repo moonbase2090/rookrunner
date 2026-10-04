@@ -62,7 +62,16 @@ secret, and source selection parameters are unsupported and rejected.
 
 Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, `event`,
 and an image pinned by digest. It captures and plans one sequential `run` job,
-then stores a queued run. The stored image digest keeps the `sha256:` prefix.
+then stores a queued run. When `event_name` is `push` or `pull_request`,
+`on` is checked before that run is stored. Optional parameters for that
+check are `activity_type`, `changed_files`, `commit_count`, and
+`diff_unavailable`. A workflow that does not match returns
+`{"triggered": false}`, creates no run, and does not consume the
+submission key. `workflow_dispatch` and `schedule` are not evaluated.
+Without `event_name`, `on` is not evaluated. The caller supplies the
+changed-file list. A push with `commit_count` above 1,000, or
+`diff_unavailable`, skips path filters. Only the first 3,000 changed
+files count. Branch, tag, and activity-type filters still apply. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing

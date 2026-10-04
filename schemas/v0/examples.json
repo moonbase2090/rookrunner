@@ -26,6 +26,32 @@
     "valid": true
   },
   {
+    "name": "run.submit push filters",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "run.submit",
+      "params": {
+        "version": 1,
+        "submission_key": "example-push",
+        "workflow": ".github/workflows/check.yml",
+        "job_id": "check",
+        "event": {
+          "ref": "refs/heads/main"
+        },
+        "image": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "event_name": "push",
+        "changed_files": [
+          "src/execution_core/trigger.py"
+        ],
+        "commit_count": 1,
+        "diff_unavailable": false
+      }
+    },
+    "valid": true
+  },
+  {
     "name": "run.get",
     "definition": "Request",
     "value": {
