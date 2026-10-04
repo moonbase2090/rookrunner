@@ -11,7 +11,8 @@ job then keeps the caller uid and is added to the groups that can open
 that socket. `worker --node24 DIR` mounts that directory read-only at
 `/opt/node24`. It is not added to `PATH`. The worker does not download Node.
 A remote `node24` main is copied into the attempt and mounted read-write
-at `/actions`. The content store is not mounted.
+at `/actions`. The content store is not mounted. `post` runs after that
+job's main steps when the main ran. `pre` stays rejected.
 Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
@@ -1072,8 +1073,8 @@ class Worker:
                 "backend": {"name": "workflow", "version": __version__},
                 "compatibility_notes": [
                     "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
-                    "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and reusable workflows are evaluated. Secrets are not passed. A node24 main runs. post, node20, and Docker are unclaimed. Services do not receive the engine socket.",
-                    "A remote action pinned by a 40-character commit SHA is fetched with Git and no credential. Composite run steps execute. A node24 main entry runs from a copy in the attempt. post, node20, and Docker stay rejected.",
+                    "Step if, job needs, job outputs, environment files, local composites, job matrices, and reusable workflows are evaluated. Secrets are not passed. A node24 main and post run. pre, node20, and Docker are unclaimed. Services do not receive the engine socket.",
+                    "A remote action pinned by a 40-character commit SHA is fetched with Git and no credential. Composite run steps execute. A node24 main and its post run from a copy in the attempt. pre, node20, and Docker stay rejected.",
                 ],
                 "accepted_at": now(),
                 "started_at": None,

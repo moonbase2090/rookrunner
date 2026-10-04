@@ -190,9 +190,13 @@ context. Composite actions do not receive `INPUT_*`. `github.action_path`
 and `GITHUB_ACTION_PATH` are set only for steps inside that action. A
 remote `node24` action with `main` receives `INPUT_*`. Its `GITHUB_OUTPUT`,
 env, and PATH files apply to later steps. `GITHUB_STATE` is stored for
-that action and is not exported. `GITHUB_STEP_SUMMARY` is kept as step
-evidence and is not rendered. `github.action_path` is not set for that
-process. This is not a GitHub-equivalence claim.
+that action and is not exported to other steps. The action's `post`
+receives those values as `STATE_<name>` and the same inputs. An omitted
+`post-if` is `always()`. A failed post fails the job and does not replace
+an earlier main-step failure. A caller cancel or a job deadline does not
+run `post`. `GITHUB_STEP_SUMMARY` is kept as step evidence and is not
+rendered. `github.action_path` is not set for that process. This is not
+a GitHub-equivalence claim.
 Version 0 fixtures are unchanged.
 
 `worker.describe` advertises the supported methods, capabilities, worker identity,

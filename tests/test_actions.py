@@ -381,17 +381,61 @@ class RemoteActionTests(unittest.TestCase):
         self.assertFalse(attempt.exists())
         self.assertTrue(stored.is_file())
 
-    def test_node20_pre_post_and_docker_produce_no_plan(self):
+    def test_node24_post_is_accepted(self):
+        post = self._action(
+            {"action.yml": POST, "index.js": "nope\n", "cleanup.js": "nope\n"},
+            repository="postpin",
+        )
+        gated = POST.replace("  post: cleanup.js\n", "  post: cleanup.js\n  post-if: success()\n")
+        gated_sha = self._action(
+            {"action.yml": gated, "index.js": "nope\n", "cleanup.js": "nope\n"},
+            repository="gatedpin",
+        )
+        orphan = self._action(
+            {
+                "action.yml": (
+                    "name: Orphan\ndescription: post-if only\nruns:\n"
+                    "  using: node24\n  main: index.js\n  post-if: success()\n"
+                ),
+                "index.js": "nope\n",
+            },
+            repository="orphanpin",
+        )
+        worker = self._start()
+        accepted = self._submit("post", self._workflow(self._uses(f"acme/postpin@{post}")))
+        self.assertNotIn("error", accepted, accepted)
+        snapshot = self.state / "snapshots" / accepted["result"]["input"]["snapshot_id"]
+        step = plan_snapshot(snapshot, "build", action_store=worker.action_store())["plan"]["job"][
+            "steps"
+        ][0]
+        self.assertEqual(step["post"], "cleanup.js")
+        self.assertNotIn("post_if", step)
+        self.assertEqual(step["main"], "index.js")
+        gated_reply = self._submit(
+            "gated",
+            self._workflow(self._uses(f"acme/gatedpin@{gated_sha}"), "gated.yml"),
+        )
+        self.assertNotIn("error", gated_reply, gated_reply)
+        gated_snapshot = self.state / "snapshots" / gated_reply["result"]["input"]["snapshot_id"]
+        gated_step = plan_snapshot(gated_snapshot, "build", action_store=worker.action_store())[
+            "plan"
+        ]["job"]["steps"][0]
+        self.assertEqual(gated_step["post_if"], "success()")
+        orphan_reply = self._submit(
+            "orphan",
+            self._workflow(self._uses(f"acme/orphanpin@{orphan}"), "orphan.yml"),
+        )
+        self.assertEqual(orphan_reply["error"]["data"]["kind"], "INVALID_PARAMS")
+        self.assertIn("runs.post", orphan_reply["error"]["message"])
+        self.assertIsNone(self._row("orphan"))
+
+    def test_node20_pre_and_docker_produce_no_plan(self):
         node20 = self._action({"action.yml": NODE20, "index.js": "nope\n"}, repository="oldpin")
         image = self._action(
             {"action.yml": DOCKER, "Dockerfile": "FROM scratch\n"}, repository="dockpin"
         )
         pre = self._action(
             {"action.yml": PRE, "index.js": "nope\n", "setup.js": "nope\n"}, repository="prepin"
-        )
-        post = self._action(
-            {"action.yml": POST, "index.js": "nope\n", "cleanup.js": "nope\n"},
-            repository="postpin",
         )
         missing = self._action(
             {"action.yml": "name: Bare\ndescription: no main\nruns:\n  using: node24\n"},
@@ -402,7 +446,6 @@ class RemoteActionTests(unittest.TestCase):
             ("node20", f"acme/oldpin@{node20}", "CAPABILITY_UNSUPPORTED", "runs.using"),
             ("docker", f"acme/dockpin@{image}", "CAPABILITY_UNSUPPORTED", "runs.using"),
             ("pre", f"acme/prepin@{pre}", "CAPABILITY_UNSUPPORTED", "runs.pre"),
-            ("post", f"acme/postpin@{post}", "CAPABILITY_UNSUPPORTED", "runs.post"),
             ("bare", f"acme/barepin@{missing}", "INVALID_PARAMS", "runs.main"),
         )
         for name, pin, kind, field in cases:
