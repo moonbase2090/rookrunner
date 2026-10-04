@@ -86,8 +86,8 @@ The allow-list is copied to a sibling `git.json`
 The trees and blobs of the captured base commit are stored beside the
 manifest ([design](../design/git-objects.md)). The original commit
 object stays excluded. One synthesized commit for that tree is stored
-([design](../design/synthesized-commit.md)). An owned `.git` directory
-for the attempt workspace is designed
-([design](../design/git-directory.md)) and is not written.
+([design](../design/synthesized-commit.md)). When the object store is present, the attempt workspace receives an
+owned `.git` directory ([design](../design/git-directory.md)). An absent
+store still has no `.git`.
 See the
 [implemented capture contract](../design/source-capture.md).

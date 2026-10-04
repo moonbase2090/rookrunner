@@ -109,7 +109,8 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-synt
 `uses: actions/checkout@v4` is an owned checkout of the files already in
 the workspace. The plan stores `checkout` as `captured`. The step does not
 start a process, does not modify the workspace, does not create `.git`,
-does not read `git.json` or the object store, and does not contact a
+does not delete one that materialize already wrote, does not read
+`git.json` or the object store, and does not contact a
 network. It succeeds with
 exit code 0 and publishes no outputs. `clean: false` and
 `persist-credentials: false` are the only accepted `with` values. Omitting
@@ -654,6 +655,10 @@ def _verify_workspace(workspace, manifest):
         kept = []
         for name in dirs:
             child = f"{relative}/{name}" if relative else name
+            # The owned directory is not a captured entry. Do not walk it,
+            # and do not follow a symlink of that name.
+            if child == ".git":
+                continue
             path = current_path / name
             if path.is_symlink():
                 found.add(child)
@@ -663,6 +668,8 @@ def _verify_workspace(workspace, manifest):
         dirs[:] = kept
         for name in files:
             child = f"{relative}/{name}" if relative else name
+            if child == ".git":
+                continue
             found.add(child)
             path = current_path / name
             if path.is_symlink():

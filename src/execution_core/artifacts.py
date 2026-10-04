@@ -106,15 +106,19 @@ def written_files(workspace, snapshot_dir):
 
     Unchanged snapshot bytes are omitted. Symlinks are omitted. A snapshot
     entry that cannot be read safely causes that workspace path to be omitted
-    rather than followed.
+    rather than followed. `.git` and every path under it are omitted, and a
+    symlink of that name is not followed.
     """
 
     snapshot_files = os.path.join(snapshot_dir, "files")
     found = []
-    for dirpath, _dirnames, filenames in os.walk(workspace, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(workspace, followlinks=False):
+        dirnames[:] = [name for name in dirnames if name != ".git"]
         for name in filenames:
             relative = os.path.relpath(os.path.join(dirpath, name), workspace)
             relative = relative.replace(os.sep, "/")
+            if relative == ".git" or relative.startswith(".git/"):
+                continue
             try:
                 size, digest = file_identity(workspace, relative)
             except ArtifactError:

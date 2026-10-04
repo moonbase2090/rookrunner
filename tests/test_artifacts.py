@@ -52,8 +52,18 @@ class WrittenFileTests(unittest.TestCase):
             outside = root / "outside"
             outside.write_bytes(b"secret-bytes")
             (workspace / "leak").symlink_to(outside)
+            git = workspace / ".git"
+            git.mkdir()
+            (git / "HEAD").write_text("ref: refs/heads/main\n")
+            (git / "config").write_text("secret-token\n")
+            secret_dir = root / "secret-dir"
+            secret_dir.mkdir()
+            (secret_dir / "token").write_text("secret-token")
+            (workspace / "nested").mkdir()
+            (workspace / "nested" / ".git").symlink_to(secret_dir, target_is_directory=True)
             listed = written_files(workspace, root / "snapshot")
             self.assertEqual([item["path"] for item in listed], ["out/demo.txt", "source.txt"])
+            self.assertNotIn("secret-token", json.dumps(listed))
             demo = listed[0]
             self.assertEqual(demo["size"], 4)
             self.assertEqual(demo["digest"], hashlib.sha256(b"demo").hexdigest())

@@ -27,13 +27,13 @@ The sibling has its own SHA-256, returned on the snapshot command as
 the plan, the run record, or describe. No capability string is added.
 The capability version stays 8. No plan digest changes.
 
-`materialize_attempt` keeps copying only manifest entries. The attempt
-workspace does not receive `git.json` and does not receive a `.git`
-directory. An owned `.git` is designed in
-[Git directory](git-directory.md) and is not written. A job step that
-runs Git still has no repository. The disk
-budget already counts files under the state directory. This design adds
-no byte cap and no other numeric limit.
+`materialize_attempt` copies the manifest entries and does not copy
+`git.json` into the workspace. When the object store is present,
+materialize writes an owned `.git` ([Git directory](git-directory.md)).
+An absent store still has no `.git`. A job step that runs Git can see
+that directory when the store was present. The disk budget already
+counts files under the state directory. This design adds no byte cap
+and no other numeric limit.
 
 ## Fields capture copies
 
@@ -153,9 +153,8 @@ and reports no metadata digest.
 The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). The original commit object stays
 excluded. One synthesized commit for that tree is stored
-([synthesized commit](synthesized-commit.md)). An owned `.git`
-directory is designed in [Git directory](git-directory.md) and is not
-written. Filling the `github` context and publishing a
+([synthesized commit](synthesized-commit.md)). When the object store is present, materialize writes an owned `.git`
+([Git directory](git-directory.md)). Filling the `github` context and publishing a
 GitHub-equivalence claim are later work. Each of those still needs its
 own design. The owned checkout in [checkout](checkout.md) does not
 authorize them.
