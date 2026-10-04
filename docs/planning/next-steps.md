@@ -95,8 +95,11 @@ and the jobs it needs. Job containers use Docker network `bridge` by default.
 `worker --network none` turns public internet access off. The job
 container does not mount the Docker socket unless the worker is started
 with `--docker-socket`. That flag gives the job the host Docker service.
-The job keeps the caller user. The image must already contain the Docker
-client. GitHub requires that service to be installed and running for
+The job keeps the caller user. When the socket is mounted, a private
+directory under `/tmp` is bind-mounted at the same path. `TMPDIR`,
+`TEMP`, and `TMP` default to that path, and a later env layer can
+replace them. The host `/tmp` is not mounted as a whole. The image must
+already contain the Docker client. GitHub requires that service to be installed and running for
 container-dependent work on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 A job may declare service containers. The image must be digest-pinned.
@@ -205,8 +208,11 @@ GitHub-hosted runners have that access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
 The worker flag `--network none` turns it off. The Docker socket stays
 unmounted unless the worker is started with `--docker-socket`. That job
-keeps the caller user and can open the engine socket. Host
-credentials are not mounted. A nonzero
+keeps the caller user and can open the engine socket. When the socket
+is mounted, a private directory under `/tmp` is bind-mounted at the
+same path, and `TMPDIR`, `TEMP`, and `TMP` default to it. A later env
+layer can replace those three. The host `/tmp` is not mounted as a
+whole. Host credentials are not mounted. A nonzero
 step fails the job. A later step runs only when its condition is true;
 otherwise it is skipped and does not run. The result names the first failed
 step, its exit code, and the image digest. Docker missing, an unresolvable

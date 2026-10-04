@@ -77,7 +77,12 @@ installed and the service running for container-dependent work on a
 self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 A missing socket fails setup and creates no container. Host credential
-directories are not mounted. The container is not privileged. This is not a
+directories are not mounted. The container is not privileged. When the
+socket is mounted, a private directory under `/tmp` is created on the
+host and bind-mounted at that same path. `TMPDIR`, `TEMP`, and `TMP`
+default to it, and a later env layer can replace them. The directory is
+removed with the job container. The host `/tmp` is not mounted as a
+whole. A service container does not receive it. This is not a
 private-network, nested-daemon, or egress-policy implementation. A job may
 declare service containers. Each image must be digest-pinned. GitHub allows
 a tag. The runner creates a user-defined bridge network for that job and

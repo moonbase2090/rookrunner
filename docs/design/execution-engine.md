@@ -60,7 +60,11 @@ interrupted ownership before accepting conflicting execution. Use disposable tes
 environments for real execution checks, and do not mount the Docker socket
 or host credentials into ordinary job containers unless the worker was
 started with `--docker-socket`. That flag exposes the host Docker service
-to the job. The job keeps the caller user. Host credentials stay unmounted.
+to the job. The job keeps the caller user. When the socket is mounted, a
+private directory under `/tmp` is bind-mounted at the same path, and
+`TMPDIR`, `TEMP`, and `TMP` default to it. A later env layer can replace
+those three. The host `/tmp` is not mounted as a whole. Host credentials
+stay unmounted.
 
 ## M2 implementation order
 

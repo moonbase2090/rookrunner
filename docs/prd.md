@@ -138,8 +138,11 @@ Implemented:
   (https://docs.github.com/en/actions/concepts/runners/private-networking).
   `worker --network none` turns it off. The Docker socket stays unmounted
   unless the worker is started with `--docker-socket`. That mount gives the
-  job the host Docker service. The job keeps the caller user, and the image
-  must already contain the Docker client. GitHub requires that service to be installed
+  job the host Docker service. The job keeps the caller user. When the
+  socket is mounted, a private directory under `/tmp` is bind-mounted at
+  the same path, and `TMPDIR`, `TEMP`, and `TMP` default to it. A later
+  env layer can replace those three. The host `/tmp` is not mounted as a
+  whole. The image must already contain the Docker client. GitHub requires that service to be installed
   and running for container-dependent work on a self-hosted runner
   (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
   Host credential directories are not mounted. The container is not privileged.

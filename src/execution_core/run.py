@@ -20,7 +20,8 @@ otherwise to the container `PATH`. The runner then sets `GITHUB_WORKSPACE`,
 those names stay pointed at this attempt. `ROOKRUNNER_EVENT` is a read-only
 file holding the caller event as canonical JSON. It is not a GitHub event
 delivery. `GITHUB_*` and `RUNNER_*` names cannot be overwritten. `CI` and
-`HOME` can. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an
+`HOME` can. When the Docker socket is mounted, `TMPDIR`, `TEMP`, and
+`TMP` can too. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an
 image.
 
 `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` are per-step files. A write
@@ -46,8 +47,14 @@ mount gives the job the engine socket this process already uses, at
 It is added to the socket's group and to group 0 so it can open a mode
 0660 socket, including one the engine presents as owned by root. The job
 image must already contain the Docker client. This module does not install
-one. GitHub requires Docker to be installed and the service running for
-container-dependent jobs on a self-hosted runner
+one. When the socket is mounted, a private directory under `/tmp` is
+created on the host and bind-mounted at that same absolute path.
+`TMPDIR`, `TEMP`, and `TMP` default to it, so a nested client creates
+bind sources the host engine can see. A later env layer can replace
+those three. The directory is removed with the job container. The host
+`/tmp` is not mounted as a whole. GitHub requires Docker to be installed
+and the service running for container-dependent jobs on a self-hosted
+runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 Host credential directories are not mounted. The container is not
 privileged. This is not a private-network or egress-policy implementation.
@@ -338,11 +345,22 @@ def _protected_defaults(job=None, workflow=None):
 
 
 def _soft_defaults():
-    """`CI` and `HOME`. A later env layer may replace either one."""
+    """Values a later env layer may replace.
 
-    if _ATTEMPT.get() is None:
+    `CI` and `HOME` are set for an attempt. `TMPDIR`, `TEMP`, and `TMP`
+    are set only when the job has the shared socket directory.
+    """
+
+    attempt = _ATTEMPT.get()
+    if attempt is None:
         return {}
-    return {"CI": "true", "HOME": _HOME}
+    values = {"CI": "true", "HOME": _HOME}
+    socket_temp = attempt.get("socket_temp")
+    if socket_temp:
+        values["TMPDIR"] = socket_temp
+        values["TEMP"] = socket_temp
+        values["TMP"] = socket_temp
+    return values
 
 
 def _runner_dirs(workspace):
@@ -1087,6 +1105,36 @@ def _job_socket(docker, docker_socket):
     return path, info.st_gid
 
 
+def _socket_temp():
+    """Create the host directory a socket job bind-mounts at the same path.
+
+    A nested Docker client sends host paths. A directory created only
+    inside the job does not exist on the host. `/tmp` is resolved so the
+    mount, `TMPDIR`, and the path that client sends are the same string.
+    """
+
+    parent = Path("/tmp").resolve()
+    if parent.is_symlink() or not parent.is_dir():
+        _setup("workspace path is not accepted")
+    path = Path(tempfile.mkdtemp(prefix="rookrunner-socket-", dir=os.fspath(parent))).resolve()
+    try:
+        os.chmod(path, 0o700)
+        text = os.fspath(path)
+        if (
+            path.is_symlink()
+            or not path.is_dir()
+            or path.parent != parent
+            or "," in text
+            or "\n" in text
+            or "\0" in text
+        ):
+            _setup("workspace path is not accepted")
+    except Exception:
+        shutil.rmtree(path, ignore_errors=True)
+        raise
+    return path
+
+
 def _plan_uses_node24(jobs):
     for job in jobs:
         for _job, step in _iter_concrete(job, ()):
@@ -1123,6 +1171,7 @@ def _create_args(
     runner_dirs,
     node_root,
     actions_root,
+    socket_temp=None,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1181,6 +1230,13 @@ def _create_args(
             [
                 "--mount",
                 f"type=bind,source={socket_path},destination={_CONTAINER_SOCKET}",
+            ]
+        )
+    if socket_temp is not None:
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={socket_temp},destination={socket_temp}",
             ]
         )
     args.extend(
@@ -1962,6 +2018,8 @@ def run_job(
     create. If that owner is already cancelled, this does not start the
     container. `network` is `bridge` unless the caller passes `none`.
     `docker_socket` is off unless the caller passes true or a socket path.
+    When the socket is mounted, a private host directory is bind-mounted
+    at the same path and `TMPDIR`, `TEMP`, and `TMP` default to it.
     `node24` is omitted, or a `(directory, digest)` pair. The directory is
     mounted read-only at `/opt/node24` and is not placed on `PATH`.
     `actions` is the attempt copy of node24 action files, mounted
@@ -1969,7 +2027,8 @@ def run_job(
     that runs node24 main without the Node directory fails setup before
     the container starts.
     Service containers for an enabled job start before its steps and are
-    removed before the next job. They do not receive the engine socket.
+    removed before the next job. They do not receive the engine socket
+    or that temporary directory.
     """
 
     if network not in _NETWORKS:
@@ -2009,15 +2068,19 @@ def run_job(
     service_cleanup = 0
     attempt_token = None
     path_token = None
+    socket_temp = None
     try:
         resolved, arch = _resolve_image(docker_bin, reference, digest, deadline)
         runner_dirs = _runner_dirs(workspace)
+        if socket_path is not None:
+            socket_temp = _socket_temp()
         attempt_token = _ATTEMPT.set(
             {
                 "arch": arch,
                 "event_name": event_name,
                 "sha": _commit_sha(manifest),
                 "temp": runner_dirs["runner-temp"],
+                "socket_temp": None if socket_temp is None else os.fspath(socket_temp),
             }
         )
         (private / "event.json").write_bytes(event_bytes)
@@ -2044,6 +2107,7 @@ def run_job(
                 runner_dirs,
                 None if node_mount is None else node_mount["root"],
                 actions_root,
+                None if socket_temp is None else os.fspath(socket_temp),
             ),
             60,
             deadline,
@@ -2455,6 +2519,8 @@ def run_job(
                     service_cleanup = 0
         shutil.rmtree(private, ignore_errors=True)
         shutil.rmtree(commands, ignore_errors=True)
+        if socket_temp is not None:
+            shutil.rmtree(socket_temp, ignore_errors=True)
         if owner is not None:
             owner.closed()
     if failure is not None:
