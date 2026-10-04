@@ -65,7 +65,7 @@ instead of the merge commit is not this design.
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
 https://docs.github.com/en/rest/commits/statuses
 
-NS-40 posts one status. It refuses, with no HTTP request, unless the
+NS-40 posts one status with the CLI command `status`. It refuses, with no HTTP request, unless the
 run is a workflow run, the snapshot is clean, `included` is empty, and
 `base_commit` equals the tested commit. For a push, the tested commit
 and the status SHA are the same. For a pull request, the tested commit

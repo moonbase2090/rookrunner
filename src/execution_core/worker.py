@@ -86,10 +86,12 @@ from .protocol import (
     valid_id,
 )
 from .snapshot import CaptureError, SourceCapture
+from .status import MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_STATUS_SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _STEP_TEXT = 65536
@@ -320,6 +322,13 @@ class Worker:
                     size INTEGER NOT NULL,
                     digest TEXT NOT NULL,
                     UNIQUE(run_id, path)
+                );
+                CREATE TABLE IF NOT EXISTS status_posts (
+                    run_id TEXT NOT NULL,
+                    context TEXT NOT NULL,
+                    sha TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    PRIMARY KEY (run_id, context, sha, state)
                 );
             """)
             with self.db:
@@ -1428,7 +1437,76 @@ class Worker:
                 "next_offset": next_offset,
                 "end_of_stream": end,
             }
+        if method == "run.status":
+            return self.report_status(p)
         raise Fault("METHOD_NOT_FOUND", "unknown method")
+
+    def report_status(self, p):
+        """Decide or record one commit status. The credential is not a parameter."""
+
+        fields(
+            p,
+            ("run_id", "tested_commit", "status_sha", "context"),
+            ("record",),
+        )
+        tested = p["tested_commit"]
+        status_sha = p["status_sha"]
+        context = p["context"]
+        if not isinstance(tested, str) or not _STATUS_SHA.fullmatch(tested):
+            invalid("tested_commit must be 40 or 64 lowercase hex characters")
+        if not isinstance(status_sha, str) or not _STATUS_SHA.fullmatch(status_sha):
+            invalid("status_sha must be 40 or 64 lowercase hex characters")
+        if not utf8_string(context, 1, MAX_CONTEXT_LENGTH) or any(
+            character in context for character in "\0\r\n"
+        ):
+            invalid("context must be one line of at most 1024 characters")
+        record = self.get(p["run_id"])
+        if record["input"].get("kind") != "workflow_job":
+            raise Fault("STATUS_REFUSED", "run is not a workflow run")
+        manifest = self._status_manifest(record)
+        if manifest["dirty"] is not False:
+            raise Fault("STATUS_REFUSED", "snapshot is dirty")
+        included = manifest["included"]
+        if not isinstance(included, list) or included:
+            raise Fault("STATUS_REFUSED", "snapshot includes files")
+        if manifest["base_commit"] != tested:
+            raise Fault("STATUS_REFUSED", "base_commit does not equal the tested commit")
+        state = github_state(record["state"], record["exit_code"])
+        posted = p.get("record")
+        if posted is None:
+            if state in TERMINAL_STATUS and self._status_recorded(
+                record["run_id"], context, status_sha, state
+            ):
+                return {"action": "skip", "state": state}
+            return {"action": "post", "state": state}
+        if posted != state or posted not in {"pending", "success", "failure", "error"}:
+            invalid("recorded state does not match the run")
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
+                (record["run_id"], context, status_sha, posted),
+            )
+        return {"action": "recorded", "state": state}
+
+    def _status_manifest(self, record):
+        snapshot_id = record["input"].get("snapshot_id")
+        digest = record["input"].get("digest")
+        if not isinstance(snapshot_id, str) or not _ATTEMPT_ID.fullmatch(snapshot_id):
+            raise Fault("STATUS_REFUSED", "snapshot is not readable")
+        snapshot = self.state / "snapshots" / snapshot_id
+        try:
+            if snapshot.is_symlink() or not snapshot.is_dir():
+                raise Fault("STATUS_REFUSED", "snapshot is not readable")
+            return verify_snapshot(snapshot, digest)
+        except (VerifyError, OSError, UnicodeError, ValueError):
+            raise Fault("STATUS_REFUSED", "snapshot is not readable") from None
+
+    def _status_recorded(self, run_id, context, sha, state):
+        row = self.db.execute(
+            "SELECT 1 FROM status_posts WHERE run_id=? AND context=? AND sha=? AND state=?",
+            (run_id, context, sha, state),
+        ).fetchone()
+        return row is not None
 
     @staticmethod
     def version(p):

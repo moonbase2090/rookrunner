@@ -582,6 +582,9 @@
         },
         {
           "$ref": "#/$defs/artifact.read.request"
+        },
+        {
+          "$ref": "#/$defs/run.status.request"
         }
       ]
     },
@@ -1218,7 +1221,8 @@
             "run.logs",
             "run.artifacts",
             "artifact.read",
-            "run.cancel"
+            "run.cancel",
+            "run.status"
           ]
         },
         "capabilities": {
@@ -1658,7 +1662,8 @@
                     "WORKER_NOT_READY",
                     "STORAGE_FULL",
                     "SOURCE_UNSTABLE",
-                    "ACTION_UNAVAILABLE"
+                    "ACTION_UNAVAILABLE",
+                    "STATUS_REFUSED"
                   ]
                 },
                 "retryable": {
@@ -1897,6 +1902,119 @@
         }
       ]
     },
+    "StatusResult": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "post",
+            "skip",
+            "recorded"
+          ]
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "success",
+            "failure",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "run.status.request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "const": "run.status"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\ud800-\\udfff]*$",
+              "maxLength": 128
+            },
+            "tested_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+            },
+            "status_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            "record": {
+              "enum": [
+                "pending",
+                "success",
+                "failure",
+                "error"
+              ]
+            }
+          },
+          "required": [
+            "run_id",
+            "tested_commit",
+            "status_sha",
+            "context"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "run.status.response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "result": {
+              "$ref": "#/$defs/StatusResult"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
     "artifact.read.response": {
       "oneOf": [
         {
@@ -1954,6 +2072,9 @@
                 },
                 {
                   "$ref": "#/$defs/ArtifactReadResult"
+                },
+                {
+                  "$ref": "#/$defs/StatusResult"
                 }
               ]
             }

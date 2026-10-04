@@ -17,7 +17,8 @@ Select another entry by replacing the root `$ref`:
 | `Run` | Durable development run record, with state-specific result constraints |
 
 The methods are `worker.describe`, `run.submit`, `run.get`, `run.list`,
-`run.logs`, `run.artifacts`, `artifact.read`, and `run.cancel`. Unknown methods and unsupported capabilities are
+`run.logs`, `run.artifacts`, `artifact.read`, `run.cancel`, and `run.status`.
+Unknown methods and unsupported capabilities are
 not valid supported requests, but their rejection responses conform to the schema.
 `examples.json` contains labeled valid and invalid examples. The example digest
 is a placeholder, not execution evidence.
