@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 
+from execution_core.actions import ActionStore
 from execution_core.artifacts import written_files
 from execution_core.attempt import materialize_attempt
 from execution_core.disk import usage
@@ -1456,6 +1457,90 @@ jobs:
             text=True,
         )
         self.assertEqual(listed.stdout.strip(), "")
+
+    def test_remote_composite_runs_and_stays_out_of_the_workspace_git(self):
+        remote = self.root / "remote"
+        action = remote / "acme" / "hello.git"
+        action.mkdir(parents=True)
+        _git(action, "init", "--initial-branch=main")
+        _git(action, "config", "uploadpack.allowReachableSHA1InWant", "true")
+        _git(action, "config", "uploadpack.allowAnySHA1InWant", "true")
+        (action / "action.yml").write_text(
+            "name: Hello\n"
+            "description: remote hello\n"
+            "runs:\n"
+            "  using: composite\n"
+            "  steps:\n"
+            "    - shell: bash\n"
+            "      run: |\n"
+            '        if [ -n "$GITHUB_TOKEN" ]; then exit 4; fi\n'
+            "        printf '%s\\n' remote-ok > \"$GITHUB_WORKSPACE/marker.txt\"\n"
+        )
+        _git(action, "add", ".")
+        _git(
+            action,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "action",
+        )
+        sha = subprocess.run(
+            ["git", "-C", action, "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        workflow = (
+            "name: demo\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            f"      - uses: acme/hello@{sha}\n"
+        )
+        root = self.root / "remote-run"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        store = ActionStore(root / "state", remote, 10 * 1024**3)
+        planned = plan_snapshot(snapshot, "build", action_store=store)
+        step = planned["plan"]["job"]["steps"][0]
+        self.assertEqual(step["action_commit"], sha)
+        self.assertEqual(len(step["content_digest"]), 64)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            planned["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual((workspace / "marker.txt").read_text(), "remote-ok\n")
+        self.assertFalse((workspace / "action.yml").exists())
+        listed = subprocess.run(
+            ["git", "-C", workspace, "ls-tree", "-r", "--name-only", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        names = listed.stdout.split()
+        self.assertNotIn("action.yml", names)
+        self.assertNotIn("marker.txt", names)
+        count = subprocess.run(
+            ["git", "-C", workspace, "rev-list", "--count", "--all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(count.stdout.strip(), "1")
+        self.assertEqual(store.fetches, 1)
 
     def test_local_composite_uses_the_planned_action(self):
         root = self.root / "composite"

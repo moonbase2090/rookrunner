@@ -115,7 +115,10 @@ Implemented:
   directory. It does not submit a run.
 - A planner reads one selected job of sequential `run` steps. Snapshot
   verification and attempt materialization rebuild a private workspace from
-  a captured digest.
+  a captured digest. A remote action pinned by 40 lowercase hexadecimal
+  characters is fetched before acceptance and stored under its content
+  digest. A remote composite's `run` steps execute from that plan.
+  `node24` and Docker actions are still rejected.
 - Version 1 `run.submit` accepts that job only after capture, verification,
   and planning. The worker records an attempt, then executes it with `run_job`
   in one caller-pinned container. Success is `succeeded` and exit code 0. A
