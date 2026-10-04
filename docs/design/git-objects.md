@@ -1,9 +1,11 @@
 # Copy of the captured base tree
 
 Status: accepted, 2026-10-03. Capture copies the trees and blobs of the
-single commit named by the captured `base_commit`. Commit objects,
-remotes, credentials, and the `.git` directory stay excluded. This is
-not a GitHub-equivalence claim.
+single commit named by the captured `base_commit`. The original commit
+object, remotes, credentials, and the `.git` directory stay excluded.
+One synthesized commit for the copied tree is written when the store
+is present ([synthesized commit](synthesized-commit.md)). This is not
+a GitHub-equivalence claim.
 
 Decision 0002 still holds: the snapshot is plain working files and a
 canonical manifest, and `.git` is not copied. This design does not
@@ -19,10 +21,11 @@ of that commit and the trees and blobs reachable from it. When
 nothing, and capture still succeeds.
 
 Parent commits are not walked. Tags, notes, and reflogs are not walked.
-Commit objects are not copied. A commit object carries an author, a
-committer, and a message. A synthesized commit for the stored tree is
-designed in [synthesized commit](synthesized-commit.md) and is not
-implemented.
+The original commit object is not copied. A commit object carries an
+author, a committer, and a message. One synthesized commit for the
+stored tree is written
+([synthesized commit](synthesized-commit.md)). Its identity is fixed
+and is not taken from the original commit.
 
 The copied blobs are the committed bytes of that one tree. Captured
 files stay the dirty working bytes. The object copy does not reset the
@@ -129,7 +132,8 @@ These stay excluded:
 - remote URLs, remote names, and remote-tracking refs
 - credential helpers, tokens, and `http.extraheader`
 - `user.name` and `user.email`
-- commit objects, and therefore authors, committers, and messages
+- the original commit object, and therefore its author, committer,
+  message, timestamp, and parents
 - tags, notes, and reflogs
 - `github.token` and `GITHUB_TOKEN`
 
@@ -161,7 +165,7 @@ disk budget counts them. The default budget stays
 ## Acceptance
 
 - The trees and blobs of the captured base commit are stored as loose
-  objects. The commit object is not stored.
+  objects. The original commit object is not stored.
 - An unborn repository, and a base tree that contains an excluded path,
   store no objects. Capture still succeeds.
 - Dirty captured files stay the working bytes. The copied blob stays
@@ -169,14 +173,14 @@ disk budget counts them. The default budget stays
 - A non-empty alternates file fails capture and publishes nothing.
 - The workspace has no `.git`, no `git.json`, and no `objects`.
 - Creating a `.git` directory and filling the `github` context remain
-  unstarted. A synthesized commit is designed separately and is not
-  implemented.
+  unstarted. One synthesized commit is stored when the object store is
+  present.
 
 ## Out of scope
 
-A synthesized commit for the stored tree is designed in
-[synthesized commit](synthesized-commit.md) and is not implemented.
-Creating a `.git` directory, fetching, persisting a credential, and
-filling the `github` context each still need their own design. A later
-`run` step still has no Git repository. This design does not authorize
-those behaviors.
+One synthesized commit for the stored tree is written
+([synthesized commit](synthesized-commit.md)). Creating a `.git`
+directory, fetching, persisting a credential, and filling the
+`github` context each still need their own design. A later `run` step
+still has no Git repository. This design does not authorize those
+behaviors.

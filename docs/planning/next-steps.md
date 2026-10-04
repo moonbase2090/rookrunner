@@ -10,9 +10,10 @@ those captured files. NS-23 accepts `uses: actions/checkout@v4` as that
 checkout. It does not replace captured files, persist a credential, or
 create `.git`. Other checkout inputs stay rejected. NS-24 designs a
 copy of the trees and blobs of the captured base commit, and NS-25
-stores those objects. Commit objects stay excluded. NS-26 designs
-one synthesized commit for that tree and does not write it. Creating
-a `.git` directory and filling the `github` context are not started.
+stores those objects. The original commit object stays excluded.
+NS-26 designs one synthesized commit for that tree, and NS-27 writes
+it. Creating a `.git` directory and filling the `github` context are
+not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -23,9 +24,9 @@ metadata is copied to a sibling `git.json`. Credentials and remote URLs
 stay excluded. An owned checkout accepts `uses: actions/checkout@v4`
 and does not replace those files, persist a credential, or create
 `.git`. Other checkout inputs stay rejected. The trees and blobs of
-the captured base commit are stored beside the manifest. Commit
-objects stay excluded. A synthesized commit for that tree is designed
-and is not implemented. The act pin stays historical.
+the captured base commit are stored beside the manifest. The original
+commit object stays excluded. One synthesized commit for that tree is
+stored. The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -1040,14 +1041,42 @@ Acceptance criteria:
 - Creating a `.git` directory and filling the `github` context remain
   unstarted.
 
+**NS-27. Store the synthesized commit.**
+
+Status: implemented. When the object store is present, capture stores
+one loose commit whose tree is the stored root tree
+([synthesized commit](../design/synthesized-commit.md)). The name,
+email, timestamp, and message are fixed. They are not read from the
+original commit. The commit has no parents. An unborn repository and
+a base tree that contains an excluded path still store nothing. The
+original commit object stays excluded. `base_commit` and `git.json`
+stay unchanged. The synthesized id is included in
+`git_objects_digest`. The capability version stays 9.
+
+https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
+https://www.rfc-editor.org/rfc/rfc2606
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- When the store is present, one loose commit is stored. Its tree is
+  the stored root tree. It has no parents. The name, email, timestamp,
+  and message are the fixed values.
+- That commit does not copy the original author, committer, message,
+  timestamp, or parents. `base_commit` and `git.json` stay unchanged.
+- An unborn repository, and a base tree that contains an excluded
+  path, store no commit. Capture still succeeds.
+- Creating a `.git` directory and filling the `github` context remain
+  unstarted.
+
 ## After the first path
 
-The trees and blobs of the captured base commit are copied. A
-synthesized commit for that tree is designed in NS-26 and is not
-implemented. Creating a `.git` directory and filling the `github`
-context are not started. A later `run` step still has no Git
-repository. None of this work is authorized to call the result
-GitHub-equivalent.
+The trees and blobs of the captured base commit are copied. One
+synthesized commit for that tree is stored. Creating a `.git`
+directory and filling the `github` context are not started. A later
+`run` step still has no Git repository. None of this work is
+authorized to call the result GitHub-equivalent.
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,

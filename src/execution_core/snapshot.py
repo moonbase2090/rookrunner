@@ -1,10 +1,10 @@
 """Preparatory Git working-file capture for M2; never executes workflows.
 
-Snapshots contain plain files, a canonical manifest, and the loose trees and
-blobs of the captured base commit. They never contain Git configuration,
-credentials, hooks, commit objects, or a repository. A sibling git.json
-records only the sanitized allow-list. The caller must use a private,
-trusted state root.
+Snapshots contain plain files, a canonical manifest, the loose trees and
+blobs of the captured base commit, and one synthesized commit for that
+tree. They never contain the original commit, Git configuration,
+credentials, hooks, or a repository. A sibling git.json records only the
+sanitized allow-list. The caller must use a private, trusted state root.
 """
 
 from contextlib import contextmanager
@@ -81,6 +81,26 @@ def _loose_object(kind, payload, algorithm, oid):
     if hashlib.new(algorithm, raw).hexdigest() != oid:
         reject("SOURCE_INVALID", "Git could not inspect the selected repository")
     return zlib.compress(raw)
+
+
+def _synthesized_commit(root_tree, algorithm):
+    """Id and payload of the fixed parentless commit for this root tree.
+
+    The name, email, timestamp, and message are not read from the original
+    commit, Git configuration, or the environment. Unix time 0 keeps the id
+    a pure function of the tree.
+    https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
+    """
+
+    payload = (
+        f"tree {root_tree}\n"
+        "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+        "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+        "\n"
+        "captured tree\n"
+    ).encode("ascii")
+    raw = f"commit {len(payload)}\0".encode("ascii") + payload
+    return hashlib.new(algorithm, raw).hexdigest(), payload
 
 
 def _one_oid(raw, algorithm):
@@ -684,7 +704,7 @@ class SourceCapture:
                 tree,
                 algorithm,
                 head_name,
-                _,
+                root_tree,
                 object_ids,
                 alternates,
             ) = initial
@@ -748,13 +768,21 @@ class SourceCapture:
             _write_private(staging / "git.json", git_encoded)
             objects_canonical = None
             if object_ids is not None:
+                # Computed after the inventory reads agree. The original commit
+                # is not read, and this id is not added to the cat-file batch.
+                commit_id, commit_payload = _synthesized_commit(root_tree, algorithm)
+                commit_loose = _loose_object("commit", commit_payload, algorithm, commit_id)
+                stored_ids = tuple(sorted((*object_ids, commit_id)))
                 objects_root = staging / "objects"
                 objects_root.mkdir(mode=0o700)
                 for oid, payload in self._objects(object_ids, algorithm).items():
                     bucket = objects_root / oid[:2]
                     bucket.mkdir(mode=0o700, exist_ok=True)
                     _write_private(bucket / oid[2:], payload)
-                objects_canonical = canonical(list(object_ids)).encode()
+                bucket = objects_root / commit_id[:2]
+                bucket.mkdir(mode=0o700, exist_ok=True)
+                _write_private(bucket / commit_id[2:], commit_loose)
+                objects_canonical = canonical(list(stored_ids)).encode()
             for directory, _, _ in os.walk(staging, topdown=False, followlinks=False):
                 sync_directory(directory)
             snapshot_id = str(uuid.uuid4())
