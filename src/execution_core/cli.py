@@ -44,6 +44,15 @@ def call(state, method, params):
         return reply
 
 
+def _trigger_flags(args):
+    return (
+        args.activity_type is not None
+        or args.changed_file
+        or args.commit_count is not None
+        or args.diff_unavailable
+    )
+
+
 def submit_params(parser, args):
     workflow = (args.workflow, args.job_id, args.event, args.image)
     if any(value is not None for value in workflow):
@@ -76,9 +85,29 @@ def submit_params(parser, args):
         }
         if event_name is not None:
             params["event_name"] = event_name
+        if args.activity_type is not None:
+            if (
+                args.activity_type == ""
+                or len(args.activity_type) > 128
+                or "\0" in args.activity_type
+                or "\n" in args.activity_type
+                or "\r" in args.activity_type
+            ):
+                parser.error("--activity-type must be 1 to 128 characters without a newline")
+            params["activity_type"] = args.activity_type
+        if args.changed_file:
+            params["changed_files"] = args.changed_file
+        if args.commit_count is not None:
+            if args.commit_count < 0:
+                parser.error("--commit-count must be an integer from 0")
+            params["commit_count"] = args.commit_count
+        if args.diff_unavailable:
+            params["diff_unavailable"] = True
         return params
     if args.event_name is not None:
         parser.error("--event-name is only accepted with a workflow submit")
+    if _trigger_flags(args):
+        parser.error("trigger options are only accepted with a workflow submit")
     if args.backend is None:
         parser.error("fixture submit requires --backend development")
     return {
@@ -269,8 +298,28 @@ def main():
         "--event-name",
         help=(
             "optional event name for a version 1 workflow submit. "
-            "It is part of the submission. Omit it to leave github.event_name unset"
+            "It is part of the submission. Omit it to leave github.event_name unset. "
+            "push and pull_request check on before a run is stored"
         ),
+    )
+    submit.add_argument(
+        "--activity-type",
+        help="pull_request activity type. Required when that event is listed in on",
+    )
+    submit.add_argument(
+        "--changed-file",
+        action="append",
+        help="one path from the caller-supplied diff. Repeat for each file. The first 3000 count",
+    )
+    submit.add_argument(
+        "--commit-count",
+        type=int,
+        help="commits in a push. More than 1000 skips path filters",
+    )
+    submit.add_argument(
+        "--diff-unavailable",
+        action="store_true",
+        help="the diff is unavailable, so path filters are skipped",
     )
     submit.add_argument("--image", help="digest-pinned image id or name@sha256 pin")
     follow = commands.add_parser(

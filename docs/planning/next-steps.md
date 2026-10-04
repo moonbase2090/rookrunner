@@ -19,8 +19,9 @@ exit code 0. A disposable ruff violation ended `failed` with exit
 code 1 at the Ruff step. The record is
 [dogfood check](../validation/dogfood-check.md). NS-39 designs owner
 CI in [owner CI](../design/owner-ci.md). The credential stays an
-owner decision. NS-40 posts one commit status. The next slice is
-NS-41. NS-41 through NS-43 are not started.
+owner decision. NS-40 posts one commit status. NS-41 evaluates `on`
+for push and pull request. The next slice is NS-42. NS-42 and NS-43
+are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1726,7 +1727,8 @@ with exit code 1 at the Ruff step. The record is
 names is closed by a later run of
 `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`, which ended `succeeded`
 with exit code 0. That record is in the same document. NS-39 designs
-owner CI. NS-40 posts one commit status. The next slice is NS-41.
+owner CI. NS-40 posts one commit status. NS-41 evaluates `on` for
+push and pull request. The next slice is NS-42.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.
@@ -1900,7 +1902,10 @@ Acceptance criteria:
 
 **NS-41. Evaluate `on` for push and pull request.**
 
-Status: not started.
+Status: implemented. Submission checks `on` when `event_name` is
+`push` or `pull_request`. A non-match returns `{"triggered": false}`,
+creates no run, and does not consume the key. The capability version
+stays 12. A version 11 plan is not migrated. The next slice is NS-42.
 
 When `event_name` (NS-33) is `push` or `pull_request`, submission
 checks `on` before acceptance:
@@ -1935,7 +1940,7 @@ Acceptance criteria:
 
 **NS-42. Poll an owner repository and run its CI.**
 
-Status: not started. It depends on NS-40 and NS-41.
+Status: not started. It depends on NS-40 and NS-41. NS-41 is implemented.
 
 A one-shot poll command handles one configured repository. The OS
 scheduler starts it. Each pass:

@@ -282,6 +282,30 @@
                   "minLength": 1,
                   "maxLength": 128,
                   "pattern": "^[^\\u0000\\n\\r\\ud800-\\udfff]*\\Z"
+                },
+                "activity_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[^\\u0000\\n\\r\\ud800-\\udfff]*\\Z"
+                },
+                "changed_files": {
+                  "type": "array",
+                  "maxItems": 10000,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "pattern": "^[^\\u0000\\n\\r\\ud800-\\udfff]*\\Z"
+                  }
+                },
+                "commit_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000000000
+                },
+                "diff_unavailable": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -587,6 +611,18 @@
           "$ref": "#/$defs/run.status.request"
         }
       ]
+    },
+    "NotTriggered": {
+      "type": "object",
+      "properties": {
+        "triggered": {
+          "const": false
+        }
+      },
+      "required": [
+        "triggered"
+      ],
+      "additionalProperties": false
     },
     "Run": {
       "type": "object",
@@ -1752,7 +1788,14 @@
               "$ref": "#/$defs/RequestId"
             },
             "result": {
-              "$ref": "#/$defs/Run"
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/Run"
+                },
+                {
+                  "$ref": "#/$defs/NotTriggered"
+                }
+              ]
             }
           },
           "required": [
@@ -2075,6 +2118,9 @@
                 },
                 {
                   "$ref": "#/$defs/StatusResult"
+                },
+                {
+                  "$ref": "#/$defs/NotTriggered"
                 }
               ]
             }

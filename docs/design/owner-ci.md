@@ -69,7 +69,7 @@ NS-40 posts one status with the CLI command `status`. It refuses, with no HTTP r
 run is a workflow run, the snapshot is clean, `included` is empty, and
 `base_commit` equals the tested commit. For a push, the tested commit
 and the status SHA are the same. For a pull request, the tested commit
-is the merge commit and the status SHA is the head SHA.
+is the merge commit and the status SHA is the head SHA. NS-41 evaluates `on` for `push` and `pull_request` before a run is accepted. A non-match creates no run.
 
 ## Event payload
 

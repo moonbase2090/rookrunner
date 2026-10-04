@@ -1895,8 +1895,8 @@ def plan_workflow(workflow, job_id, action_root=None, action_store=None):
     return _Planner(action_root, action_store).plan(workflow, job_id)
 
 
-def plan_snapshot(snapshot_dir, job_id, action_store=None):
-    """Plan the workflow bytes stored in a capture snapshot. Does not verify hashes."""
+def snapshot_workflow_bytes(snapshot_dir):
+    """Return the workflow bytes stored in a capture snapshot."""
 
     root = Path(snapshot_dir)
     try:
@@ -1913,11 +1913,31 @@ def plan_snapshot(snapshot_dir, job_id, action_store=None):
     try:
         if target.is_symlink() or not target.is_file():
             _invalid("snapshot workflow is not a regular file")
-        workflow_bytes = target.read_bytes()
+        return target.read_bytes()
     except OSError:
         _invalid("snapshot workflow is not readable")
+
+
+def workflow_on(workflow):
+    """Return the stored `on` value without planning jobs."""
+
+    planner = _Planner()
+    root = planner._root(workflow)
+    body = planner._mapping(root, "", forbid=False)
+    if "on" not in body:
+        return None
+    return planner._on(body)
+
+
+def plan_snapshot(snapshot_dir, job_id, action_store=None):
+    """Plan the workflow bytes stored in a capture snapshot. Does not verify hashes."""
+
+    root = Path(snapshot_dir)
     return plan_workflow(
-        workflow_bytes, job_id, action_root=root / "files", action_store=action_store
+        snapshot_workflow_bytes(snapshot_dir),
+        job_id,
+        action_root=root / "files",
+        action_store=action_store,
     )
 
 
