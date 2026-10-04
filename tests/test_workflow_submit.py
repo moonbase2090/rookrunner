@@ -255,6 +255,33 @@ class WorkflowSubmitTests(unittest.TestCase):
         snaps = self.state / "snapshots"
         self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
 
+    def test_write_permissions_create_no_run(self):
+        self.write_workflows()
+        path = self.repo / ".github/workflows/permissions.yml"
+        path.write_text(
+            "permissions: write-all\non: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"
+        )
+        self.git("add", ".github/workflows/permissions.yml")
+        self.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "permissions",
+        )
+        reply = call(
+            self.state,
+            "run.submit",
+            self.params(workflow=".github/workflows/permissions.yml", submission_key="permissions"),
+        )
+        self.assert_fault(reply, "CAPABILITY_UNSUPPORTED", -32000)
+        self.assertIn("permissions", reply["error"]["message"])
+        self.assertEqual(self.rpc("run.list", {})["runs"], [])
+        snaps = self.state / "snapshots"
+        self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
+
     def test_step_timeout_above_360_creates_no_run(self):
         self.write_workflows()
         path = self.repo / ".github/workflows/step-timeout.yml"

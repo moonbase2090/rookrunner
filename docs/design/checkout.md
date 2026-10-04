@@ -56,8 +56,8 @@ process, because the step does no work.
 
 The plan stores `uses` as `actions/checkout@v4` and `checkout` as
 `captured`. It does not store an action path, an action digest, or
-inner steps. The capability version is 9. The runner accepts only that
-version. In-flight plans from version 8 are not migrated. Every plan
+inner steps. The capability version is 10. The runner accepts only that
+version. Plans from version 9 are not migrated. Every plan
 digest changes because the version field changes.
 
 When the step runs, the runner does not start a process, does not
