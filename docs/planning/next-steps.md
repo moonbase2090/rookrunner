@@ -8,8 +8,9 @@ a SHA-pinned `actions/checkout` as the owned checkout. NS-33 fills the
 `github` and `runner` contexts and the default variables. NS-34 fetches
 a remote action pinned by a 40-character lowercase commit SHA. NS-35
 mounts an operator-supplied Node 24 directory read-only at
-`/opt/node24`. The capability version stays 11. NS-36 through NS-43
-are not started.
+`/opt/node24`. NS-36 runs a remote `node24` `main` entry from a copy
+in the attempt. The capability version is 12. A version 11 plan is
+not migrated. NS-37 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -47,13 +48,17 @@ repository, path, commit, and that digest. A later submission reuses the
 stored copy after the digest matches. A tag, a branch, a short SHA, and
 a 64-character pin are `CAPABILITY_UNSUPPORTED` and ask for a full SHA
 pin. A failed fetch is `ACTION_UNAVAILABLE`. It creates no run and does
-not consume the key. `node24` and `docker` still produce no plan.
+not consume the key. A remote action with `runs.using: node24` and
+`main`, and no `pre` or `post`, runs as one step. The capability
+version is 12. A version 11 plan is not migrated. `pre`, `post`,
+`node20`, and `docker` still produce no plan.
 `worker --node24 DIR` mounts that directory read-only at `/opt/node24`
 and does not put it on `PATH`. `worker.describe` reports its digest
 only when the flag is set. A run that uses the mount records that
 digest and the version `node --version` prints in the job container.
-The worker does not download Node. The
-fetched tree is not copied into the workspace `.git`.
+The worker does not download Node. The fetched tree is copied into
+the attempt and mounted read-write at `/actions/{owner}/{repo}/{sha}`.
+The store is not mounted and is not copied into the workspace `.git`.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -1587,7 +1592,19 @@ Acceptance criteria:
 
 **NS-36. Run the `main` entry of a `node24` JavaScript action.**
 
-Status: not started.
+Status: implemented. The capability version is 12. A version 11 plan
+is not migrated.
+
+A resolved remote action with `runs.using: node24` and `main`, and
+without `pre`, `pre-if`, `post`, or `post-if`, runs as one step.
+`/opt/node24/bin/node` runs that file with working directory
+`/workspace`. The fetched tree is copied into the attempt and mounted
+read-write at `/actions/{owner}/{repo}/{sha}`, plus the action path
+when `uses` has one. The store is not mounted. Inputs arrive as
+`INPUT_<NAME>`. Outputs, env, and PATH files apply to later steps.
+`GITHUB_STATE` stays with that action instance. `GITHUB_STEP_SUMMARY`
+is kept as step evidence and is not rendered. `pre`, `node20`,
+`post`, and Docker still create no run. `check.yml` does not run.
 
 A resolved action (NS-34) with `runs.using: node24` and `main` runs as
 one step. The NS-35 Node runs the `main` file in the job container,

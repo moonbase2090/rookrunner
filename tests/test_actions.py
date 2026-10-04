@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from execution_core.actions import ActionStorageFull, stage_node24_actions
 from execution_core.disk import usage
 from execution_core.plan import plan_snapshot
 from execution_core.protocol import canonical
@@ -38,9 +39,35 @@ runs:
 NODE24 = """\
 name: Node
 description: javascript
+outputs:
+  answer:
+    description: Answer
 runs:
   using: node24
   main: index.js
+"""
+NODE20 = """\
+name: Node20
+description: old runtime
+runs:
+  using: node20
+  main: index.js
+"""
+PRE = """\
+name: Pre
+description: setup entry
+runs:
+  using: node24
+  pre: setup.js
+  main: index.js
+"""
+POST = """\
+name: Post
+description: cleanup entry
+runs:
+  using: node24
+  main: index.js
+  post: cleanup.js
 """
 DOCKER = """\
 name: Image
@@ -305,20 +332,84 @@ class RemoteActionTests(unittest.TestCase):
         self.assertIsNotNone(self._row("kept"))
         self.assertGreaterEqual(worker.action_store().fetches, 3)
 
-    def test_node24_and_docker_produce_no_plan(self):
+    def test_node24_main_is_accepted_and_recorded(self):
         node = self._action({"action.yml": NODE24, "index.js": "nope\n"}, repository="nodepin")
+        workflow = self._workflow(self._uses(f"acme/nodepin@{node}"))
+        worker = self._start()
+        accepted = self._submit("node24", workflow)
+        self.assertNotIn("error", accepted, accepted)
+        result = accepted["result"]
+        self.assertEqual(result["state"], "queued")
+        recorded = result["input"]["actions"]
+        self.assertEqual(recorded[0]["owner"], "acme")
+        self.assertEqual(recorded[0]["repository"], "nodepin")
+        self.assertEqual(recorded[0]["path"], "")
+        self.assertEqual(recorded[0]["commit"], node)
+        snapshot = self.state / "snapshots" / result["input"]["snapshot_id"]
+        step = plan_snapshot(snapshot, "build", action_store=worker.action_store())["plan"]["job"][
+            "steps"
+        ][0]
+        self.assertEqual(step["javascript"], "node24")
+        self.assertEqual(step["main"], "index.js")
+        self.assertNotIn("steps", step)
+        self.assertEqual(step["outputs"]["answer"], {"description": "Answer"})
+        self.assertEqual(worker.action_store().fetches, 1)
+        attempt = self.state / "attempts" / "attempt-1"
+        staged = stage_node24_actions(
+            plan_snapshot(snapshot, "build", action_store=worker.action_store())["plan"],
+            worker.action_store(),
+            attempt / "actions",
+            lambda _size: False,
+        )
+        copied = staged / "acme" / "nodepin" / node / "index.js"
+        self.assertEqual(copied.read_text(), "nope\n")
+        self.assertEqual(worker.action_store().fetches, 1)
+        stored = self.state / "actions" / "objects" / recorded[0]["digest"] / "index.js"
+        copied.write_text("changed\n")
+        self.assertEqual(stored.read_text(), "nope\n")
+        blocked = self.root / "blocked-actions"
+        with self.assertRaises(ActionStorageFull):
+            stage_node24_actions(
+                plan_snapshot(snapshot, "build", action_store=worker.action_store())["plan"],
+                worker.action_store(),
+                blocked,
+                lambda _size: True,
+            )
+        self.assertFalse(blocked.exists())
+        self.assertEqual(stored.read_text(), "nope\n")
+        worker._remove_workspace(attempt)
+        self.assertFalse(attempt.exists())
+        self.assertTrue(stored.is_file())
+
+    def test_node20_pre_post_and_docker_produce_no_plan(self):
+        node20 = self._action({"action.yml": NODE20, "index.js": "nope\n"}, repository="oldpin")
         image = self._action(
             {"action.yml": DOCKER, "Dockerfile": "FROM scratch\n"}, repository="dockpin"
         )
+        pre = self._action(
+            {"action.yml": PRE, "index.js": "nope\n", "setup.js": "nope\n"}, repository="prepin"
+        )
+        post = self._action(
+            {"action.yml": POST, "index.js": "nope\n", "cleanup.js": "nope\n"},
+            repository="postpin",
+        )
+        missing = self._action(
+            {"action.yml": "name: Bare\ndescription: no main\nruns:\n  using: node24\n"},
+            repository="barepin",
+        )
         self._start()
-        for name, pin in (
-            ("node24", f"acme/nodepin@{node}"),
-            ("docker", f"acme/dockpin@{image}"),
-        ):
+        cases = (
+            ("node20", f"acme/oldpin@{node20}", "CAPABILITY_UNSUPPORTED", "runs.using"),
+            ("docker", f"acme/dockpin@{image}", "CAPABILITY_UNSUPPORTED", "runs.using"),
+            ("pre", f"acme/prepin@{pre}", "CAPABILITY_UNSUPPORTED", "runs.pre"),
+            ("post", f"acme/postpin@{post}", "CAPABILITY_UNSUPPORTED", "runs.post"),
+            ("bare", f"acme/barepin@{missing}", "INVALID_PARAMS", "runs.main"),
+        )
+        for name, pin, kind, field in cases:
             workflow = self._workflow(self._uses(pin), f"{name}.yml")
             reply = self._submit(name, workflow)
-            self.assertEqual(reply["error"]["data"]["kind"], "CAPABILITY_UNSUPPORTED")
-            self.assertIn("runs.using", reply["error"]["message"])
+            self.assertEqual(reply["error"]["data"]["kind"], kind, reply)
+            self.assertIn(field, reply["error"]["message"])
             self.assertIsNone(self._row(name))
         self.assertEqual(self.worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
         objects = self.state / "actions" / "objects"

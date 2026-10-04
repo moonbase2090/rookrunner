@@ -103,8 +103,10 @@ Planning a snapshot reads `action.yml` (or `action.yaml`) from that
 snapshot and stores the inner `run` steps plus a digest of the parsed
 action. `run_job` executes the stored steps in the same container and
 workspace. It does not read the action file again and it does not fetch a
-remote ref. `./path` and `$/path` are the accepted forms. JavaScript and
-Docker actions are rejected. Nested `uses` is rejected. Composite `run`
+remote ref. `./path` and `$/path` are the accepted forms. A remote
+``node24`` action with ``main`` runs from a copy mounted at ``/actions``.
+``node20``, ``pre``, ``post``, and Docker actions are rejected. Nested
+``uses`` is rejected. Composite `run`
 text stays literal, so `${{ github.action_path }}` inside `run` is not
 expanded. A whole-string expression is evaluated in a composite step's
 `env`, an action output `value`, and the calling step's `with`. Mixed
@@ -236,6 +238,8 @@ class _JobRuntime:
         self.outputs = {}
         self.masks = []
         self.base_path = None
+        # GITHUB_STATE for one action instance. Later steps do not receive it.
+        self.action_state = {}
 
 
 def _reserved_env(script_name):
@@ -522,6 +526,8 @@ def _accept_jobs(jobs):
                     _setup("plan is not accepted")
                 if step.get("checkout") == "captured":
                     _accept_checkout(step)
+                elif step.get("javascript") == "node24":
+                    _accept_javascript(step)
                 elif "uses" in step:
                     _accept_composite(step)
                 elif not isinstance(step.get("run"), str) or "\0" in step["run"]:
@@ -704,6 +710,79 @@ def _accept_composite(step):
         shell = inner.get("shell")
         if not isinstance(shell, str) or shell.strip() == "" or "\0" in shell:
             _setup("plan is not accepted")
+
+
+def _accept_javascript(step):
+    """Accept one remote node24 main. It has no inner steps."""
+
+    if step.get("javascript") != "node24" or "steps" in step:
+        _setup("plan is not accepted")
+    uses = step.get("uses")
+    action_path = step.get("action_path")
+    main = step.get("main")
+    if not isinstance(uses, str) or uses == "" or "\0" in uses:
+        _setup("plan is not accepted")
+    if not isinstance(action_path, str) or "\\" in action_path or "\0" in action_path:
+        _setup("plan is not accepted")
+    if not isinstance(main, str) or main == "" or "\\" in main or "\0" in main:
+        _setup("plan is not accepted")
+    relative = PurePosixPath(action_path)
+    main_path = PurePosixPath(main)
+    if (
+        relative.is_absolute()
+        or main_path.is_absolute()
+        or ".." in relative.parts
+        or "." in relative.parts
+        or ".." in main_path.parts
+        or "." in main_path.parts
+        or "" in main_path.parts
+    ):
+        _setup("plan is not accepted")
+    if action_path != "" and "" in relative.parts:
+        _setup("plan is not accepted")
+    for label in ("action_digest", "content_digest"):
+        value = step.get(label)
+        if not isinstance(value, str) or len(value) != 64:
+            _setup("plan is not accepted")
+        if any(char not in "0123456789abcdef" for char in value):
+            _setup("plan is not accepted")
+    commit = step.get("action_commit")
+    owner = step.get("action_owner")
+    repository = step.get("action_repository")
+    if not isinstance(commit, str) or len(commit) != 40:
+        _setup("plan is not accepted")
+    if any(char not in "0123456789abcdef" for char in commit):
+        _setup("plan is not accepted")
+    if not isinstance(owner, str) or not isinstance(repository, str):
+        _setup("plan is not accepted")
+    if owner in {"", ".", ".."} or repository in {"", ".", ".."}:
+        _setup("plan is not accepted")
+    if any(char in owner + repository for char in "/\\\0"):
+        _setup("plan is not accepted")
+    for label in ("with", "inputs", "outputs", "env"):
+        if not isinstance(step.get(label), dict):
+            _setup("plan is not accepted")
+    for key, item in step["inputs"].items():
+        if not isinstance(key, str) or not isinstance(item, dict):
+            _setup("plan is not accepted")
+        if not isinstance(item.get("description"), str) or type(item.get("required")) is not bool:
+            _setup("plan is not accepted")
+        if "default" in item and not isinstance(item.get("default"), str):
+            _setup("plan is not accepted")
+    for key, item in step["outputs"].items():
+        if not isinstance(key, str) or not isinstance(item, dict):
+            _setup("plan is not accepted")
+        if not isinstance(item.get("description"), str) or "value" in item:
+            _setup("plan is not accepted")
+    _env_layer(step.get("env"))
+    for key in ("id", "name", "shell", "working_directory", "if"):
+        value = step.get(key)
+        if value is not None and (not isinstance(value, str) or "\0" in value):
+            _setup("plan is not accepted")
+    timeout = step.get("timeout_minutes")
+    if timeout is not None and type(timeout) is not int:
+        _setup("plan is not accepted")
+    _node_main_path(step)
 
 
 def _shell_command(shell, bash_ok, script):
@@ -992,6 +1071,30 @@ def _job_socket(docker, docker_socket):
     return path, info.st_gid
 
 
+def _plan_uses_node24(jobs):
+    for job in jobs:
+        for _job, step in _iter_concrete(job, ()):
+            if step.get("javascript") == "node24":
+                return True
+    return False
+
+
+def _accept_actions(actions, needed):
+    """Return the attempt actions directory, or None when the plan has no node24."""
+
+    if not needed:
+        return None
+    if actions is None:
+        _setup("plan is not accepted")
+    root = Path(actions)
+    if root.is_symlink() or not root.is_dir():
+        _setup("plan is not accepted")
+    text = os.fspath(root)
+    if "," in text or "\n" in text or "\0" in text:
+        _setup("workspace path is not accepted")
+    return root
+
+
 def _create_args(
     name,
     workspace,
@@ -1003,6 +1106,7 @@ def _create_args(
     socket_gid,
     runner_dirs,
     node_root,
+    actions_root,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1047,6 +1151,13 @@ def _create_args(
             [
                 "--mount",
                 f"type=bind,source={node_root},destination=/opt/node24,readonly",
+            ]
+        )
+    if actions_root is not None:
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={actions_root},destination=/actions",
             ]
         )
     if socket_path is not None:
@@ -1777,6 +1888,11 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
             if step.get("checkout") == "captured":
                 scripts[(planned_path, step["index"])] = None
                 continue
+            if step.get("javascript") == "node24":
+                script_name = f"node-{counter[0]}"
+                counter[0] += 1
+                scripts[(planned_path, step["index"])] = script_name
+                continue
             if "uses" in step:
                 names = []
                 for inner in step["steps"]:
@@ -1807,6 +1923,7 @@ def run_job(
     docker_socket=False,
     event_name=None,
     node24=None,
+    actions=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -1831,6 +1948,10 @@ def run_job(
     `docker_socket` is off unless the caller passes true or a socket path.
     `node24` is omitted, or a `(directory, digest)` pair. The directory is
     mounted read-only at `/opt/node24` and is not placed on `PATH`.
+    `actions` is the attempt copy of node24 action files, mounted
+    read-write at `/actions`. The content store is not mounted. A plan
+    that runs node24 main without the Node directory fails setup before
+    the container starts.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket.
     """
@@ -1850,6 +1971,10 @@ def run_job(
     reference, digest, workflow, jobs, event_bytes, workspace, manifest = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
     )
+    needs_node = _plan_uses_node24(jobs)
+    if needs_node and node_mount is None:
+        _setup("Node 24 is not configured")
+    actions_root = _accept_actions(actions, needs_node)
     deadline = started + _job_seconds(jobs[0])
     resolved = digest
     docker_bin = _docker_binary(docker)
@@ -1902,6 +2027,7 @@ def run_job(
                 socket_gid,
                 runner_dirs,
                 None if node_mount is None else node_mount["root"],
+                actions_root,
             ),
             60,
             deadline,
@@ -2548,6 +2674,29 @@ def _consider_step(
         return _step_result(step, "skipped", None, "", "", None, job_id)
     if step.get("checkout") == "captured":
         return _step_result(step, "succeeded", 0, "", "", None, job_id)
+    if step.get("javascript") == "node24":
+        return _run_javascript(
+            docker,
+            name,
+            step,
+            workflow,
+            job,
+            event,
+            workspace,
+            bash_ok,
+            step_timeout,
+            deadline,
+            prior,
+            cancelled,
+            needs,
+            script_name,
+            runtime,
+            commands,
+            job_id,
+            matrix=matrix,
+            strategy=strategy,
+            inputs=inputs,
+        )
     if "uses" in step:
         return _run_composite(
             docker,
@@ -2877,6 +3026,129 @@ def _action_outputs(
     return produced
 
 
+def _input_env_name(name):
+    """INPUT_<NAME>, upper case, with spaces replaced by underscores."""
+
+    return "INPUT_" + name.upper().replace(" ", "_")
+
+
+def _node_main_path(step):
+    """Container path of one node24 main file under /actions."""
+
+    owner = step.get("action_owner")
+    repository = step.get("action_repository")
+    commit = step.get("action_commit")
+    action_path = step.get("action_path")
+    main = step.get("main")
+    if not all(isinstance(item, str) and item != "" for item in (owner, repository, commit, main)):
+        _setup("plan is not accepted")
+    if not isinstance(action_path, str):
+        _setup("plan is not accepted")
+    parts = [owner, repository, commit]
+    if action_path:
+        parts.extend(action_path.split("/"))
+    parts.extend(main.split("/"))
+    if any(part in {"", ".", ".."} or "\\" in part or "\0" in part for part in parts):
+        _setup("plan is not accepted")
+    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+        _setup("plan is not accepted")
+    return "/actions/" + "/".join(parts)
+
+
+def _javascript_env(step, values):
+    """Resolve node24 inputs. A with value wins. required does not fail a miss."""
+
+    resolved = {}
+    for key, raw in step.get("with", {}).items():
+        resolved[key] = _render_expr(raw, values)
+    spec = step.get("inputs")
+    if not isinstance(spec, dict):
+        _setup("plan is not accepted")
+    for key in resolved:
+        if key not in spec:
+            _setup("plan is not accepted")
+    env = {}
+    for key, item in spec.items():
+        if not isinstance(item, dict):
+            _setup("plan is not accepted")
+        if key in resolved:
+            value = resolved[key]
+        elif isinstance(item.get("default"), str):
+            value = _render_expr(item["default"], values)
+        else:
+            value = ""
+        if not isinstance(value, str) or "\0" in value:
+            value = ""
+        env[_input_env_name(key)] = value
+    return env
+
+
+def _run_javascript(
+    docker,
+    name,
+    step,
+    workflow,
+    job,
+    event,
+    workspace,
+    bash_ok,
+    step_timeout,
+    deadline,
+    prior,
+    cancelled,
+    needs,
+    script_name,
+    runtime,
+    commands,
+    job_id,
+    matrix=None,
+    strategy=None,
+    inputs=None,
+):
+    """Run node24 main with /opt/node24/bin/node. The working directory is /workspace."""
+
+    if not isinstance(script_name, str) or script_name == "":
+        _setup("plan is not accepted")
+    try:
+        values = _expression_values(
+            event,
+            workflow,
+            job,
+            step,
+            prior,
+            cancelled,
+            needs,
+            runtime,
+            inputs=inputs,
+            matrix=matrix,
+            strategy=strategy,
+        )
+        extra = _javascript_env(step, values)
+    except ExprError as exc:
+        return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
+    extra["GITHUB_STATE"] = f"/run/rookrunner-cmd/{script_name}-state"
+    extra["GITHUB_STEP_SUMMARY"] = f"/run/rookrunner-cmd/{script_name}-summary"
+    return _run_step(
+        docker,
+        name,
+        step,
+        workflow,
+        job,
+        workspace,
+        bash_ok,
+        step_timeout,
+        deadline,
+        script_name,
+        job_id,
+        runtime,
+        commands,
+        extra_reserved=extra,
+        argv=[_NODE24_BINARY, _node_main_path(step)],
+        workdir_override="/workspace",
+        command_extra=("state", "summary"),
+    )
+
+
 def _run_step(
     docker,
     name,
@@ -2894,25 +3166,38 @@ def _run_step(
     timeout_step=None,
     extra_reserved=None,
     output_map=None,
+    argv=None,
+    workdir_override=None,
+    command_extra=(),
 ):
-    shell = _chosen_shell(step, job, workflow)
-    relative = _chosen_directory(step, job, workflow)
-    container_script = f"/run/rookrunner/{script_name}"
-    command = _shell_command(shell, bash_ok, container_script)
-    workdir = _working_directory(workspace, relative)
-    if command is None:
-        return _step_result(step, "failed", None, "", "", "shell is unsupported", job_id)
-    if workdir is None:
-        return _step_result(
-            step,
-            "failed",
-            None,
-            "",
-            "",
-            "working-directory is not inside the workspace",
-            job_id,
-        )
-    files = _command_files(commands, script_name)
+    if argv is None:
+        shell = _chosen_shell(step, job, workflow)
+        relative = _chosen_directory(step, job, workflow)
+        container_script = f"/run/rookrunner/{script_name}"
+        command = _shell_command(shell, bash_ok, container_script)
+        workdir = _working_directory(workspace, relative)
+        if command is None:
+            return _step_result(step, "failed", None, "", "", "shell is unsupported", job_id)
+        if workdir is None:
+            return _step_result(
+                step,
+                "failed",
+                None,
+                "",
+                "",
+                "working-directory is not inside the workspace",
+                job_id,
+            )
+    else:
+        command = list(argv)
+        workdir = workdir_override
+        if (
+            not command
+            or workdir is None
+            or any(not isinstance(part, str) or "\0" in part for part in command)
+        ):
+            _setup("plan is not accepted")
+    files = _command_files(commands, script_name, command_extra)
     try:
         for path in files.values():
             path.write_bytes(b"")
@@ -2949,16 +3234,29 @@ def _run_step(
     logged = process_stdout(stdout_text, runtime.masks)
     logged_err = mask_text(stderr_text, runtime.masks)
     _apply_command_files(runtime, step, files, output_map)
+    if runtime is not None and "state" in files:
+        state_text = _read_utf8(files["state"])
+        if state_text is not None:
+            runtime.action_state[step.get("index")] = parse_env(state_text)
     status = "succeeded" if code == 0 else "failed"
-    return _step_result(step, status, code, logged, logged_err, None, job_id)
+    result = _step_result(step, status, code, logged, logged_err, None, job_id)
+    if "summary" in files:
+        summary = _read_utf8(files["summary"])
+        if summary:
+            # Same character cap as step stdout in the v0 contract.
+            result["summary"] = summary[:65536]
+    return result
 
 
-def _command_files(commands, script_name):
-    return {
+def _command_files(commands, script_name, extra=()):
+    files = {
         "env": commands / f"{script_name}-env",
         "output": commands / f"{script_name}-output",
         "path": commands / f"{script_name}-path",
     }
+    for name in extra:
+        files[name] = commands / f"{script_name}-{name}"
+    return files
 
 
 def _path_overlay(docker, name, step, runtime, deadline):

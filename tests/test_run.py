@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 
-from execution_core.actions import ActionStore
+from execution_core.actions import ActionStore, stage_node24_actions
 from execution_core.node24 import inspect_node24
 from execution_core.artifacts import written_files
 from execution_core.attempt import materialize_attempt
@@ -646,9 +646,9 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_previous_capability_version_is_not_migrated(self):
-        self.assertEqual(self.plan["capability_version"], 11)
+        self.assertEqual(self.plan["capability_version"], 12)
         stale = dict(self.plan)
-        stale["capability_version"] = 10
+        stale["capability_version"] = 11
         with self.assertRaises(RunError) as raised:
             run_job(
                 self.snapshot,
@@ -660,6 +660,47 @@ class SetupTests(unittest.TestCase):
                 docker=str(self.docker),
             )
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertFalse(self.marker.exists())
+
+    def test_node24_without_the_directory_is_setup_failure(self):
+        step = {
+            "index": 0,
+            "id": None,
+            "name": None,
+            "shell": None,
+            "working_directory": None,
+            "env": {},
+            "uses": "acme/node@" + ("a" * 40),
+            "action_path": "",
+            "action_digest": "b" * 64,
+            "with": {},
+            "inputs": {"version": {"description": "Version", "required": True}},
+            "outputs": {"answer": {"description": "Answer"}},
+            "javascript": "node24",
+            "main": "main.js",
+            "action_owner": "acme",
+            "action_repository": "node",
+            "action_commit": "a" * 40,
+            "content_digest": "c" * 64,
+        }
+        self.plan["job"]["steps"] = [step]
+        self.plan["jobs"][-1]["steps"] = [step]
+        actions = self.workspace.parent / "actions" / "acme" / "node" / ("a" * 40)
+        actions.mkdir(parents=True)
+        (actions / "main.js").write_text("exit 0\n")
+        with self.assertRaises(RunError) as raised:
+            run_job(
+                self.snapshot,
+                self.digest,
+                self.workspace,
+                self.plan,
+                "sha256:" + "ab" * 32,
+                EVENT,
+                docker=str(self.docker),
+                actions=self.workspace.parent / "actions",
+            )
+        self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+        self.assertEqual(str(raised.exception), "Node 24 is not configured")
         self.assertFalse(self.marker.exists())
 
     def test_read_only_permissions_are_accepted_before_docker(self):
@@ -1017,6 +1058,275 @@ jobs:
         self.assertEqual(str(caught.exception), "node is not Node 24")
         self.assertNotIn(str(wrong), str(caught.exception))
 
+    def test_node24_main_runs_from_the_attempt_copy(self):
+        node = self.root / "node24"
+        binary = node / "bin" / "node"
+        binary.parent.mkdir(parents=True)
+        binary.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "--version" ]; then\n'
+            "  printf '%s\\n' v24.0.0\n"
+            "  exit 0\n"
+            "fi\n"
+            'exec /bin/sh "$@"\n'
+        )
+        binary.chmod(0o755)
+        inspected = inspect_node24(node)
+        remote = self.root / "remote"
+        action = remote / "acme" / "nodepin.git"
+        nested = action / "js"
+        nested.mkdir(parents=True)
+        _git(action, "init", "--initial-branch=main")
+        _git(action, "config", "uploadpack.allowReachableSHA1InWant", "true")
+        _git(action, "config", "uploadpack.allowAnySHA1InWant", "true")
+        (nested / "action.yml").write_text(
+            "name: Node\n"
+            "description: javascript\n"
+            "inputs:\n"
+            "  version:\n"
+            "    description: Version\n"
+            "    required: true\n"
+            "  place:\n"
+            "    description: Place\n"
+            "    default: ${{ github.workspace }}\n"
+            "  token:\n"
+            "    description: Token\n"
+            "    default: ${{ github.token }}\n"
+            "  python-version:\n"
+            "    description: Python\n"
+            "    default: '3.12'\n"
+            "  mode:\n"
+            "    description: Mode\n"
+            "    default: write\n"
+            "outputs:\n"
+            "  answer:\n"
+            "    description: Answer\n"
+            "runs:\n"
+            "  using: node24\n"
+            "  main: main.js\n"
+        )
+        (nested / "main.js").write_text(
+            "#!/bin/sh\n"
+            'if [ -n "$GITHUB_TOKEN" ] || [ -n "$GITHUB_ACTIONS" ] || '
+            '[ -n "$GITHUB_ACTION_PATH" ]; then exit 4; fi\n'
+            'pwd > "$GITHUB_WORKSPACE/pwd.txt"\n'
+            'printf \'%s\' "$INPUT_VERSION" > "$GITHUB_WORKSPACE/version.txt"\n'
+            'printf \'%s\' "$INPUT_PLACE" > "$GITHUB_WORKSPACE/place.txt"\n'
+            'printf \'%s\' "$INPUT_TOKEN" > "$GITHUB_WORKSPACE/token.txt"\n'
+            'if [ "$INPUT_MODE" = "read" ]; then\n'
+            '  printf \'%s\' "${secret-}" > "$GITHUB_WORKSPACE/seen.txt"\n'
+            "  exit 0\n"
+            "fi\n"
+            "printf '%s\\n' 'answer=from-action' >> \"$GITHUB_OUTPUT\"\n"
+            'mkdir -p "$GITHUB_WORKSPACE/bin"\n'
+            "printf '%s\\n' '#!/bin/sh' 'printf %s path-ok' > "
+            '"$GITHUB_WORKSPACE/bin/marker-cmd"\n'
+            'chmod +x "$GITHUB_WORKSPACE/bin/marker-cmd"\n'
+            'printf \'%s\\n\' "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"\n'
+            "printf '%s\\n' 'secret=hidden-state' >> \"$GITHUB_STATE\"\n"
+            "printf '%s\\n' 'summary text' >> \"$GITHUB_STEP_SUMMARY\"\n"
+            "printf '%s\\n' '::add-matcher::{\"owner\":\"x\"}'\n"
+            'printf \'%s\\n\' mutated > "$(dirname "$0")/mutated.txt"\n'
+        )
+        _git(action, "add", ".")
+        _git(
+            action,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "action",
+        )
+        sha = subprocess.run(
+            ["git", "-C", action, "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        workflow = (
+            "name: demo\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - id: writer\n"
+            "        working-directory: missing-dir\n"
+            f"        uses: acme/nodepin/js@{sha}\n"
+            "        with:\n"
+            "          version: '3.12'\n"
+            "      - id: reader\n"
+            f"        uses: acme/nodepin/js@{sha}\n"
+            "        with:\n"
+            "          version: '3.12'\n"
+            "          mode: read\n"
+            "      - id: show\n"
+            "        if: steps.writer.outputs.answer == 'from-action'\n"
+            "        run: printf '%s' read-ok > \"$GITHUB_WORKSPACE/answer.txt\"\n"
+            "      - id: path\n"
+            "        run: |\n"
+            "          if command -v node >/dev/null 2>&1; then exit 9; fi\n"
+            '          marker-cmd > "$GITHUB_WORKSPACE/path.txt"\n'
+        )
+        root = self.root / "node-run"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        store = ActionStore(root / "state", remote, 10 * 1024**3)
+        planned = plan_snapshot(snapshot, "build", action_store=store)
+        step = planned["plan"]["job"]["steps"][0]
+        self.assertEqual(step["javascript"], "node24")
+        self.assertEqual(step["main"], "main.js")
+        self.assertEqual(step["action_path"], "js")
+        self.assertNotIn("steps", step)
+        self.assertNotIn("value", step["outputs"]["answer"])
+        actions = workspace.parent / "actions"
+        staged = stage_node24_actions(planned["plan"], store, actions, lambda _size: False)
+        self.assertEqual(store.fetches, 1)
+        with self.assertRaises(RunError) as missing:
+            run_job(
+                snapshot,
+                digest,
+                workspace,
+                planned["plan"],
+                self.image,
+                EVENT,
+                docker=str(self.docker),
+                actions=staged,
+            )
+        self.assertEqual(str(missing.exception), "Node 24 is not configured")
+        self.assertFalse(self.log.exists())
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            planned["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            node24=(inspected["root"], inspected["digest"]),
+            actions=staged,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["node24"]["version"], "v24.0.0")
+        self.assertEqual(result["node24"]["digest"], inspected["digest"])
+        self.assertEqual((workspace / "pwd.txt").read_text(), "/workspace\n")
+        self.assertEqual((workspace / "version.txt").read_text(), "3.12")
+        self.assertEqual((workspace / "place.txt").read_text(), "/workspace")
+        self.assertEqual((workspace / "token.txt").read_text(), "")
+        self.assertEqual((workspace / "seen.txt").read_text(), "")
+        self.assertEqual((workspace / "answer.txt").read_text(), "read-ok")
+        self.assertEqual((workspace / "path.txt").read_text(), "path-ok")
+        writer = result["steps"][0]
+        self.assertEqual(writer["summary"], "summary text\n")
+        self.assertNotIn("summary text", writer["stdout"])
+        self.assertIn("::add-matcher::", writer["stdout"])
+        self.assertNotIn("hidden-state", result["steps"][1]["stdout"])
+        self.assertNotIn("hidden-state", writer["stdout"])
+        copied = staged / "acme" / "nodepin" / sha / "js" / "mutated.txt"
+        self.assertEqual(copied.read_text(), "mutated\n")
+        stored = root / "state" / "actions" / "objects" / step["content_digest"]
+        self.assertFalse((stored / "mutated.txt").exists())
+        self.assertEqual((stored / "main.js").read_bytes(), (nested / "main.js").read_bytes())
+        self.assertFalse((workspace / "main.js").exists())
+        self.assertFalse((workspace / "mutated.txt").exists())
+        names = [entry["path"] for entry in written_files(workspace, snapshot)]
+        self.assertNotIn("main.js", names)
+        self.assertNotIn("mutated.txt", names)
+        self.assertIn("answer.txt", names)
+        created = next(call for call in self._calls() if call and call[0] == "create")
+        self.assertIn(
+            f"type=bind,source={staged},destination=/actions",
+            created,
+        )
+        self.assertNotIn(
+            "readonly", created[created.index(f"type=bind,source={staged},destination=/actions")]
+        )
+        self.assertFalse(any(str(stored) in item for item in created))
+        main = f"/actions/acme/nodepin/{sha}/js/main.js"
+        ran = next(
+            call for call in self._calls() if "/opt/node24/bin/node" in call and main in call
+        )
+        self.assertEqual(ran[ran.index("--workdir") + 1], "/workspace")
+        self.assertIn("INPUT_VERSION=3.12", ran)
+        self.assertIn("INPUT_PLACE=/workspace", ran)
+        self.assertIn("INPUT_TOKEN=", ran)
+        self.assertIn("INPUT_PYTHON-VERSION=3.12", ran)
+        self.assertFalse(any(item.startswith("GITHUB_TOKEN=") for item in ran))
+        self.assertFalse(any(item.startswith("GITHUB_ACTIONS=") for item in ran))
+        self.assertFalse(any(item.startswith("GITHUB_ACTION_PATH=") for item in ran))
+        self.assertEqual(store.fetches, 1)
+
+        fail_repo = remote / "acme" / "failpin.git"
+        fail_repo.mkdir(parents=True)
+        _git(fail_repo, "init", "--initial-branch=main")
+        _git(fail_repo, "config", "uploadpack.allowReachableSHA1InWant", "true")
+        _git(fail_repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+        (fail_repo / "action.yml").write_text(
+            "name: Fail\ndescription: nonzero\nruns:\n  using: node24\n  main: main.js\n"
+        )
+        (fail_repo / "main.js").write_text("#!/bin/sh\nexit 7\n")
+        _git(fail_repo, "add", ".")
+        _git(
+            fail_repo,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fail",
+        )
+        fail_sha = subprocess.run(
+            ["git", "-C", fail_repo, "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        fail_workflow = (
+            "name: demo\n"
+            "on: push\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            f"      - id: bad\n        uses: acme/failpin@{fail_sha}\n"
+            "      - id: later\n"
+            "        if: always()\n"
+            "        run: printf '%s' still > \"$GITHUB_WORKSPACE/still.txt\"\n"
+        )
+        fail_root = self.root / "fail-run"
+        fail_root.mkdir()
+        _repo, fail_snapshot, fail_digest, fail_workspace = _capture(fail_root, fail_workflow)
+        fail_store = ActionStore(fail_root / "state", remote, 10 * 1024**3)
+        fail_plan = plan_snapshot(fail_snapshot, "build", action_store=fail_store)
+        fail_actions = stage_node24_actions(
+            fail_plan["plan"],
+            fail_store,
+            fail_workspace.parent / "actions",
+            lambda _size: False,
+        )
+        failed = run_job(
+            fail_snapshot,
+            fail_digest,
+            fail_workspace,
+            fail_plan["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            node24=(inspected["root"], inspected["digest"]),
+            actions=fail_actions,
+        )
+        self.assertEqual(failed["status"], "failed", failed)
+        self.assertEqual(failed["exit_code"], 7)
+        self.assertEqual(failed["steps"][0]["exit_code"], 7)
+        self.assertEqual(failed["steps"][1]["status"], "succeeded")
+        self.assertEqual((fail_workspace / "still.txt").read_text(), "still")
+
     def test_steps_run_in_one_pinned_container(self):
         (self.repo / "source.txt").write_text("mutated checkout\n")
         result = run_job(
@@ -1114,7 +1424,7 @@ jobs:
         self.assertEqual(digest_before, captured["digest"])
         planned = plan_snapshot(snapshot, "build")
         step = planned["plan"]["job"]["steps"][0]
-        self.assertEqual(planned["plan"]["capability_version"], 11)
+        self.assertEqual(planned["plan"]["capability_version"], 12)
         self.assertEqual(step["uses"], uses)
         self.assertEqual(step["checkout"], "captured")
         for absent in ("action_path", "action_digest", "steps", "inputs", "outputs"):

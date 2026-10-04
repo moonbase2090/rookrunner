@@ -70,7 +70,7 @@ class PlanTests(unittest.TestCase):
         second = self.plan()
         self.assertEqual(first, second)
         plan = first["plan"]
-        self.assertEqual(plan["capability_version"], 11)
+        self.assertEqual(plan["capability_version"], 12)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertIsNone(plan["job"]["strategy"])
@@ -836,7 +836,7 @@ runs:
             second = plan_snapshot(snapshot, "build")
             self.assertEqual(first, second)
             step = first["plan"]["job"]["steps"][0]
-            self.assertEqual(first["plan"]["capability_version"], 11)
+            self.assertEqual(first["plan"]["capability_version"], 12)
             self.assertEqual(step["uses"], "./.github/actions/hello")
             self.assertEqual(step["action_path"], ".github/actions/hello")
             self.assertEqual(len(step["action_digest"]), 64)
@@ -964,6 +964,20 @@ name: Js
 description: JavaScript
 runs:
   using: node20
+  main: index.js
+"""
+                },
+                "CAPABILITY_UNSUPPORTED",
+                "jobs.test.steps.0.uses.runs.using",
+            ),
+            "node24": (
+                "jobs:\n  test:\n    steps:\n      - uses: ./.github/actions/hello\n",
+                {
+                    ".github/actions/hello/action.yml": """\
+name: Js
+description: JavaScript
+runs:
+  using: node24
   main: index.js
 """
                 },
@@ -1446,7 +1460,7 @@ class ReusableWorkflowTests(unittest.TestCase):
             b"on: workflow_call\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
             "build",
         )["plan"]
-        self.assertEqual(plan["capability_version"], 11)
+        self.assertEqual(plan["capability_version"], 12)
         self.assertNotIn("call", plan["job"])
         self.assertEqual(plan["job"]["services"], [])
         self.assertEqual(plan["workflow"]["on"], "workflow_call")
@@ -1913,7 +1927,7 @@ class CheckoutPlanTests(unittest.TestCase):
         return raised.exception
 
     def test_owned_checkout_records_captured_files(self):
-        self.assertEqual(CAPABILITY_VERSION, 11)
+        self.assertEqual(CAPABILITY_VERSION, 12)
         self.assertNotIn("checkout", STEP_KEYS)
         workflow = """\
 on: push
@@ -1931,7 +1945,7 @@ jobs:
         uses: actions/checkout@v4
 """
         plan = self.plan(workflow)
-        self.assertEqual(plan["capability_version"], 11)
+        self.assertEqual(plan["capability_version"], 12)
         step = plan["job"]["steps"][0]
         self.assertEqual(step["uses"], "actions/checkout@v4")
         self.assertEqual(step["checkout"], "captured")
@@ -2156,7 +2170,7 @@ jobs:
       - run: echo hi
 """
         plan = self.plan(workflow)
-        self.assertEqual(plan["capability_version"], 11)
+        self.assertEqual(plan["capability_version"], 12)
         self.assertEqual(plan["workflow"]["permissions"], {"contents": "read"})
         self.assertEqual(plan["job"]["permissions"], {"contents": "read"})
         self.assertNotIn("token", plan["workflow"])

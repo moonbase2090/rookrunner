@@ -38,11 +38,11 @@ and history are preserved; no duplicate replacement tickets were created.
 
 The owner's 2026-10-03 priorities change the horizons:
 
-- **Now:** NS-34 is merged. NS-35 mounts an operator-supplied Node 24
-  directory read-only at `/opt/node24`. The capability version stays 11.
-  The `dogfood` epic, together with the `check.yml` subset of RR-16,
-  RR-17, and RR-18, still has to run Rookrunner's own `check.yml` from
-  the CLI (NS-36–NS-38).
+- **Now:** NS-36 runs a remote `node24` `main` from a copy in the
+  attempt. The capability version is 12. A version 11 plan is not
+  migrated. The `dogfood` epic, together with the `check.yml` subset of
+  RR-16, RR-17, and RR-18, still has to run Rookrunner's own `check.yml`
+  from the CLI (NS-37–NS-38).
 - **Next:** the `ownerci` epic reports push and pull request results for
   owner repositories to GitHub as commit statuses (NS-39–NS-43).
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
