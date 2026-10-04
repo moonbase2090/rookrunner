@@ -12,8 +12,9 @@ create `.git`. Other checkout inputs stay rejected. NS-24 designs a
 copy of the trees and blobs of the captured base commit, and NS-25
 stores those objects. The original commit object stays excluded.
 NS-26 designs one synthesized commit for that tree, and NS-27 writes
-it. NS-28 designs one owned `.git` directory for the attempt workspace
-and does not write it. Filling the `github` context is not started.
+it. NS-28 designs one owned `.git` directory for the attempt workspace,
+and NS-29 writes it when the object store is present. Filling the
+`github` context is not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -26,9 +27,10 @@ and does not replace those files, persist a credential, or create
 `.git`. Other checkout inputs stay rejected. The trees and blobs of
 the captured base commit are stored beside the manifest. The original
 commit object stays excluded. One synthesized commit for that tree is
-stored. An owned `.git` directory for the attempt workspace is designed
-and is not written. Filling the `github` context is not started. The
-act pin stays historical.
+stored. When the object store is present, the attempt workspace
+receives an owned `.git` directory. An absent store still has no
+`.git`. Filling the `github` context is not started. The act pin
+stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -1099,13 +1101,43 @@ Acceptance criteria:
   copy the original `.git` or the original commit.
 - Filling the `github` context remains unstarted.
 
+**NS-29. Store the owned Git directory.**
+
+Status: implemented. When the snapshot has an object store,
+`materialize_attempt` writes one `.git` in the attempt workspace
+([owned Git directory](../design/git-directory.md)). `HEAD` points at
+the synthesized commit. `git read-tree HEAD` fills the index and does
+not change captured files. An absent store still materializes with no
+`.git`. A rejected store or sibling creates no workspace. The checkout
+step does not create or delete that directory. `written_files` omits
+`.git`. The run's workspace check does not walk `.git`. Filling the
+`github` context stays unstarted. The capability version stays 9.
+
+https://git-scm.com/docs/gitrepository-layout
+https://git-scm.com/docs/git-read-tree
+https://git-scm.com/docs/git-config
+
+This is not a GitHub-equivalence claim.
+
+Acceptance criteria:
+
+- When the store is present, the workspace has one `.git`. `HEAD`
+  points at the synthesized commit. A dirty captured file stays a
+  work-tree modification.
+- An absent store materializes with no `.git`. A rejected store or
+  sibling creates no workspace.
+- The original `.git` and the original commit are not copied.
+  `git.json` and `objects/` stay out of the workspace root.
+- Filling the `github` context remains unstarted.
+
 ## After the first path
 
 The trees and blobs of the captured base commit are copied. One
-synthesized commit for that tree is stored. An owned `.git` directory
-is designed in NS-28 and is not written. Filling the `github` context
-is not started. A later `run` step still has no Git repository. None
-of this work is authorized to call the result GitHub-equivalent.
+synthesized commit for that tree is stored. When the object store is
+present, the attempt workspace receives an owned `.git` directory.
+Filling the `github` context is not started. A `run` step has that
+directory when the store is present. None of this work is authorized
+to call the result GitHub-equivalent.
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,

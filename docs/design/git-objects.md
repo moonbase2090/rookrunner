@@ -91,9 +91,11 @@ still stores only `snapshot_id`, `digest`, and `workflow_digest`.
 
 `verify_snapshot` opens `manifest.json` and `files/` and does not walk
 the snapshot root, so `objects/` is ignored the same way `git.json` is.
-A missing store still verifies. The run path does not read the store.
-`materialize_attempt` still copies only manifest entries. The workspace
-receives neither `.git`, nor `git.json`, nor `objects/`.
+A missing store still verifies. When the store is present,
+`materialize_attempt` reads it and writes an owned `.git`
+([Git directory](git-directory.md)). The work tree is still only the
+manifest entries. The workspace does not receive `git.json` or a root
+`objects/` directory. An absent store still has no `.git`.
 
 ## What stays excluded
 
@@ -172,16 +174,16 @@ disk budget counts them. The default budget stays
   the committed bytes.
 - A non-empty alternates file fails capture and publishes nothing.
 - The workspace has no `.git`, no `git.json`, and no `objects`.
-- An owned `.git` directory is designed in
-  [Git directory](git-directory.md) and is not written. Filling the
-  `github` context remains unstarted. One synthesized commit is stored
-  when the object store is present.
+- When the object store is present, materialize writes an owned `.git`
+  ([Git directory](git-directory.md)). Filling the `github` context
+  remains unstarted. One synthesized commit is stored when the object
+  store is present.
 
 ## Out of scope
 
 One synthesized commit for the stored tree is written
-([synthesized commit](synthesized-commit.md)). An owned `.git`
-directory is designed in [Git directory](git-directory.md) and is not
-written. Fetching, persisting a credential, and filling the `github`
-context each still need their own design. A later `run` step still has
-no Git repository. This design does not authorize those behaviors.
+([synthesized commit](synthesized-commit.md)). When the object store is present, materialize writes an owned `.git`
+([Git directory](git-directory.md)). Fetching, persisting a credential,
+and filling the `github` context each still need their own design. A
+`run` step has that directory when the store is present. This design
+does not authorize fetching or a credential.

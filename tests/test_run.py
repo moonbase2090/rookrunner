@@ -22,10 +22,12 @@ from execution_core.run import (
     _job_outputs,
     _read_utf8,
     _resolve_call_inputs,
+    _verify_workspace,
     owned_container_present,
     release_owned_container,
     run_job,
 )
+from execution_core.verify import verify_snapshot
 from execution_core.snapshot import SourceCapture
 
 
@@ -603,6 +605,21 @@ class SetupTests(unittest.TestCase):
         self.assertIn("workspace failed verification", str(raised.exception))
         self.assertFalse(self.marker.exists())
 
+    def test_owned_git_is_outside_workspace_verification(self):
+        manifest = verify_snapshot(self.snapshot, self.digest)
+        _verify_workspace(self.workspace, manifest)
+        secret = self.root / "secret-dir"
+        secret.mkdir()
+        (secret / "token").write_text("secret-token\n")
+        (self.workspace / ".git").rename(self.root / "saved-git")
+        (self.workspace / ".git").symlink_to(secret, target_is_directory=True)
+        _verify_workspace(self.workspace, manifest)
+        (self.workspace / "source.txt").write_text("changed\n")
+        with self.assertRaises(RunError) as raised:
+            _verify_workspace(self.workspace, manifest)
+        self.assertIn("workspace failed verification", str(raised.exception))
+        self.assertFalse(self.marker.exists())
+
     def test_changed_snapshot_is_not_a_step_exit(self):
         (self.snapshot / "files" / "source.txt").write_text("changed\n")
         with self.assertRaises(RunError) as raised:
@@ -831,8 +848,10 @@ class DockerRunTests(unittest.TestCase):
         self.assertEqual((snapshot / "files" / "source.txt").read_text(), "dirty-bytes\n")
         self.assertEqual((workspace / "source.txt").read_text(), "dirty-bytes\n")
         self.assertEqual((workspace / "seen.txt").read_text(), "dirty-bytes\n")
-        self.assertFalse((workspace / ".git").exists())
+        self.assertTrue((workspace / ".git").is_dir())
+        self.assertFalse((workspace / ".git").is_symlink())
         self.assertFalse((workspace / "git.json").exists())
+        self.assertFalse((workspace / "objects").exists())
         self.assertFalse((snapshot / "files" / ".git").exists())
         self.assertEqual((repo / "source.txt").read_text(), "dirty-bytes\n")
         fresh = self._calls()[len(before) :]
@@ -860,7 +879,7 @@ jobs:
         if: github.sha == '' && github.token == ''
         run: |
           cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
-          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
+          if [ ! -d "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
 """
         result = self._owned_checkout(omitted, "omitted")
         self.assertEqual(
@@ -882,7 +901,7 @@ jobs:
         if: github.sha == '' && github.token == ''
         run: |
           cat "$GITHUB_WORKSPACE/source.txt" > "$GITHUB_WORKSPACE/seen.txt"
-          if [ -e "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
+          if [ ! -d "$GITHUB_WORKSPACE/.git" ] || [ -e "$GITHUB_WORKSPACE/git.json" ] || [ -e "$GITHUB_WORKSPACE/objects" ]; then exit 2; fi
 """
         flagged_result = self._owned_checkout(flagged, "flagged")
         self.assertEqual(

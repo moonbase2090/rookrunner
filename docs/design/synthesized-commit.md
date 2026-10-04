@@ -105,9 +105,11 @@ kind, capability string, or protocol field is added to the plan, the
 run record, or describe. No numeric limit is added.
 
 `verify_snapshot` still does not walk the snapshot root. A missing
-store still verifies. The run path does not read the store.
-`materialize_attempt` still copies only manifest entries. The
-workspace receives neither `.git`, nor `git.json`, nor `objects/`.
+store still verifies. When the store is present, `materialize_attempt`
+reads it and writes an owned `.git` ([Git directory](git-directory.md)).
+The work tree is still only the manifest entries. The workspace does
+not receive `git.json` or a root `objects/` directory. An absent store
+still has no `.git`.
 
 ## Acceptance
 
@@ -118,14 +120,14 @@ workspace receives neither `.git`, nor `git.json`, nor `objects/`.
   timestamp, or parents. `base_commit` and `git.json` stay unchanged.
 - An unborn repository, and a base tree that contains an excluded
   path, store no commit. Capture still succeeds.
-- An owned `.git` directory is designed in
-  [Git directory](git-directory.md) and is not written. Filling the
-  `github` context remains unstarted.
+- When the object store is present, materialize writes an owned `.git`
+  ([Git directory](git-directory.md)). Filling the `github` context
+  remains unstarted.
 
 ## Out of scope
 
-An owned `.git` directory is designed in
-[Git directory](git-directory.md) and is not written. Fetching,
-persisting a credential, and filling the `github` context each still
-need their own design. A later `run` step still has no Git repository.
-This design does not authorize those behaviors.
+When the object store is present, materialize writes an owned `.git`
+([Git directory](git-directory.md)). Fetching, persisting a credential,
+and filling the `github` context each still need their own design. A
+`run` step has that directory when the store is present. This design
+does not authorize fetching or a credential.

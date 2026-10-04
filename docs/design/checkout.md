@@ -61,7 +61,8 @@ version. In-flight plans from version 8 are not migrated. Every plan
 digest changes because the version field changes.
 
 When the step runs, the runner does not start a process, does not
-modify the workspace, does not create `.git`, does not read `git.json`,
+modify the workspace, does not create `.git`, does not delete a `.git`
+that materialize already wrote, does not read `git.json`,
 and does not contact a network. The step succeeds with exit code 0. It
 publishes no outputs and has no post step. The snapshot digest is
 unchanged. Describe capabilities are unchanged. The compatibility note
@@ -82,7 +83,9 @@ added.
    with `CAPABILITY_UNSUPPORTED` and create no run.
 4. `actions/checkout@v7` and `actions/checkout` without `@` stay
    rejected.
-5. After the step, the workspace has no `.git` and no `git.json`.
+5. After the step, the workspace has no `git.json` and no `objects`.
+   When the store is present, `.git` is already there and the step
+   leaves it. When the store is absent, `.git` is absent.
 6. `github.sha` and `github.token` are still empty.
 7. The capability version is 9. A workflow of only `run` steps still
    runs.
@@ -91,9 +94,8 @@ added.
 
 The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). One synthesized commit for that tree
-is stored ([synthesized commit](synthesized-commit.md)). An owned
-`.git` directory for the attempt workspace is designed
-([Git directory](git-directory.md)) and is not written. Fetching,
-persisting a credential, and filling the `github` context each need
-their own design. A later `run` step still has no Git repository.
-This design does not authorize those behaviors.
+is stored ([synthesized commit](synthesized-commit.md)). When the store is present, materialize writes an owned `.git`
+([Git directory](git-directory.md)). The checkout step does not create
+it. Fetching, persisting a credential, and filling the `github`
+context each need their own design. This design does not authorize
+those behaviors.

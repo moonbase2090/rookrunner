@@ -82,10 +82,10 @@ credentials, hooks, or remote URLs are copied. The trees and blobs of
 the captured base commit are stored as loose objects beside the manifest
 ([git objects](git-objects.md)). That directory is not a Git
 repository. One synthesized commit for that tree is stored
-([synthesized commit](synthesized-commit.md)). An owned `.git` for
-the attempt workspace is designed ([Git directory](git-directory.md))
-and is not written. A later Git command inside the workspace still
-has no repository. `uses: actions/checkout@v4`
+([synthesized commit](synthesized-commit.md)). When the object store is present, the attempt workspace receives an
+owned `.git` ([Git directory](git-directory.md)). An absent store still
+has no `.git`. A Git command inside that workspace can see the
+synthesized commit. `uses: actions/checkout@v4`
 is an owned checkout of the captured files and does not fetch or replace
 them. Other checkout actions stay rejected. The
 [sanitized metadata design](git-metadata.md) names the only fields copied into
