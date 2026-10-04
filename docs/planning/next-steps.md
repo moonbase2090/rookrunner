@@ -2,7 +2,8 @@
 
 The order after NS-29 was re-prioritized on 2026-10-03. See
 [Re-prioritization](#re-prioritization-2026-10-03) for what moved, why,
-and what is deferred. NS-30 through NS-43 are proposed and not started.
+and what is deferred. NS-30 designs the dogfood path and does not
+change the engine. NS-31 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -17,8 +18,9 @@ copy of the trees and blobs of the captured base commit, and NS-25
 stores those objects. The original commit object stays excluded.
 NS-26 designs one synthesized commit for that tree, and NS-27 writes
 it. NS-28 designs one owned `.git` directory for the attempt workspace,
-and NS-29 writes it when the object store is present. Filling the
-`github` context is not started.
+and NS-29 writes it when the object store is present. NS-30 designs
+the `check.yml` dogfood path. Filling the `github` context is
+designed there and is not started.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -33,8 +35,8 @@ the captured base commit are stored beside the manifest. The original
 commit object stays excluded. One synthesized commit for that tree is
 stored. When the object store is present, the attempt workspace
 receives an owned `.git` directory. An absent store still has no
-`.git`. Filling the `github` context is not started. The act pin
-stays historical.
+`.git`. Filling the `github` context is designed in NS-30 and is
+not started. The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
@@ -1139,9 +1141,10 @@ Acceptance criteria:
 The trees and blobs of the captured base commit are copied. One
 synthesized commit for that tree is stored. When the object store is
 present, the attempt workspace receives an owned `.git` directory.
-Filling the `github` context is not started. A `run` step has that
-directory when the store is present. None of this work is authorized
-to call the result GitHub-equivalent.
+Filling the `github` context is designed in
+[dogfood check](../design/dogfood-check.md) and is not started. A `run`
+step has that directory when the store is present. None of this work is
+authorized to call the result GitHub-equivalent.
 
 M2 exit evidence is NS-6 through NS-10 plus the captured-input check in NS-5:
 representative success and failure, unchanged digests after checkout edits,
@@ -1164,8 +1167,8 @@ Accepted direction is the owner's 2026-10-03 priorities, in order:
 
 Proposed below: the slice order, the scope of each slice, and the
 recommended answers to design questions. Each design question is
-settled by its design PR, not by this section. NS-29 (owned Git
-directory, PR #33) is in review and keeps its scope.
+settled by its design PR, not by this section. NS-29 is merged and
+keeps its scope. NS-30 is that dogfood design.
 
 ### What `check.yml` needs
 
@@ -1223,7 +1226,7 @@ one build seat. Hard dependencies:
 
 ```mermaid
 flowchart LR
-  NS29[NS-29 Git directory, in review] --> NS30[NS-30 Dogfood design]
+  NS29[NS-29 Git directory, merged] --> NS30[NS-30 Dogfood design]
   NS30 --> NS31[NS-31 Read-only permissions]
   NS30 --> NS32[NS-32 Checkout by SHA]
   NS30 --> NS33[NS-33 github and runner contexts]
@@ -1307,48 +1310,33 @@ assume a fixed rate.
 
 **NS-30. Design the `check.yml` dogfood path.**
 
-Status: not started. It starts after NS-29 merges. Docs only.
+Status: designed. The design is
+[dogfood check](../design/dogfood-check.md). This slice does not change
+the engine.
 
-A new design document, `docs/design/dogfood-check.md`, maps each element
-of this repository's `check.yml` to the slice that supports it, the
-behavior that slice implements, and the documented source. It settles
-these questions, so later slices do not reopen them:
+The design maps each element of this repository's `check.yml` to the
+slice that supports it. Settled there, so later slices do not reopen
+them:
 
-1. **`github.sha`.** NS-29 points the workspace `HEAD` at the
-   synthesized commit, not at `base_commit`. The push event documents
-   `GITHUB_SHA` as the tip commit pushed. Choose one of two options.
-   One sets `base_commit` only for a clean capture with no included
-   files, and leaves the value unset otherwise. The other uses the
-   synthesized commit id. Recommended: `base_commit` only when clean.
-   Record the intentional difference that `HEAD` names another commit.
-2. **The source of each `github` property.** Each comes from the
-   caller's event, from the plan, or stays unset. `github.token` stays
-   unset. Nothing is read from the user's Git configuration.
-3. **`GITHUB_ACTIONS`.** The variables reference says it is always
-   `true` when GitHub Actions runs the workflow. This engine is not
-   GitHub Actions. Recommended: leave it unset unless a dogfood fixture
-   shows a needed action depends on it.
-4. **Runner directories.** Decide where `HOME`, `RUNNER_TEMP`, and
-   `RUNNER_TOOL_CACHE` live in the job container, and how they are
-   removed and counted. GitHub documents `/github/home` for Docker
-   container actions.
-5. **How a remote action pinned by SHA is fetched.** The options are
-   Git over HTTPS from the action repository, or the REST archive
-   endpoint. The REST limit for unauthenticated requests is 60 per hour.
-   Recommended: Git over HTTPS, with no credential.
-6. **How Node 24 reaches the job container.** The options are an
-   operator-supplied distribution mounted read-only, or a worker
-   download verified against a pinned checksum. Recommended for the
-   first slice: the operator-supplied distribution.
-7. **The `runs.using: node20` policy.** The 2026-09-23 changelog
-   retires Node 20 on GitHub Actions
-   (https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-in-github-actions/).
-   It does not say how a `node20` action now runs. Until a cited rule
-   exists, `node20` stays rejected by name. The only `node20` action in
-   `check.yml` is `actions/checkout`, and that is the owned step.
-8. **Action files in the container.** They are either mounted read-only
-   from the store or copied into the attempt. Some actions write next to
-   their own files.
+1. **`github.sha`.** `base_commit` when the capture is clean and
+   `included` is empty. Otherwise unset. The synthesized commit is not
+   that value. Workspace `HEAD` stays the synthesized commit.
+2. **`github` properties.** Set from the plan, the attempt, or the
+   caller event, as the design lists. `github.token` stays unset.
+   Nothing is read from the user's Git configuration.
+3. **`GITHUB_ACTIONS`.** Unset. This engine is not GitHub Actions.
+4. **Runner directories.** `HOME` is `/github/home`. `RUNNER_TEMP` is
+   `/github/runner-temp`. `RUNNER_TOOL_CACHE` is `/github/tool-cache`.
+   They are removed with the attempt and count toward the existing
+   disk budget.
+5. **Fetching a SHA pin.** Git over HTTPS, with no credential. The
+   REST archive endpoint is not used.
+6. **Node 24.** An operator-supplied directory, mounted read-only at
+   `/opt/node24`. The worker does not download Node.
+7. **`node20`.** Stays rejected by name. SHA-pinned `actions/checkout`
+   is the owned checkout and does not run that JavaScript.
+8. **Action files.** Copied into the attempt and mounted read-write.
+   The content-addressed store is not mounted into the job.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/variables
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
