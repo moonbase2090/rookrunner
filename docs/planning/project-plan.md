@@ -39,9 +39,10 @@ and history are preserved; no duplicate replacement tickets were created.
 The owner's 2026-10-03 priorities change the horizons:
 
 - **Now:** NS-30 is merged. NS-31 accepts read-only `permissions`.
+  NS-32 accepts a SHA-pinned `actions/checkout` as the owned checkout.
   The `dogfood` epic, together with the `check.yml` subset of RR-16,
   RR-17, and RR-18, gets Rookrunner running its own `check.yml` from
-  the CLI (NS-32–NS-38).
+  the CLI (NS-33–NS-38).
 - **Next:** the `ownerci` epic reports push and pull request results for
   owner repositories to GitHub as commit statuses (NS-39–NS-43).
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.

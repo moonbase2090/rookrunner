@@ -364,6 +364,9 @@ class WorkflowSubmitTests(unittest.TestCase):
         uses = {
             "v7.yml": "actions/checkout@v7",
             "bare.yml": "actions/checkout",
+            "short.yml": "actions/checkout@" + ("a" * 39),
+            "main.yml": "actions/checkout@main",
+            "v5.yml": "actions/checkout@v5",
         }
         for name, (body, field, kind) in rejected.items():
             path = self.repo / ".github" / "workflows" / name
