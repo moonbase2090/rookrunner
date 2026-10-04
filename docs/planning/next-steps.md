@@ -11,7 +11,9 @@ mounts an operator-supplied Node 24 directory read-only at
 `/opt/node24`. NS-36 runs a remote `node24` `main` entry from a copy
 in the attempt. NS-37 runs that action's `post` after the job's main
 steps. The capability version stays 12. A version 11 plan is not
-migrated. NS-38 through NS-43 are not started.
+migrated. NS-38 recorded a `check.yml` run. The identified commit
+ended `failed`. The next slice is the gap that record names, not
+NS-40. NS-39 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1700,7 +1702,13 @@ Acceptance criteria:
 
 **NS-38. Dogfood: run this repository's `check.yml` from the CLI.**
 
-Status: not started. It depends on NS-31 through NS-37.
+Status: recorded. It depends on NS-31 through NS-37. The capability
+version stays 12. This slice adds no capability. `check.yml` is
+unchanged. The identified commit ended `failed` with exit code 137
+at the unit-test step. A disposable ruff violation ended `failed`
+with exit code 1 at the Ruff step. The record is
+[dogfood check](../validation/dogfood-check.md). The next slice is
+the gap that record names, not NS-40.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.

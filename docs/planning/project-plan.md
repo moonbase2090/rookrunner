@@ -38,11 +38,12 @@ and history are preserved; no duplicate replacement tickets were created.
 
 The owner's 2026-10-03 priorities change the horizons:
 
-- **Now:** NS-37 runs a remote `node24` `post` after the job's main
-  steps. The capability version stays 12. A version 11 plan is not
-  migrated. The `dogfood` epic, together with the `check.yml` subset of
-  RR-16, RR-17, and RR-18, still has to run Rookrunner's own `check.yml`
-  from the CLI (NS-38).
+- **Now:** NS-38 recorded Rookrunner's own `check.yml` run from the
+  CLI. The identified commit ended `failed`. The next slice is the gap
+  that record names, not NS-40. The capability version stays 12. A
+  version 11 plan is not migrated. The `dogfood` epic, together with
+  the `check.yml` subset of RR-16, RR-17, and RR-18, does not yet have
+  a `succeeded` result with exit code 0.
 - **Next:** the `ownerci` epic reports push and pull request results for
   owner repositories to GitHub as commit statuses (NS-39–NS-43).
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
