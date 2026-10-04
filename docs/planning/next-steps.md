@@ -22,7 +22,9 @@ CI in [owner CI](../design/owner-ci.md). The credential stays an
 owner decision. NS-40 posts one commit status. NS-41 evaluates `on`
 for push and pull request. A tag push skips the path filters. Tags
 under `pull_request` are ignored. NS-42 polls one owner repository.
-The next slice is NS-43.
+NS-43 recorded statuses for one push and one pull request. The record
+is [owner CI validation](../validation/owner-ci-rookrunner.md). The
+next work is the provisional list, which is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1730,8 +1732,9 @@ names is closed by a later run of
 with exit code 0. That record is in the same document. NS-39 designs
 owner CI. NS-40 posts one commit status. NS-41 evaluates `on` for
 push and pull request. A tag push skips the path filters. Tags under
-`pull_request` are ignored. NS-42 polls one owner repository. The
-next slice is NS-43.
+`pull_request` are ignored. NS-42 polls one owner repository. NS-43
+recorded this repository's statuses. The record is
+[owner CI validation](../validation/owner-ci-rookrunner.md).
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.
@@ -1949,8 +1952,8 @@ Acceptance criteria:
 
 Status: implemented. The CLI command is `poll`. It runs one pass for
 one configured repository and then exits. The capability version stays
-12. A version 11 plan is not migrated. The next slice is NS-43. It
-depends on NS-40 and NS-41.
+12. A version 11 plan is not migrated. NS-43 recorded the statuses.
+That slice depends on NS-40 and NS-41.
 
 A one-shot poll command handles one configured repository. The OS
 scheduler starts it. Each pass:
@@ -2004,8 +2007,13 @@ newer SHA arrives. This is not a GitHub-equivalence claim.
 
 **NS-43. Rookrunner reports its own CI.**
 
-Status: not started. It depends on NS-38 and NS-42. It needs the owner
-to authorize the credential and posting to moonbase2090/Rookrunner.
+Status: recorded. It depends on NS-38 and NS-42. The poll pass posted
+statuses for one push and one same-repository pull request of
+moonbase2090/rookrunner. The record is
+[owner CI validation](../validation/owner-ci-rookrunner.md). The
+capability version stays 12. `.github/workflows/check.yml` is
+unchanged. The credential type stays an owner decision. The next work
+is the provisional list below. It is not numbered yet.
 
 This slice is a validation record. The poll pass runs against this
 repository for one push to a branch and one same-repository pull
@@ -2024,6 +2032,8 @@ Acceptance criteria:
   terminal results. Only `succeeded` with exit code 0 posted `success`.
 - The forced failure posted `failure`.
 - No credential appears in the record or the state directory.
+
+The record meets these criteria.
 
 ### Provisional after NS-43
 

@@ -2,8 +2,10 @@
 
 Status: design, 2026-10-04. This slice writes this document and does not
 change the engine. The capability version stays 12. A version 11 plan
-is not migrated. NS-40 through NS-43 implement the path. This is not a
-GitHub-equivalence claim.
+is not migrated. NS-40 through NS-43 implement the path. NS-43 recorded one push and
+one pull request for moonbase2090/rookrunner
+([validation](../validation/owner-ci-rookrunner.md)). The credential
+type stays an owner decision. This is not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
 only. There is no listener, no runner registration, no Terraform, and
