@@ -1970,7 +1970,9 @@ jobs:
         creates = [call for call in self._calls() if call and call[0] == "create"]
         _name, destination = self._assert_socket_volume_removed(creates[-1])
         self.assertEqual(destination, path)
-        self.assertEqual(self._same_path_mounts(creates[-1]), [])
+        # The engine socket is also a same-path mount when it is already
+        # `/var/run/docker.sock`. The temporary directory is the volume.
+        self.assertNotIn(path, self._same_path_mounts(creates[-1]))
         self.assertNotIn("--privileged", creates[-1])
 
     def test_socket_off_does_not_share_a_temp_directory(self):
