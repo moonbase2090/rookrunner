@@ -26,19 +26,24 @@ from execution_core.run import (
     _OUTPUT_RUN_BYTES,
     _WORKFLOW_PATH,
     _commit_sha,
+    _consider_step,
     _empty_directory,
     _exec_limit,
+    _job_for_combination,
     _job_outputs,
     _read_utf8,
     _resolve_call_inputs,
     _runner_arch,
     _soft_defaults,
     _verify_workspace,
+    _with_rendered_step,
+    _workflow_for_job,
     _workflow_label,
     owned_container_present,
     release_owned_container,
     run_job,
 )
+from execution_core.expr import ExprError
 from execution_core.verify import verify_snapshot
 from execution_core.snapshot import SourceCapture
 
@@ -47,7 +52,7 @@ SUCCESS = """\
 name: demo
 on: push
 env:
-  LEVEL: workflow
+  LEVEL: ${{ 'workflow' }}
   TRACE: kept
 defaults:
   run:
@@ -56,7 +61,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      LEVEL: job
+      LEVEL: ${{ 'job' }}
     steps:
       - name: first
         run: |
@@ -73,7 +78,7 @@ jobs:
         name: nested step
         working-directory: app/nested
         env:
-          LEVEL: step
+          LEVEL: ${{ 'step' }}
         run: |
           printf '%s' "$LEVEL" > level.txt
           printf '%s' "$TRACE" > trace.txt
@@ -243,6 +248,7 @@ jobs:
         run: |
           python -c 'from pathlib import Path; p = Path("/workspace/.github/actions/hello/action.yml"); p.write_text(p.read_text().replace("PLANNED", "MUTATED"))'
       - id: hello
+        name: greet ${{ 'Mona' }}
         uses: ./.github/actions/hello
         with:
           who: ${{ 'Mona' }}
@@ -872,6 +878,98 @@ class ContextValueTests(unittest.TestCase):
                 run_job("snap", "digest", "workspace", {}, "image", {}, event_name=name)
             self.assertEqual(raised.exception.kind, "SETUP_FAILED")
             self.assertEqual(str(raised.exception), "event name is not accepted")
+
+
+class TextRenderTests(unittest.TestCase):
+    def test_step_env_does_not_read_its_own_map_and_if_sees_it(self):
+        workflow = {"name": "${{ 'demo' }}", "env": {"ROOT": "${{ 'root' }}"}}
+        job = {"id": "build", "name": "job ${{ matrix.os }}", "env": {"JOB": "${{ 'job' }}"}}
+        rendered_workflow = _workflow_for_job(workflow, {}, job, {}, {}, False)
+        self.assertEqual(rendered_workflow["env"]["ROOT"], "root")
+        self.assertEqual(rendered_workflow["name"], "${{ 'demo' }}")
+        self.assertEqual(_workflow_label(rendered_workflow), "${{ 'demo' }}")
+        rendered_job = _job_for_combination(
+            job, rendered_workflow, {}, {}, {}, False, {"os": "Linux"}, {}
+        )
+        self.assertEqual(rendered_job["env"]["JOB"], "job")
+        self.assertEqual(rendered_job["name"], "job Linux")
+        step = {
+            "index": 0,
+            "id": "gate",
+            "name": "n ${{ env.MODE }}",
+            "if": "env.MODE == 'loud'",
+            "checkout": "captured",
+            "env": {"MODE": "${{ 'loud' }}", "OTHER": "${{ env.MODE }}"},
+        }
+        prepared, values = _with_rendered_step(
+            step, {}, rendered_workflow, rendered_job, [], False, {}, None
+        )
+        self.assertEqual(prepared["env"]["MODE"], "loud")
+        self.assertEqual(prepared["env"]["OTHER"], "")
+        self.assertEqual(values["env"]["JOB"], "job")
+        self.assertEqual(values["env"]["MODE"], "loud")
+        result = _consider_step(
+            "docker",
+            "name",
+            step,
+            rendered_workflow,
+            rendered_job,
+            {},
+            None,
+            True,
+            None,
+            None,
+            [],
+            False,
+            {},
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["name"], "n loud")
+        self.assertEqual(result["exit_code"], 0)
+        with self.assertRaises(ExprError):
+            _job_for_combination(
+                {"id": "build", "name": "${{ fromJSON('{') }}", "env": {}},
+                rendered_workflow,
+                {},
+                {},
+                {},
+                False,
+                {},
+                {},
+            )
+
+    def test_skipped_step_keeps_rendered_name(self):
+        step = {
+            "index": 0,
+            "id": "gate",
+            "name": "build ${{ 'one' }}",
+            "if": "false",
+            "run": "echo ${{ github.sha }}",
+            "env": {},
+        }
+        result = _consider_step(
+            "docker",
+            "name",
+            step,
+            {"name": "demo", "env": {}},
+            {"id": "build", "env": {}},
+            {},
+            None,
+            True,
+            None,
+            None,
+            [],
+            False,
+            {},
+            None,
+            None,
+            None,
+        )
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["name"], "build one")
 
 
 class DockerRunTests(unittest.TestCase):
@@ -1646,7 +1744,8 @@ jobs:
         )
         self.assertEqual((self.workspace / "bash.txt").read_text(), "ok")
         self.assertEqual((self.workspace / "sh.txt").read_text(), "ok")
-        self.assertEqual((self.workspace / "expr.txt").read_text(), "${{ github.sha }}")
+        manifest = verify_snapshot(self.snapshot, self.digest)
+        self.assertEqual((self.workspace / "expr.txt").read_text(), manifest["base_commit"])
         self.assertEqual((self.workspace / "hostenv.txt").read_text(), "")
         self.assertEqual((self.workspace / "source-copy.txt").read_text(), "original\n")
         self.assertEqual((self.workspace / "linked.txt").read_text(), "original\n")
@@ -2428,10 +2527,11 @@ jobs:
             "PLANNED",
             (snapshot / "files" / ".github" / "actions" / "hello" / "action.yml").read_text(),
         )
+        self.assertEqual(result["steps"][1]["name"], "greet Mona")
         self.assertEqual((workspace / "who.txt").read_text(), "Mona\n")
         self.assertEqual((workspace / "title.txt").read_text(), "Dr\n")
-        self.assertEqual((workspace / "literal.txt").read_text(), "${{ inputs.who }}\n")
-        self.assertEqual((workspace / "literal-env.txt").read_text(), "hello ${{ inputs.who }}\n")
+        self.assertEqual((workspace / "literal.txt").read_text(), "Mona\n")
+        self.assertEqual((workspace / "literal-env.txt").read_text(), "hello Mona\n")
         self.assertEqual(
             (workspace / "action-path.txt").read_text(),
             "/workspace/.github/actions/hello\n",

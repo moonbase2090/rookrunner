@@ -135,6 +135,83 @@ jobs:
         self.assertEqual(script, "echo ${{ github.sha }}\n")
         self.assertNotIn("github.sha", script.replace("${{ github.sha }}", ""))
 
+    def test_run_env_with_and_name_keep_source_and_reject_bad_expressions(self):
+        workflow = """\
+name: ${{ 'demo' }}
+on: push
+env:
+  ROOT: ${{ github.workflow }}
+jobs:
+  build:
+    name: job ${{ matrix.os }}
+    env:
+      JOB: ${{ github.sha }}
+    steps:
+      - name: step ${{ env.JOB }}
+        run: echo ${{ env.JOB }}-${{ 'x' }}
+        env:
+          STEP: ${{ vars.MODE }}
+"""
+        plan = plan_workflow(workflow.encode(), "build")["plan"]
+        self.assertEqual(plan["workflow"]["name"], "${{ 'demo' }}")
+        self.assertEqual(plan["workflow"]["env"]["ROOT"], "${{ github.workflow }}")
+        self.assertEqual(plan["job"]["name"], "job ${{ matrix.os }}")
+        self.assertEqual(plan["job"]["env"]["JOB"], "${{ github.sha }}")
+        step = plan["job"]["steps"][0]
+        self.assertEqual(step["name"], "step ${{ env.JOB }}")
+        self.assertEqual(step["run"], "echo ${{ env.JOB }}-${{ 'x' }}")
+        self.assertEqual(step["env"]["STEP"], "${{ vars.MODE }}")
+        rejected = (
+            (
+                "jobs:\n  build:\n    steps:\n      - run: echo ${{ secrets.TOKEN }}\n",
+                "WORKFLOW_INVALID",
+                "context is not available: secrets",
+            ),
+            (
+                "jobs:\n  build:\n    steps:\n      - run: echo ${{ hashFiles('*.txt') }}\n",
+                "CAPABILITY_UNSUPPORTED",
+                "hashFiles",
+            ),
+            (
+                "jobs:\n  build:\n    steps:\n      - run: echo ${{ success() }}\n",
+                "WORKFLOW_INVALID",
+                "expression is not accepted",
+            ),
+            (
+                "env:\n  ROOT: ${{ needs.build.result }}\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
+                "WORKFLOW_INVALID",
+                "context is not available: needs",
+            ),
+            (
+                "jobs:\n  build:\n    env:\n      JOB: ${{ env.ROOT }}\n    steps:\n      - run: echo hi\n",
+                "WORKFLOW_INVALID",
+                "context is not available: env",
+            ),
+            (
+                "jobs:\n  build:\n    name: ${{ secrets.TOKEN }}\n    steps:\n      - run: echo hi\n",
+                "WORKFLOW_INVALID",
+                "context is not available: secrets",
+            ),
+        )
+        for text, kind, message in rejected:
+            with self.assertRaises(PlanError) as raised:
+                plan_workflow(text.encode(), "build")
+            self.assertEqual(raised.exception.kind, kind)
+            self.assertIn(message, str(raised.exception))
+        service = """\
+jobs:
+  build:
+    services:
+      db:
+        image: sha256:abababababababababababababababababababababababababababababababab
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+    steps:
+      - run: echo hi
+"""
+        planned = plan_workflow(service.encode(), "build")["plan"]
+        self.assertEqual(planned["job"]["services"][0]["env"]["TOKEN"], "${{ secrets.TOKEN }}")
+
     def test_duplicate_yaml_key_fails(self):
         workflow = """\
 on: push

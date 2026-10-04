@@ -207,9 +207,11 @@ supplied a store and that pin ran. That uses is not a new gap.
 
 Sixteen of the eighteen workflows contain `${{ }}`. The two that do
 not are Rookrunner `check.yml` and prismattyc-website `deploy.yml`.
-The planner stores that text. Inside `run`, and in any mixed string,
-the braces stay literal. That is the existing expression rule. It
-does not fail planning, so it ranks behind `concurrency`.
+The planner stores that text. NS-44 evaluates expressions in `run`,
+`env`, `with`, and step and job `name`, including mixed text.
+`secrets` stays unavailable and `hashFiles` stays unsupported. The
+inventory rank still has `concurrency` first because that field fails
+planning.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website

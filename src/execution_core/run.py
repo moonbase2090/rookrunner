@@ -91,8 +91,12 @@ false, 0, or an empty string
 Secrets are not passed, and `github.token` is not created. GitHub passes
 `github.token` into a called workflow. This subset does not. Step `if` and
 job `if` are evaluated.
-Expressions in workflow `run`, workflow and step `env`, and `name` stay
-literal text. `github.event` is the caller event. `github.workspace`,
+Expressions in workflow and job `env`, step `env`, `run`, `with`, and
+step and job `name` are evaluated, including mixed text. The plan
+stores the source. `run` is written on the host just before exec.
+Workflow `name` stays literal, and that string is `github.workflow`.
+Service `env` stays literal. `secrets` is not available. `hashFiles`
+is not implemented. `github.event` is the caller event. `github.workspace`,
 `github.job`, `github.workflow`, `github.event_path`, and, when the caller
 sends one, `github.event_name` are set. `github.sha` is the manifest
 `base_commit` only when the capture is clean, `included` is empty, and
@@ -118,11 +122,11 @@ Its ``post`` runs after the job's main steps, in reverse order, when
 that main ran. An omitted ``post-if`` is ``always()``. ``node20``,
 ``pre``, and Docker actions are rejected. A caller cancel or a job
 deadline does not run ``post``. Nested
-``uses`` is rejected. Composite `run`
-text stays literal, so `${{ github.action_path }}` inside `run` is not
-expanded. A whole-string expression is evaluated in a composite step's
-`env`, an action output `value`, and the calling step's `with`. Mixed
-`${{ }}` stays literal. `github.action_path` and `GITHUB_ACTION_PATH` exist
+``uses`` is rejected. Composite `run`, step `env`, step `name`, and
+the calling step's `with` are evaluated, including mixed text.
+`${{ github.action_path }}` inside composite `run` is expanded.
+An action output `value` is evaluated only when it is one whole
+expression. `github.action_path` and `GITHUB_ACTION_PATH` exist
 only while those inner steps run. Inner `GITHUB_OUTPUT` stays inside the
 action and is published only through the action's outputs, on the calling
 step id. Inner `GITHUB_ENV`, `GITHUB_PATH`, and masks apply to the rest of
@@ -175,7 +179,18 @@ from .commands import ENV_NAME as _ENV_NAME
 from .node24 import BINARY as _NODE24_BINARY
 from .node24 import inspect_node24, node_version
 from .commands import mask_text, parse_env, parse_output, parse_path, process_stdout
-from .expr import ExprError, evaluate, job_is_enabled, mentions_context, step_is_enabled
+from .expr import (
+    JOB_ENV_CONTEXTS,
+    JOB_NAME_CONTEXTS,
+    STEP_TEXT_CONTEXTS,
+    WORKFLOW_ENV_CONTEXTS,
+    ExprError,
+    evaluate,
+    job_is_enabled,
+    mentions_context,
+    render_text,
+    step_is_enabled,
+)
 from .plan import (
     CAPABILITY_VERSION,
     DEFAULT_JOB_TIMEOUT_MINUTES,
@@ -1795,6 +1810,22 @@ def _write_script(private, script_name, text):
     os.chmod(script, 0o600)
 
 
+def _publish_script(commands, script_name, text):
+    """Write the rendered run script where the container can read it."""
+
+    if not isinstance(script_name, str) or script_name == "" or "/" in script_name:
+        _setup("plan is not accepted")
+    if not isinstance(text, str) or "\0" in text:
+        _setup("plan is not accepted")
+    path = commands / f"{script_name}-script"
+    try:
+        path.write_bytes(text.encode("utf-8"))
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        _setup("container setup failed", exc)
+    return f"/run/rookrunner-cmd/{script_name}-script"
+
+
 def _accept_services(services):
     if not isinstance(services, list):
         _setup("plan is not accepted")
@@ -2295,9 +2326,22 @@ def run_job(
                         )
                         if inner_results is None:
                             return None
+                        try:
+                            output_workflow = _workflow_for_job(
+                                job["call"]["workflow"],
+                                event,
+                                {"env": {}},
+                                resolved_inputs,
+                                {},
+                                cancelled,
+                            )
+                        except ExprError as exc:
+                            _mark_call(job, path, str(exc))
+                            results[job["id"]] = {"result": "failure", "outputs": {}}
+                            continue
                         output_values = _expression_values(
                             event,
-                            job["call"]["workflow"],
+                            output_workflow,
                             {"env": {}},
                             {"env": {}},
                             [],
@@ -2384,10 +2428,34 @@ def run_job(
                                 outcome = _cancelled(resolved, reference, records)
                                 cancelled_run = True
                                 break
+
+                    def _fail_text(message):
+                        nonlocal failed, job_failed
+                        text = str(message)[:512]
+                        steps = job["steps"]
+                        record = _step_result(steps[0], "failed", None, "", "", text, job["id"])
+                        records.append(record)
+                        if failed is None:
+                            failed = record
+                        for skipped in steps[1:]:
+                            records.append(
+                                _step_result(skipped, "skipped", None, "", "", None, job["id"])
+                            )
+                        job_failed = True
+
                     if not cancelled_run:
                         attempt = _ATTEMPT.get()
                         if attempt is not None:
                             _empty_directory(attempt.get("temp"))
+                        try:
+                            active_workflow = _workflow_for_job(
+                                level_workflow, event, job, inputs, needs, cancelled
+                            )
+                        except ExprError as exc:
+                            _fail_text(exc)
+                            active_workflow = None
+                        if active_workflow is None:
+                            runs = []
                         for matrix, strategy_context in runs:
                             if owner is not None and owner.cancelled():
                                 graceful = True
@@ -2396,17 +2464,33 @@ def run_job(
                                 break
                             if deadline - time.monotonic() <= 0:
                                 raise _JobDeadline()
+                            try:
+                                active_job = _job_for_combination(
+                                    job,
+                                    active_workflow,
+                                    event,
+                                    inputs,
+                                    needs,
+                                    owner is not None and owner.cancelled(),
+                                    matrix,
+                                    strategy_context,
+                                )
+                            except ExprError as exc:
+                                _fail_text(exc)
+                                if fail_fast:
+                                    break
+                                continue
                             prior = []
                             runtime = _JobRuntime()
-                            for step in job["steps"]:
+                            for step in active_job["steps"]:
                                 if deadline - time.monotonic() <= 0:
                                     raise _JobDeadline()
                                 record = _consider_step(
                                     docker_bin,
                                     name,
                                     step,
-                                    level_workflow,
-                                    job,
+                                    active_workflow,
+                                    active_job,
                                     event,
                                     workspace,
                                     bash_ok,
@@ -2433,10 +2517,10 @@ def run_job(
                                 outcome = _cancelled(resolved, reference, records)
                                 cancelled_run = True
                                 break
-                            posts = _node24_posts(job, runtime)
+                            posts = _node24_posts(active_job, runtime)
                             if posts and deadline - time.monotonic() <= 0:
                                 raise _JobDeadline()
-                            post_index = len(job["steps"])
+                            post_index = len(active_job["steps"])
                             for step in posts:
                                 if owner is not None and owner.cancelled():
                                     graceful = True
@@ -2449,8 +2533,8 @@ def run_job(
                                     docker_bin,
                                     name,
                                     step,
-                                    level_workflow,
-                                    job,
+                                    active_workflow,
+                                    active_job,
                                     event,
                                     workspace,
                                     bash_ok,
@@ -2477,11 +2561,11 @@ def run_job(
                                 break
                             if publish:
                                 produced, output_bytes = _job_outputs(
-                                    job,
+                                    active_job,
                                     _expression_values(
                                         event,
-                                        level_workflow,
-                                        job,
+                                        active_workflow,
+                                        active_job,
                                         {"env": {}},
                                         prior,
                                         cancelled,
@@ -2624,9 +2708,10 @@ def _expression_values(
 
     `env` starts with `CI` and `HOME` while an attempt is running, then the
     workflow env, the job env, `GITHUB_ENV` from earlier steps in this job,
-    then this step's env. The default `GITHUB_*` and `RUNNER_*` variables
-    are not copied into `env`. Values that contain `${{ }}` are not
-    expanded. `steps.<id>.outputs` is what earlier steps wrote to
+    then this step's env. The caller passes those maps already rendered.
+    This function does not expand them again. The default `GITHUB_*` and
+    `RUNNER_*` variables are not copied into `env`. `steps.<id>.outputs`
+    is what earlier steps wrote to
     `GITHUB_OUTPUT`. The command-file paths are not part of this map.
     `inputs` is empty unless the caller passes workflow inputs or composite
     action inputs. `github.action_path` stays empty unless the caller is
@@ -2811,35 +2896,41 @@ def _consider_step(
 ):
     job_id = job.get("id")
     try:
-        enabled = step_is_enabled(
-            step.get("if"),
-            _expression_values(
-                event,
-                workflow,
-                job,
-                step,
-                prior,
-                cancelled,
-                needs,
-                runtime,
-                inputs=inputs,
-                matrix=matrix,
-                strategy=strategy,
-            ),
+        prepared, values = _with_rendered_step(
+            step,
+            event,
+            workflow,
+            job,
             prior,
             cancelled,
+            needs,
+            runtime,
+            inputs=inputs,
+            matrix=matrix,
+            strategy=strategy,
         )
+        enabled = step_is_enabled(step.get("if"), values, prior, cancelled)
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     if not enabled:
-        return _step_result(step, "skipped", None, "", "", None, job_id)
+        return _step_result(prepared, "skipped", None, "", "", None, job_id)
+    if (
+        "uses" not in step
+        and step.get("javascript") != "node24"
+        and step.get("checkout") != "captured"
+        and isinstance(step.get("run"), str)
+    ):
+        try:
+            prepared["run"] = _render_expr(step["run"], _scoped_values(values, STEP_TEXT_CONTEXTS))
+        except ExprError as exc:
+            return _step_result(prepared, "failed", None, "", "", str(exc)[:512], job_id)
     if step.get("checkout") == "captured":
-        return _step_result(step, "succeeded", 0, "", "", None, job_id)
-    if step.get("javascript") == "node24":
+        return _step_result(prepared, "succeeded", 0, "", "", None, job_id)
+    if prepared.get("javascript") == "node24":
         return _run_javascript(
             docker,
             name,
-            step,
+            prepared,
             workflow,
             job,
             event,
@@ -2858,11 +2949,11 @@ def _consider_step(
             strategy=strategy,
             inputs=inputs,
         )
-    if "uses" in step:
+    if "uses" in prepared:
         return _run_composite(
             docker,
             name,
-            step,
+            prepared,
             workflow,
             job,
             event,
@@ -2883,7 +2974,7 @@ def _consider_step(
     return _run_step(
         docker,
         name,
-        step,
+        prepared,
         workflow,
         job,
         workspace,
@@ -2903,16 +2994,147 @@ def _is_whole_expression(text):
 
 
 def _render_expr(text, values):
-    """Evaluate one whole-string expression. Any other string stays literal."""
+    """Evaluate expressions in `text`, including mixed `${{ }}`."""
 
     if not isinstance(text, str) or "\0" in text:
         _setup("plan is not accepted")
-    if not _is_whole_expression(text):
-        return text
-    rendered = _output_text(evaluate(text, values))
-    if rendered is None or "\0" in rendered:
+    rendered = render_text(text, values)
+    if not isinstance(rendered, str) or "\0" in rendered:
         return ""
     return rendered
+
+
+def _scoped_values(values, contexts):
+    return {name: values[name] for name in contexts if name in values}
+
+
+def _render_env_map(raw, values, contexts):
+    """Render one env map. Keys in that map do not see each other."""
+
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        _setup("plan is not accepted")
+    scoped = _scoped_values(values, contexts)
+    rendered = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            _setup("plan is not accepted")
+        rendered[key] = _render_expr(value, scoped)
+    return rendered
+
+
+def _workflow_for_job(workflow, event, job, inputs, needs, cancelled):
+    """Copy the workflow with its env rendered. The name stays literal."""
+
+    if not isinstance(workflow, dict):
+        _setup("plan is not accepted")
+    values = _expression_values(
+        event,
+        workflow,
+        job,
+        {"env": {}},
+        [],
+        cancelled,
+        needs,
+        inputs=inputs,
+    )
+    rendered = dict(workflow)
+    rendered["env"] = _render_env_map(workflow.get("env") or {}, values, WORKFLOW_ENV_CONTEXTS)
+    return rendered
+
+
+def _job_for_combination(job, workflow, event, inputs, needs, cancelled, matrix, strategy):
+    """Copy the job with its env and name rendered for one combination."""
+
+    if not isinstance(job, dict):
+        _setup("plan is not accepted")
+    values = _expression_values(
+        event,
+        workflow,
+        job,
+        {"env": {}},
+        [],
+        cancelled,
+        needs,
+        inputs=inputs,
+        matrix=matrix,
+        strategy=strategy,
+    )
+    rendered = dict(job)
+    rendered["env"] = _render_env_map(job.get("env") or {}, values, JOB_ENV_CONTEXTS)
+    name = job.get("name")
+    if isinstance(name, str):
+        rendered["name"] = _render_expr(name, _scoped_values(values, JOB_NAME_CONTEXTS))
+    return rendered
+
+
+def _with_rendered_step(
+    step,
+    event,
+    workflow,
+    job,
+    prior,
+    cancelled,
+    needs,
+    runtime,
+    *,
+    inputs=None,
+    matrix=None,
+    strategy=None,
+    action_path=None,
+    output_map=None,
+    render_run=False,
+):
+    """Copy a step with env and name rendered. `run` is optional.
+
+    Step env expressions see the layers before this step's own map.
+    They do not see another key in that map. The step `if` then sees
+    the rendered step env.
+    """
+
+    if not isinstance(step, dict):
+        _setup("plan is not accepted")
+    base = _expression_values(
+        event,
+        workflow,
+        job,
+        {"env": {}},
+        prior,
+        cancelled,
+        needs,
+        runtime,
+        inputs=inputs,
+        matrix=matrix,
+        strategy=strategy,
+        action_path=action_path,
+        output_map=output_map,
+    )
+    raw_env = step.get("env") if isinstance(step.get("env"), dict) else {}
+    prepared = dict(step)
+    prepared["env"] = _render_env_map(raw_env, base, STEP_TEXT_CONTEXTS)
+    values = _expression_values(
+        event,
+        workflow,
+        job,
+        prepared,
+        prior,
+        cancelled,
+        needs,
+        runtime,
+        inputs=inputs,
+        matrix=matrix,
+        strategy=strategy,
+        action_path=action_path,
+        output_map=output_map,
+    )
+    scoped = _scoped_values(values, STEP_TEXT_CONTEXTS)
+    name = step.get("name")
+    if isinstance(name, str):
+        prepared["name"] = _render_expr(name, scoped)
+    if render_run and isinstance(step.get("run"), str):
+        prepared["run"] = _render_expr(step["run"], scoped)
+    return prepared, values
 
 
 def _action_container_path(action_path):
@@ -2967,8 +3189,9 @@ def _run_composite(
             strategy=strategy,
         )
         resolved = {}
+        caller_scoped = _scoped_values(caller_values, STEP_TEXT_CONTEXTS)
         for key, raw in step.get("with", {}).items():
-            resolved[key] = _render_expr(raw, caller_values)
+            resolved[key] = _render_expr(raw, caller_scoped)
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     spec = step.get("inputs")
@@ -3021,9 +3244,7 @@ def _run_composite(
             strategy=strategy,
         )
         try:
-            evaluated_env = {}
-            for key, raw in (inner.get("env") or {}).items():
-                evaluated_env[key] = _render_expr(raw, base_values)
+            evaluated_env = _render_env_map(inner.get("env") or {}, base_values, STEP_TEXT_CONTEXTS)
         except ExprError as exc:
             record = _step_result(inner, "failed", None, "", "", str(exc)[:512], job_id)
             inner_prior.append(record)
@@ -3061,6 +3282,17 @@ def _run_composite(
             continue
         runnable = dict(inner)
         runnable["env"] = visible_env
+        try:
+            inner_scoped = _scoped_values(if_values, STEP_TEXT_CONTEXTS)
+            if isinstance(inner.get("name"), str):
+                runnable["name"] = _render_expr(inner["name"], inner_scoped)
+            runnable["run"] = _render_expr(inner["run"], inner_scoped)
+        except ExprError as exc:
+            record = _step_result(inner, "failed", None, "", "", str(exc)[:512], job_id)
+            inner_prior.append(record)
+            if failed is None:
+                failed = record
+            continue
         try:
             record = _run_step(
                 docker,
@@ -3225,8 +3457,9 @@ def _javascript_env(step, values):
     """Resolve node24 inputs. A with value wins. required does not fail a miss."""
 
     resolved = {}
+    scoped = _scoped_values(values, STEP_TEXT_CONTEXTS)
     for key, raw in step.get("with", {}).items():
-        resolved[key] = _render_expr(raw, values)
+        resolved[key] = _render_expr(raw, scoped)
     spec = step.get("inputs")
     if not isinstance(spec, dict):
         _setup("plan is not accepted")
@@ -3240,7 +3473,7 @@ def _javascript_env(step, values):
         if key in resolved:
             value = resolved[key]
         elif isinstance(item.get("default"), str):
-            value = _render_expr(item["default"], values)
+            value = _render_expr(item["default"], scoped)
         else:
             value = ""
         if not isinstance(value, str) or "\0" in value:
@@ -3381,15 +3614,13 @@ def _consider_post(
     saved = runtime.javascript_inputs.get(step["index"])
     if not isinstance(saved, dict):
         _setup("plan is not accepted")
-    posted = dict(step)
-    posted["index"] = index
     post_script = f"{script_name}-post"
     try:
-        values = _expression_values(
+        prepared, values = _with_rendered_step(
+            step,
             event,
             workflow,
             job,
-            step,
             prior,
             False,
             needs,
@@ -3401,7 +3632,11 @@ def _consider_post(
         source = step.get("post_if")
         enabled = True if source is None else step_is_enabled(source, values, prior, False)
     except ExprError as exc:
+        posted = dict(step)
+        posted["index"] = index
         return _step_result(posted, "failed", None, "", "", str(exc)[:512], job_id)
+    posted = dict(prepared)
+    posted["index"] = index
     if not enabled:
         return _step_result(posted, "skipped", None, "", "", None, job_id)
     extra = dict(saved)
@@ -3453,7 +3688,10 @@ def _run_step(
     if argv is None:
         shell = _chosen_shell(step, job, workflow)
         relative = _chosen_directory(step, job, workflow)
-        container_script = f"/run/rookrunner/{script_name}"
+        # The private script was written before the container started, so it
+        # cannot see earlier step outputs. The command directory is already
+        # mounted read-write and is written by the host just before exec.
+        container_script = _publish_script(commands, script_name, step.get("run"))
         command = _shell_command(shell, bash_ok, container_script)
         workdir = _working_directory(workspace, relative)
         if command is None:

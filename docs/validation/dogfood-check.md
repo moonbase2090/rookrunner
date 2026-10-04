@@ -163,7 +163,7 @@ success.
 The ruff run is the failure criterion. The success criterion of this
 NS-38 run is not met. The gap is below. The closure is the run
 recorded above. NS-39 designs owner CI. NS-40 posts one commit status.
-NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. NS-43 recorded this repository's statuses. The record is [owner CI validation](owner-ci-rookrunner.md).
+NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. NS-43 recorded this repository's statuses. The record is [owner CI validation](owner-ci-rookrunner.md). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text.
 
 ## Gap
 

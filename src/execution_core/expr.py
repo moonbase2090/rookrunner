@@ -1,10 +1,16 @@
-"""Evaluator for step `if`, job `if`, and job output expressions.
+"""Evaluator for step `if`, job `if`, job outputs, and text expressions.
 
 Operators, literals, coercion, and functions follow the GitHub Actions
 expression reference, including `case`. Context names follow the
 context-availability table for the workflow key being checked. An
 unavailable context or function is an error. A missing property of an
 available value is an empty string. `hashFiles` is not implemented.
+
+`run`, `env`, `with`, and step and job `name` accept mixed text. Each
+`${{ }}` is inserted as text. A whole-string expression drops the
+surrounding whitespace and is stringified the same way. The inserted
+text is not scanned again. `secrets` is withheld in these positions.
+Status functions are not accepted there.
 
 `case` evaluates predicates in order and does not evaluate later branches.
 A property name may contain `-`, which is the contexts reference rule for
@@ -89,6 +95,34 @@ CALL_OUTPUT_CONTEXTS = frozenset({"github", "jobs", "vars", "inputs"})
 CALL_DEFAULT_CONTEXTS = frozenset({"github", "inputs", "vars"})
 # The contexts table lists no special functions for these keys.
 CALL_FUNCTIONS = OUTPUT_FUNCTIONS
+# jobs.<job_id>.steps.run, steps.env, steps.with, and steps.name.
+# The table also lists secrets. This subset withholds that context.
+# Special functions there are hashFiles only, which is not implemented.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+STEP_TEXT_CONTEXTS = frozenset(
+    {
+        "github",
+        "needs",
+        "strategy",
+        "matrix",
+        "job",
+        "runner",
+        "env",
+        "vars",
+        "steps",
+        "inputs",
+    }
+)
+STEP_TEXT_FUNCTIONS = OUTPUT_FUNCTIONS
+# jobs.<job_id>.env — github, needs, strategy, matrix, vars, secrets, inputs.
+# secrets is withheld. No env, job, runner, or steps context.
+JOB_ENV_CONTEXTS = frozenset({"github", "needs", "strategy", "matrix", "vars", "inputs"})
+# jobs.<job_id>.name — github, needs, strategy, matrix, vars, inputs.
+JOB_NAME_CONTEXTS = JOB_ENV_CONTEXTS
+JOB_TEXT_FUNCTIONS = OUTPUT_FUNCTIONS
+# Workflow env — github, secrets, inputs, vars. secrets is withheld.
+# No needs, strategy, matrix, or env context.
+WORKFLOW_ENV_CONTEXTS = frozenset({"github", "inputs", "vars"})
 
 
 class ExprError(Exception):
@@ -146,6 +180,64 @@ def check_call_default(source):
     _check(_parse(unwrap_expression(source)), CALL_DEFAULT_CONTEXTS, CALL_FUNCTIONS)
 
 
+def check_step_text(source):
+    """Reject an expression in step `run`, `env`, `with`, or `name`."""
+
+    check_text(source, STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
+
+
+def check_job_env(source):
+    """Reject an expression in a job `env` value."""
+
+    check_text(source, JOB_ENV_CONTEXTS, JOB_TEXT_FUNCTIONS)
+
+
+def check_job_name(source):
+    """Reject an expression in a job `name`."""
+
+    check_text(source, JOB_NAME_CONTEXTS, JOB_TEXT_FUNCTIONS)
+
+
+def check_workflow_env(source):
+    """Reject an expression in a workflow `env` value."""
+
+    check_text(source, WORKFLOW_ENV_CONTEXTS, JOB_TEXT_FUNCTIONS)
+
+
+def check_text(source, contexts, functions):
+    """Reject every `${{ }}` in `source`. Text without one is left alone."""
+
+    pieces = _text_pieces(source)
+    if pieces is None:
+        return
+    for kind, text in pieces:
+        if kind == "expr":
+            _check(_parse(text), contexts, functions)
+
+
+def render_text(source, values):
+    """Insert each `${{ }}` into `source`.
+
+    A string with no expression is returned unchanged. One expression
+    that is the whole stripped string is stringified without the
+    surrounding whitespace. Mixed text keeps the literal characters.
+    The inserted value is not scanned for another expression. `null` is
+    empty. `true` and `false` are those words. An unclosed or nested
+    expression is an error.
+    """
+
+    pieces = _text_pieces(source)
+    if pieces is None:
+        return source
+    parts = []
+    for kind, text in pieces:
+        if kind == "lit":
+            parts.append(text)
+            continue
+        parts.append(_insert_text(evaluate(text, values)))
+    return "".join(parts)
+
+
 def mentions_context(source, name):
     """Return whether `name` appears as a context, including in a branch that is not taken."""
 
@@ -201,6 +293,90 @@ def job_is_enabled(source, values, needed_results, ancestor_failed, cancelled):
     functions["always"] = always
     functions["cancelled"] = lambda: bool(cancelled)
     return _truthy(_eval(tree, values, functions))
+
+
+def _text_pieces(source):
+    """Split `source` into literal and expression pieces.
+
+    `None` means the text has no `${{ }}`. One expression that occupies
+    the stripped string is a single expression piece, so surrounding
+    whitespace is not kept. Nested `${{` outside a string is an error.
+    A `}` inside a single-quoted string is not the closer.
+    """
+
+    if not isinstance(source, str):
+        _reject()
+    if "${{" not in source:
+        return None
+    if "\0" in source:
+        _reject()
+    stripped = source.strip()
+    if stripped.startswith("${{"):
+        body, end = _scan_wrapper(stripped, 3)
+        if end == len(stripped):
+            return (("expr", body),)
+    pieces = []
+    index = 0
+    length = len(source)
+    while index < length:
+        found = source.find("${{", index)
+        if found < 0:
+            pieces.append(("lit", source[index:]))
+            break
+        if found > index:
+            pieces.append(("lit", source[index:found]))
+        body, end = _scan_wrapper(source, found + 3)
+        pieces.append(("expr", body))
+        index = end
+    return tuple(pieces)
+
+
+def _scan_wrapper(source, index):
+    """Return `(body, index_after)` for the expression that starts at `index`."""
+
+    length = len(source)
+    start = index
+    in_string = False
+    while index < length:
+        if in_string:
+            if source[index] == "'":
+                if index + 1 < length and source[index + 1] == "'":
+                    index += 2
+                    continue
+                in_string = False
+            index += 1
+            continue
+        if source[index] == "'":
+            in_string = True
+            index += 1
+            continue
+        if source.startswith("${{", index):
+            _reject()
+        if source.startswith("}}", index):
+            body = source[start:index].strip()
+            if body == "":
+                _reject()
+            return body, index + 2
+        index += 1
+    _reject()
+
+
+def _insert_text(value):
+    """String form inserted for one expression. `null` is empty."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        if "\0" in value:
+            return ""
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float) and math.isfinite(value):
+        return str(value)
+    return ""
 
 
 def _check(node, contexts, functions):

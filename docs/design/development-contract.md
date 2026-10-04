@@ -71,7 +71,7 @@ submission key. `workflow_dispatch` and `schedule` are not evaluated.
 Without `event_name`, `on` is not evaluated. The caller supplies the
 changed-file list. A push with `commit_count` above 1,000, or
 `diff_unavailable`, skips path filters. Only the first 3,000 changed
-files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). The next work is the provisional list, which is not numbered yet. The stored image digest keeps the `sha256:` prefix.
+files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. The next work is the rest of the provisional list, which is not numbered yet. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
@@ -178,10 +178,11 @@ operators, types, and functions used by this subset
 Contexts follow the availability table
 (https://docs.github.com/en/actions/reference/workflows-and-actions/contexts).
 An unavailable context is an error. A missing property of an available
-context is an empty string. Text in workflow `run` and YAML `env` is not
-expanded. A composite `run` stays literal. A whole-string expression in a
-composite step `env` value, an action output `value`, or the calling
-step's `with` is evaluated. Mixed `${{ }}` stays literal.
+context is an empty string. Workflow `env`, job `env`, step `env`,
+`run`, the calling step's `with`, and step and job `name` are
+evaluated, including mixed text. A composite `run` is evaluated.
+Workflow `name` stays literal. Service `env` stays literal. An action
+output `value` is evaluated only when it is one whole expression.
 Job outputs have no special functions in that table, so status functions and
 `hashFiles` are not accepted there. `hashFiles` is not implemented. The
 selected job runs after the jobs it needs, one at a time, in one
@@ -206,8 +207,8 @@ The writing step does not see its own env or PATH update. `GITHUB_*` and
 that job. The commands page says a masked value cannot be set as an output,
 and its example writes the value to `GITHUB_OUTPUT` and reads it back. This
 subset follows the example: the output is kept and the log is masked. A
-later job does not inherit the mask. Workflow `run` and YAML `env` text stay
-literal. A local composite action reads inputs from `with` and the `inputs`
+later job does not inherit the mask. Workflow `run` and YAML `env` text are
+evaluated, including mixed text. A local composite action reads inputs from `with` and the `inputs`
 context. Composite actions do not receive `INPUT_*`. `github.action_path`
 and `GITHUB_ACTION_PATH` are set only for steps inside that action. A
 remote `node24` action with `main` receives `INPUT_*`. Its `GITHUB_OUTPUT`,

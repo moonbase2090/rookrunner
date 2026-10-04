@@ -23,8 +23,11 @@ owner decision. NS-40 posts one commit status. NS-41 evaluates `on`
 for push and pull request. A tag push skips the path filters. Tags
 under `pull_request` are ignored. NS-42 polls one owner repository.
 NS-43 recorded statuses for one push and one pull request. The record
-is [owner CI validation](../validation/owner-ci-rookrunner.md). The
-next work is the provisional list, which is not numbered yet.
+is [owner CI validation](../validation/owner-ci-rookrunner.md). NS-44
+evaluates expressions in `run`, `env`, `with`, and step and job `name`,
+including mixed text. The capability version stays 12. A version 11
+plan is not migrated. The next work is the rest of the provisional
+list, which is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -2012,8 +2015,9 @@ statuses for one push and one same-repository pull request of
 moonbase2090/rookrunner. The record is
 [owner CI validation](../validation/owner-ci-rookrunner.md). The
 capability version stays 12. `.github/workflows/check.yml` is
-unchanged. The credential type stays an owner decision. The next work
-is the provisional list below. It is not numbered yet.
+unchanged. The credential type stays an owner decision. NS-44
+evaluates the expression item from the list below. The rest is not
+numbered yet.
 
 This slice is a validation record. The poll pass runs against this
 repository for one push to a branch and one same-repository pull
@@ -2035,6 +2039,37 @@ Acceptance criteria:
 
 The record meets these criteria.
 
+**NS-44. Expressions in `run`, `env`, `with`, and `name`.**
+
+Status: implemented. The capability version stays 12. A version 11
+plan is not migrated. `.github/workflows/check.yml` is unchanged.
+
+The plan stores the source text and checks that each expression can be
+parsed. Runtime evaluates it. Mixed text keeps the surrounding
+characters and inserts the string form of each `${{ }}`. One expression
+that is the whole stripped string drops the surrounding whitespace.
+`null` is empty. `true` and `false` are those words. The inserted text
+is not scanned again. An unclosed expression, a nested `${{` outside a
+string, an unavailable context, or a status function is
+`WORKFLOW_INVALID`. `hashFiles` stays `CAPABILITY_UNSUPPORTED`.
+
+The positions are workflow `env`, job `env`, step `env` (workflow and
+composite), workflow step `run`, composite `run`, the calling step's
+`with`, step `name`, and job `name`. Node24 input defaults in that
+`with` path are included. Workflow `name` stays literal, and that
+string is `github.workflow`. Service `env` stays literal. An action
+output `value` is still evaluated only when it is one whole
+expression. `working-directory`, `run-name`, `concurrency`, matrix
+expressions, and container fields are not evaluated.
+
+`secrets` is withheld. Naming it is an error. No token is created.
+Keys in one env map do not see other keys in that map. Step `env` is
+rendered before the step `if`, so the condition sees the rendered
+values. `run` is written on the host just before exec, after earlier
+step outputs exist. A bad expression fails that step. A bad workflow
+or job `env`, or a bad job `name`, fails that job. This is not a
+GitHub-equivalence claim.
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. `concurrency` blocks 17 of
@@ -2043,9 +2078,10 @@ not. The items still get NS numbers after NS-43.
 
 1. **P1.** `concurrency` and `cancel-in-progress` on one worker. With
    `queue: max`, at most 100 runs can be pending per group.
-2. **P2.** Expressions in `run`, `env`, `with`, and `name`, including
-   mixed text. Sixteen of the eighteen inventoried workflows contain
-   `${{ }}`. Inside `run`, the text stays literal.
+2. **NS-44.** Expressions in `run`, `env`, `with`, and `name`, including
+   mixed text. Implemented. Sixteen of the eighteen inventoried
+   workflows contain `${{ }}`. `secrets` stays unavailable and
+   `hashFiles` stays unsupported.
 3. **P3.** An owned `actions/upload-artifact` that maps to the artifact
    manifest, and the CodeQL SARIF upload that sits next to it.
 4. **P4.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
