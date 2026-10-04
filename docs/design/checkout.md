@@ -76,8 +76,11 @@ unchanged. Describe capabilities are unchanged. The compatibility note
 is not lengthened. No error kind, protocol field, or numeric limit is
 added.
 
-`github.sha`, `github.ref`, `github.actor`, `github.repository`, and
-`github.token` stay uninvented. No `GITHUB_TOKEN` is created.
+The checkout step does not invent `github.sha`. A clean capture sets
+`github.sha` to the manifest base commit, as NS-33 describes. A dirty
+capture, or a capture with a non-empty `included` list, leaves it
+unset. `github.ref`, `github.actor`, `github.repository`, and
+`github.token` stay unset. No `GITHUB_TOKEN` is created.
 
 ## Proof
 
@@ -93,7 +96,9 @@ added.
 5. After the step, the workspace has no `git.json` and no `objects`.
    When the store is present, `.git` is already there and the step
    leaves it. When the store is absent, `.git` is absent.
-6. `github.sha` and `github.token` are still empty.
+6. On a dirty capture, `github.sha` and `github.token` are still empty.
+   The checkout step does not set them. A clean capture sets
+   `github.sha` from the manifest base commit.
 7. The capability version is 9. A workflow of only `run` steps still
    runs.
 
@@ -103,7 +108,6 @@ The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). One synthesized commit for that tree
 is stored ([synthesized commit](synthesized-commit.md)). When the store is present, materialize writes an owned `.git`
 ([Git directory](git-directory.md)). The checkout step does not create
-it. Filling the `github` context is designed in
-[dogfood check](dogfood-check.md) and is not started. Fetching an
+it. `github.sha` follows the NS-33 rule. Fetching an
 action and persisting a credential still need their implementing
 slices. This design does not authorize those behaviors.

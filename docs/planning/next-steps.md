@@ -4,8 +4,9 @@ The order after NS-29 was re-prioritized on 2026-10-03. See
 [Re-prioritization](#re-prioritization-2026-10-03) for what moved, why,
 and what is deferred. NS-30 designs the dogfood path and does not
 change the engine. NS-31 accepts read-only `permissions`. NS-32 accepts
-a SHA-pinned `actions/checkout` as the owned checkout. NS-33 through
-NS-43 are not started.
+a SHA-pinned `actions/checkout` as the owned checkout. NS-33 fills the
+`github` and `runner` contexts and the default variables. The capability
+version stays 11. NS-34 through NS-43 are not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -26,8 +27,16 @@ and records the declared value. No token is created. NS-32 accepts
 `uses: actions/checkout@<sha>` when `<sha>` is 40 lowercase hexadecimal
 characters. The plan stores that string and sets `checkout` to
 `captured`. The SHA is not fetched and is not verified. The capability
-version is 11. A version 10 plan is not migrated. Filling the `github`
-context is designed in NS-30 and is not started.
+version is 11. A version 10 plan is not migrated. A run sets
+`github.workspace`, `github.job`, `github.workflow`, and
+`github.event_path`. `github.event_name` is set only when the submission
+sends `event_name`. `github.sha` is the manifest `base_commit` only for
+a clean capture with an empty `included` list. Other `github` properties,
+including `github.token`, stay unset. `runner.os` is `Linux`.
+`runner.arch` comes from the image platform. `runner.environment` is
+`self-hosted`. The attempt mounts `HOME`, `RUNNER_TEMP`, and
+`RUNNER_TOOL_CACHE` outside the workspace. `CI` is `true`.
+`GITHUB_ACTIONS` stays unset.
 Continuous integration runs ruff and the
 unit test suite on push and pull request. This file is not Waypoint status
 and not an acceptance of open PRD questions.
@@ -45,7 +54,8 @@ commit object stays excluded. One synthesized commit for that tree is
 stored. When the object store is present, the attempt workspace
 receives an owned `.git` directory. An absent store still has no
 `.git`. Read-only `permissions` are recorded and grant no token.
-Filling the `github` context is designed in NS-30 and is not started.
+The `github` and `runner` contexts and the default variables are set
+as NS-33 describes. The capability version stays 11.
 The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
@@ -1151,8 +1161,8 @@ Acceptance criteria:
 The trees and blobs of the captured base commit are copied. One
 synthesized commit for that tree is stored. When the object store is
 present, the attempt workspace receives an owned `.git` directory.
-Filling the `github` context is designed in
-[dogfood check](../design/dogfood-check.md) and is not started. A `run`
+The `github` and `runner` contexts and the default variables are set
+as NS-33 describes. A `run`
 step has that directory when the store is present. None of this work is
 authorized to call the result GitHub-equivalent.
 
@@ -1424,13 +1434,11 @@ Acceptance criteria:
 
 **NS-33. Fill the `github` and `runner` contexts and the default variables.**
 
-Status: not started. It follows the NS-30 answers.
+Status: implemented. It follows the NS-30 answers. The capability
+version stays 11. A version 10 plan is not migrated.
 
-Today the `github` context holds only `event`, plus `action_path`
-inside a composite. The process gets `GITHUB_WORKSPACE`,
-`ROOKRUNNER_EVENT`, and the three command files. This slice sets the
-values NS-30 assigns, both as context properties and as the documented
-default variables. At least these are set:
+A run sets the values NS-30 assigns, both as context properties and as
+the documented default variables. At least these are set:
 
 - `github.workspace` and `GITHUB_WORKSPACE`.
 - `github.job` and `GITHUB_JOB`.

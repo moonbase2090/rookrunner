@@ -253,8 +253,13 @@ class WorkflowRunTests(unittest.TestCase):
         self.assertEqual([step["exit_code"] for step in done["steps"]], [0, 0])
         self.assertEqual(done["steps"][0]["stdout"], "original\n")
         self.assertEqual(done["steps"][1]["stdout"], canonical(EVENT) + "\n")
-        workspace = self.state / "attempts" / done["attempt_id"] / "source.txt"
-        self.assertEqual(workspace.read_text(), "original\n")
+        attempt = self.state / "attempts" / done["attempt_id"]
+        self.assertEqual((attempt / "workspace" / "source.txt").read_text(), "original\n")
+        for name in ("home", "runner-temp", "tool-cache"):
+            directory = attempt / name
+            self.assertTrue(directory.is_dir(), name)
+            self.assertFalse(directory.is_symlink())
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
         names = subprocess.run(
             ["docker", "ps", "-a", "--format", "{{.Names}}"],
             check=True,

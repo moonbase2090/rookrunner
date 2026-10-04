@@ -88,6 +88,40 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("fixture submit requires", result.stderr)
 
+    def test_event_name_requires_a_workflow_submit(self):
+        result = run_cli(
+            "unused",
+            "submit",
+            "--backend",
+            "development",
+            "--key",
+            "k",
+            "--event-name",
+            "push",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--event-name is only accepted with a workflow submit", result.stderr)
+
+    def test_event_name_rejects_a_newline(self):
+        result = run_cli(
+            "unused",
+            "submit",
+            "--key",
+            "k",
+            "--workflow",
+            "a.yml",
+            "--job-id",
+            "ci",
+            "--event",
+            "{}",
+            "--image",
+            IMAGE,
+            "--event-name",
+            "push\n",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--event-name must be 1 to 128 characters", result.stderr)
+
     def test_event_must_be_json(self):
         result = run_cli(
             "unused",
@@ -273,6 +307,80 @@ class CliWorkerTests(unittest.TestCase):
         self.assertEqual(json.loads(again.stdout)["result"]["run_id"], run["run_id"])
         cancelled = call(self.state, "run.cancel", {"version": 0, "run_id": run["run_id"]})
         self.assertEqual(cancelled["result"]["state"], "cancelled")
+
+    def test_event_name_flag_is_part_of_the_submission(self):
+        hold = call(
+            self.state,
+            "run.submit",
+            {
+                "version": 0,
+                "submission_key": "hold-name",
+                "backend": "development",
+                "fixture": {"delay_ms": 5000},
+            },
+        )
+        self.await_state(hold["result"]["run_id"], {"running"})
+        submitted = run_cli(
+            self.state,
+            "submit",
+            "--key",
+            "named",
+            "--workflow",
+            ".github/workflows/dogfood.yml",
+            "--job-id",
+            "ci",
+            "--event",
+            "{}",
+            "--image",
+            IMAGE,
+            "--event-name",
+            "push",
+        )
+        self.assertEqual(submitted.returncode, 0, submitted.stderr)
+        reply = json.loads(submitted.stdout)
+        validate_response("run.submit", reply)
+        run = reply["result"]
+        self.assertEqual(run["state"], "queued")
+        self.assertNotIn("event_name", run["input"])
+        again = run_cli(
+            self.state,
+            "submit",
+            "--key",
+            "named",
+            "--workflow",
+            ".github/workflows/dogfood.yml",
+            "--job-id",
+            "ci",
+            "--event",
+            "{}",
+            "--image",
+            IMAGE,
+            "--event-name",
+            "push",
+        )
+        self.assertEqual(json.loads(again.stdout)["result"]["run_id"], run["run_id"])
+        conflict = run_cli(
+            self.state,
+            "submit",
+            "--key",
+            "named",
+            "--workflow",
+            ".github/workflows/dogfood.yml",
+            "--job-id",
+            "ci",
+            "--event",
+            "{}",
+            "--image",
+            IMAGE,
+            "--event-name",
+            "pull",
+        )
+        self.assertEqual(conflict.returncode, 1, conflict.stderr)
+        self.assertEqual(
+            json.loads(conflict.stdout)["error"]["data"]["kind"],
+            "IDEMPOTENCY_CONFLICT",
+        )
+        call(self.state, "run.cancel", {"version": 0, "run_id": run["run_id"]})
 
     def test_follow_waits_for_status_and_logs(self):
         submitted = run_cli(

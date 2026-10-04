@@ -10,7 +10,9 @@ import threading
 import time
 import unittest
 
+from execution_core.artifacts import written_files
 from execution_core.attempt import materialize_attempt
+from execution_core.disk import usage
 from execution_core.plan import plan_snapshot, plan_workflow
 from execution_core.run import (
     ContainerLease,
@@ -18,11 +20,16 @@ from execution_core.run import (
     _CallInputError,
     _OUTPUT_JOB_BYTES,
     _OUTPUT_RUN_BYTES,
+    _WORKFLOW_PATH,
+    _commit_sha,
+    _empty_directory,
     _exec_limit,
     _job_outputs,
     _read_utf8,
     _resolve_call_inputs,
+    _runner_arch,
     _verify_workspace,
+    _workflow_label,
     owned_container_present,
     release_owned_container,
     run_job,
@@ -109,7 +116,7 @@ jobs:
         if: github.event.kind == 'local'
         run: printf '%s\\n' kept > "$GITHUB_WORKSPACE/kept.txt"
       - id: blank
-        if: github.sha == ''
+        if: github.token == ''
         run: printf '%s\\n' blank > "$GITHUB_WORKSPACE/blank.txt"
 """
 ALWAYS = """\
@@ -726,6 +733,76 @@ jobs:
             )
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
         self.assertIn("plan is not accepted", str(raised.exception))
+
+
+class ContextValueTests(unittest.TestCase):
+    def test_runner_arch_maps_only_the_dogfood_platforms(self):
+        self.assertEqual(_runner_arch("linux", "amd64"), "X64")
+        self.assertEqual(_runner_arch("linux", "arm64"), "ARM64")
+        self.assertEqual(_runner_arch("linux", "386"), "X86")
+        self.assertEqual(_runner_arch("linux", "arm"), "ARM")
+        for system, architecture in (
+            ("linux", "riscv64"),
+            ("windows", "amd64"),
+            (None, "amd64"),
+            ("linux", None),
+        ):
+            with self.assertRaises(RunError) as raised:
+                _runner_arch(system, architecture)
+            self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+            self.assertEqual(str(raised.exception), "image platform is not accepted")
+
+    def test_commit_sha_uses_only_a_clean_base_commit(self):
+        sha = "ab" * 20
+        long_sha = "cd" * 32
+        self.assertEqual(
+            _commit_sha({"dirty": False, "included": [], "base_commit": sha}),
+            sha,
+        )
+        self.assertEqual(
+            _commit_sha({"dirty": False, "included": [], "base_commit": long_sha}),
+            long_sha,
+        )
+        for manifest in (
+            {"dirty": True, "included": [], "base_commit": sha},
+            {"dirty": False, "included": ["extra"], "base_commit": sha},
+            {"dirty": False, "included": [], "base_commit": None},
+            {"dirty": False, "included": [], "base_commit": "A" * 40},
+            {"dirty": False, "included": [], "base_commit": "ab" * 19},
+            None,
+        ):
+            self.assertIsNone(_commit_sha(manifest))
+
+    def test_workflow_label_uses_the_path_when_the_name_is_empty(self):
+        self.assertEqual(_workflow_label({"name": "demo"}), "demo")
+        self.assertIsNone(_workflow_label({}))
+        token = _WORKFLOW_PATH.set(".github/workflows/called.yml")
+        try:
+            self.assertEqual(_workflow_label({}), ".github/workflows/called.yml")
+            self.assertEqual(_workflow_label({"name": ""}), ".github/workflows/called.yml")
+            self.assertEqual(_workflow_label({"name": "demo"}), "demo")
+        finally:
+            _WORKFLOW_PATH.reset(token)
+
+    def test_empty_directory_keeps_a_child_that_cannot_be_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gone").write_text("x")
+            locked = root / "locked"
+            locked.mkdir()
+            (locked / "file").write_text("stay")
+            os.chmod(locked, 0o555)
+            _empty_directory(root)
+            self.assertFalse((root / "gone").exists())
+            self.assertEqual((locked / "file").read_text(), "stay")
+            os.chmod(locked, 0o700)
+
+    def test_event_name_is_rejected_before_docker(self):
+        for name in ("", "push\n", "push\r", "push\0more"):
+            with self.assertRaises(RunError) as raised:
+                run_job("snap", "digest", "workspace", {}, "image", {}, event_name=name)
+            self.assertEqual(raised.exception.kind, "SETUP_FAILED")
+            self.assertEqual(str(raised.exception), "event name is not accepted")
 
 
 class DockerRunTests(unittest.TestCase):
@@ -2197,3 +2274,283 @@ jobs:
         finally:
             subprocess.run(["docker", "rm", "-f", service, other], capture_output=True)
             subprocess.run(["docker", "network", "rm", network], capture_output=True)
+
+    def test_default_variables_match_the_contexts(self):
+        inspected = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Os}} {{.Architecture}}", self.image],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        system, architecture = inspected.stdout.split()
+        arch = _runner_arch(system, architecture)
+        manifest = verify_snapshot(self.snapshot, self.digest)
+        sha = manifest["base_commit"]
+        self.assertIs(manifest["dirty"], False)
+        self.assertEqual(manifest["included"], [])
+        workflow = f"""\
+name: demo
+on: push
+jobs:
+  build:
+    steps:
+      - id: gate
+        if: github.workspace == '/workspace' && github.job == 'build' && github.workflow == 'demo' && github.event_path == '/run/rookrunner/event.json' && github.event_name == '' && github.token == '' && github.actor == '' && github.ref == '' && github.repository == '' && runner.os == 'Linux' && runner.arch == '{arch}' && runner.environment == 'self-hosted' && runner.temp == '/github/runner-temp' && runner.tool_cache == '/github/tool-cache' && env.CI == 'true' && env.HOME == '/github/home' && github.sha == '{sha}'
+        run: |
+          printf '%s' "$GITHUB_WORKSPACE" > "$GITHUB_WORKSPACE/workspace.txt"
+          printf '%s' "$GITHUB_JOB" > "$GITHUB_WORKSPACE/job.txt"
+          printf '%s' "$GITHUB_WORKFLOW" > "$GITHUB_WORKSPACE/workflow.txt"
+          printf '%s' "$GITHUB_EVENT_PATH" > "$GITHUB_WORKSPACE/event-path.txt"
+          printf '%s' "$GITHUB_SHA" > "$GITHUB_WORKSPACE/sha.txt"
+          printf '%s' "$RUNNER_OS" > "$GITHUB_WORKSPACE/os.txt"
+          printf '%s' "$RUNNER_ARCH" > "$GITHUB_WORKSPACE/arch.txt"
+          printf '%s' "$RUNNER_ENVIRONMENT" > "$GITHUB_WORKSPACE/environment.txt"
+          printf '%s' "$RUNNER_TEMP" > "$GITHUB_WORKSPACE/temp.txt"
+          printf '%s' "$RUNNER_TOOL_CACHE" > "$GITHUB_WORKSPACE/tool.txt"
+          printf '%s' "$HOME" > "$GITHUB_WORKSPACE/home.txt"
+          printf '%s' "$CI" > "$GITHUB_WORKSPACE/ci.txt"
+          if [ -n "${{GITHUB_ACTIONS+x}}" ]; then exit 3; fi
+          if [ -n "${{GITHUB_EVENT_NAME+x}}" ]; then exit 4; fi
+          if [ -n "${{GITHUB_TOKEN+x}}" ]; then exit 5; fi
+          printf note > "$HOME/note"
+      - id: rewrite
+        run: |
+          printf '%s\\n' 'GITHUB_WORKSPACE=/tmp' >> "$GITHUB_ENV"
+          printf '%s\\n' 'RUNNER_TEMP=/tmp' >> "$GITHUB_ENV"
+          printf '%s\\n' 'GITHUB_SHA=stolen' >> "$GITHUB_ENV"
+          printf '%s\\n' 'CI=false' >> "$GITHUB_ENV"
+          printf '%s\\n' 'HOME=/tmp' >> "$GITHUB_ENV"
+      - id: read
+        if: env.CI == 'false' && env.HOME == '/tmp' && github.sha == '{sha}'
+        run: |
+          printf '%s' "$GITHUB_WORKSPACE" > "$GITHUB_WORKSPACE/ws2.txt"
+          printf '%s' "$RUNNER_TEMP" > "$GITHUB_WORKSPACE/temp2.txt"
+          printf '%s' "$GITHUB_SHA" > "$GITHUB_WORKSPACE/sha2.txt"
+          printf '%s' "$CI" > "$GITHUB_WORKSPACE/ci2.txt"
+          printf '%s' "$HOME" > "$GITHUB_WORKSPACE/home2.txt"
+"""
+        result = run_job(
+            self.snapshot,
+            self.digest,
+            self.workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(
+            [step["status"] for step in result["steps"]],
+            ["succeeded", "succeeded", "succeeded"],
+        )
+        workspace = self.workspace
+        self.assertEqual((workspace / "workspace.txt").read_text(), "/workspace")
+        self.assertEqual((workspace / "job.txt").read_text(), "build")
+        self.assertEqual((workspace / "workflow.txt").read_text(), "demo")
+        self.assertEqual((workspace / "event-path.txt").read_text(), "/run/rookrunner/event.json")
+        self.assertEqual((workspace / "sha.txt").read_text(), sha)
+        self.assertEqual((workspace / "os.txt").read_text(), "Linux")
+        self.assertEqual((workspace / "arch.txt").read_text(), arch)
+        self.assertEqual((workspace / "environment.txt").read_text(), "self-hosted")
+        self.assertEqual((workspace / "temp.txt").read_text(), "/github/runner-temp")
+        self.assertEqual((workspace / "tool.txt").read_text(), "/github/tool-cache")
+        self.assertEqual((workspace / "home.txt").read_text(), "/github/home")
+        self.assertEqual((workspace / "ci.txt").read_text(), "true")
+        self.assertEqual((workspace / "ws2.txt").read_text(), "/workspace")
+        self.assertEqual((workspace / "temp2.txt").read_text(), "/github/runner-temp")
+        self.assertEqual((workspace / "sha2.txt").read_text(), sha)
+        self.assertEqual((workspace / "ci2.txt").read_text(), "false")
+        self.assertEqual((workspace / "home2.txt").read_text(), "/tmp")
+        head = subprocess.run(
+            ["git", "-C", workspace, "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertNotEqual(head, sha)
+        home = workspace.parent / "home"
+        note = home / "note"
+        self.assertEqual(note.read_text(), "note")
+        for name in ("home", "runner-temp", "tool-cache"):
+            directory = workspace.parent / name
+            self.assertTrue(directory.is_dir(), name)
+            self.assertFalse(directory.is_symlink())
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        paths = [item["path"] for item in written_files(workspace, self.snapshot)]
+        self.assertNotIn("note", paths)
+        self.assertFalse(any(path.startswith("home/") or path == "note" for path in paths))
+        state = workspace.parent.parent
+        used = usage(state)
+        size = note.stat().st_size
+        note.unlink()
+        self.assertGreaterEqual(used - usage(state), size)
+
+    def test_event_name_is_a_context_and_a_variable(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - if: github.event_name == 'name=push' && github.token == ''
+        run: printf '%s' "$GITHUB_EVENT_NAME" > "$GITHUB_WORKSPACE/name.txt"
+"""
+        root = self.root / "event-name"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+            event_name="name=push",
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual((workspace / "name.txt").read_text(), "name=push")
+
+    def test_dirty_capture_leaves_github_sha_unset(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - if: github.sha == '' && github.token == ''
+        run: |
+          if [ -n "${GITHUB_SHA+x}" ]; then exit 3; fi
+          printf empty > "$GITHUB_WORKSPACE/sha.txt"
+"""
+        root = self.root / "dirty-sha"
+        root.mkdir()
+        repo = root / "repo"
+        repo.mkdir()
+        workflow_path = repo / ".github" / "workflows" / "test.yml"
+        workflow_path.parent.mkdir(parents=True)
+        workflow_path.write_text(workflow)
+        (repo / "source.txt").write_text("original\n")
+        state = root / "state"
+        capture = SourceCapture(repo, state)
+        _git(repo, "init", "--initial-branch=main")
+        _git(repo, "add", ".")
+        _git(
+            repo,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        )
+        (repo / "source.txt").write_text("dirty-bytes\n")
+        captured = capture.capture(".github/workflows/test.yml")
+        snapshot = state / "snapshots" / captured["snapshot_id"]
+        manifest = verify_snapshot(snapshot, captured["digest"])
+        self.assertIs(manifest["dirty"], True)
+        attempts = state / "attempts"
+        attempts.mkdir(mode=0o700)
+        workspace = attempts / "run-1"
+        materialize_attempt(snapshot, captured["digest"], workspace)
+        result = run_job(
+            snapshot,
+            captured["digest"],
+            workspace,
+            _plan(workflow),
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual((workspace / "sha.txt").read_text(), "empty")
+
+    def test_runner_temp_is_emptied_per_job_and_home_is_kept(self):
+        workflow = """\
+on: push
+jobs:
+  one:
+    steps:
+      - run: |
+          printf kept > "$HOME/stay"
+          printf gone > "$RUNNER_TEMP/gone"
+          mkdir -p "$RUNNER_TEMP/locked"
+          printf stay > "$RUNNER_TEMP/locked/file"
+          chmod 555 "$RUNNER_TEMP/locked"
+          printf tool > "$RUNNER_TOOL_CACHE/tool"
+  two:
+    needs: one
+    steps:
+      - if: github.job == 'two'
+        run: |
+          test -f "$HOME/stay"
+          test ! -e "$RUNNER_TEMP/gone"
+          test -f "$RUNNER_TEMP/locked/file"
+          test -f "$RUNNER_TOOL_CACHE/tool"
+          printf '%s' "$GITHUB_JOB" > "$GITHUB_WORKSPACE/job.txt"
+"""
+        root = self.root / "temp-job"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan_workflow(workflow.encode(), "two")["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual((workspace / "job.txt").read_text(), "two")
+        self.assertEqual((workspace.parent / "home" / "stay").read_text(), "kept")
+        self.assertFalse((workspace.parent / "runner-temp" / "gone").exists())
+        self.assertEqual(
+            (workspace.parent / "runner-temp" / "locked" / "file").read_text(),
+            "stay",
+        )
+        self.assertEqual((workspace.parent / "tool-cache" / "tool").read_text(), "tool")
+        os.chmod(workspace.parent / "runner-temp" / "locked", 0o700)
+
+    def test_called_workflow_without_a_name_uses_its_path(self):
+        called = """\
+on: workflow_call
+jobs:
+  inner:
+    steps:
+      - if: github.workflow == '.github/workflows/called.yml' && github.job == 'inner' && github.token == ''
+        run: printf '%s' "$GITHUB_WORKFLOW $GITHUB_JOB" > "$GITHUB_WORKSPACE/called.txt"
+"""
+        caller = """\
+on: push
+jobs:
+  use:
+    uses: ./.github/workflows/called.yml
+"""
+        root = self.root / "called-path"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(
+            root,
+            caller,
+            {".github/workflows/called.yml": called},
+        )
+        planned = plan_snapshot(snapshot, "use")
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            planned["plan"],
+            self.image,
+            EVENT,
+            docker=str(self.docker),
+            step_timeout=60,
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(
+            (workspace / "called.txt").read_text(),
+            ".github/workflows/called.yml inner",
+        )

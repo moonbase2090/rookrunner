@@ -19,7 +19,8 @@ otherwise to the container `PATH`. The runner then sets `GITHUB_WORKSPACE`,
 `ROOKRUNNER_EVENT`, `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH`, so
 those names stay pointed at this attempt. `ROOKRUNNER_EVENT` is a read-only
 file holding the caller event as canonical JSON. It is not a GitHub event
-delivery. No other GitHub context is invented. `runs-on` does not select an
+delivery. `GITHUB_*` and `RUNNER_*` names cannot be overwritten. `CI` and
+`HOME` can. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an
 image.
 
 `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` are per-step files. A write
@@ -82,10 +83,18 @@ Secrets are not passed, and `github.token` is not created. GitHub passes
 `github.token` into a called workflow. This subset does not. Step `if` and
 job `if` are evaluated.
 Expressions in workflow `run`, workflow and step `env`, and `name` stay
-literal text. `github.event` is the caller event. Other `github` properties
-are not invented. `runner.os` is `Linux` because this subset runs in a Linux
-container. Jobs in one plan share that container and the attempt workspace.
-They run one at a time.
+literal text. `github.event` is the caller event. `github.workspace`,
+`github.job`, `github.workflow`, `github.event_path`, and, when the caller
+sends one, `github.event_name` are set. `github.sha` is the manifest
+`base_commit` only when the capture is clean, `included` is empty, and
+that value is a commit id. Other `github` properties stay unset. Nothing
+is read from host Git configuration. `runner.os` is `Linux`. `runner.arch`
+comes from the image platform. `runner.environment` is `self-hosted`.
+`runner.temp` and `runner.tool_cache` are the attempt directories mounted
+at `/github/runner-temp` and `/github/tool-cache`. `HOME` is `/github/home`.
+`CI` is `true`. Jobs in one plan share that container and the attempt
+workspace. They run one at a time. `RUNNER_TEMP` is emptied at the start
+of each job. `HOME` and `RUNNER_TOOL_CACHE` are not.
 
 A step may name a local composite action with `uses` instead of `run`.
 Planning a snapshot reads `action.yml` (or `action.yaml`) from that
@@ -132,6 +141,7 @@ unresolved attempt. A timed-out `docker exec` does not keep partial stdout
 or stderr.
 """
 
+import contextvars
 import hashlib
 import json
 import math
@@ -176,7 +186,24 @@ _FILE_MODES = {"100644": 0o644, "100755": 0o755}
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 _OUTPUT_JOB_BYTES = 1024 * 1024
 _OUTPUT_RUN_BYTES = 50 * 1024 * 1024
-_INSPECT = '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}}}'
+_INSPECT = (
+    '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}},'
+    '"Os":{{json .Os}},"Architecture":{{json .Architecture}}}'
+)
+# Image platforms from the dogfood design. Any other pair fails setup.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#runner-context
+_RUNNER_ARCH = {
+    ("linux", "amd64"): "X64",
+    ("linux", "arm64"): "ARM64",
+    ("linux", "386"): "X86",
+    ("linux", "arm"): "ARM",
+}
+_EVENT_FILE = "/run/rookrunner/event.json"
+_HOME = "/github/home"
+_RUNNER_TEMP = "/github/runner-temp"
+_TOOL_CACHE = "/github/tool-cache"
+_ATTEMPT = contextvars.ContextVar("rookrunner_attempt", default=None)
+_WORKFLOW_PATH = contextvars.ContextVar("rookrunner_workflow_path", default=None)
 # GitHub-hosted runners have access to the public internet by default.
 # https://docs.github.com/en/actions/concepts/runners/private-networking
 # `bridge` is Docker's default outbound network. `none` turns that off.
@@ -210,13 +237,135 @@ class _JobRuntime:
 def _reserved_env(script_name):
     """Names a step cannot replace. The three command files are per step."""
 
-    return {
+    reserved = {
         "GITHUB_WORKSPACE": "/workspace",
-        "ROOKRUNNER_EVENT": "/run/rookrunner/event.json",
+        "ROOKRUNNER_EVENT": _EVENT_FILE,
         "GITHUB_ENV": f"/run/rookrunner-cmd/{script_name}-env",
         "GITHUB_OUTPUT": f"/run/rookrunner-cmd/{script_name}-output",
         "GITHUB_PATH": f"/run/rookrunner-cmd/{script_name}-path",
     }
+    reserved.update(_protected_defaults())
+    return reserved
+
+
+def _runner_arch(system, architecture):
+    """Map an image OS and architecture to `runner.arch`.
+
+    A platform outside the dogfood table is a setup failure. No architecture
+    string is invented for it.
+    """
+
+    if not isinstance(system, str) or not isinstance(architecture, str):
+        _setup("image platform is not accepted")
+    arch = _RUNNER_ARCH.get((system, architecture))
+    if arch is None:
+        _setup("image platform is not accepted")
+    return arch
+
+
+def _commit_sha(manifest):
+    """Return `github.sha` for one manifest, or None when it stays unset.
+
+    The value is `base_commit` only for a clean capture with an empty
+    `included` list. The synthesized commit id is not used.
+    """
+
+    if not isinstance(manifest, dict) or manifest.get("dirty") is not False:
+        return None
+    included = manifest.get("included")
+    if not isinstance(included, list) or included:
+        return None
+    base = manifest.get("base_commit")
+    if not isinstance(base, str) or len(base) not in (40, 64):
+        return None
+    if any(character not in "0123456789abcdef" for character in base):
+        return None
+    return base
+
+
+def _workflow_label(workflow):
+    """Return `github.workflow`: the plan name, or else the workflow path."""
+
+    name = workflow.get("name") if isinstance(workflow, dict) else None
+    if isinstance(name, str) and name != "":
+        return name
+    path = _WORKFLOW_PATH.get()
+    if isinstance(path, str) and path != "":
+        return path
+    return None
+
+
+def _protected_defaults(job=None, workflow=None):
+    """`GITHUB_*` and `RUNNER_*` values a later env layer cannot replace."""
+
+    attempt = _ATTEMPT.get()
+    if attempt is None:
+        return {}
+    values = {
+        "RUNNER_OS": "Linux",
+        "RUNNER_ARCH": attempt["arch"],
+        "RUNNER_ENVIRONMENT": "self-hosted",
+        "RUNNER_TEMP": _RUNNER_TEMP,
+        "RUNNER_TOOL_CACHE": _TOOL_CACHE,
+        "GITHUB_WORKSPACE": "/workspace",
+        "GITHUB_EVENT_PATH": _EVENT_FILE,
+    }
+    job_id = job.get("id") if isinstance(job, dict) else None
+    if isinstance(job_id, str) and job_id != "":
+        values["GITHUB_JOB"] = job_id
+    label = _workflow_label(workflow)
+    if label is not None:
+        values["GITHUB_WORKFLOW"] = label
+    if attempt.get("event_name") is not None:
+        values["GITHUB_EVENT_NAME"] = attempt["event_name"]
+    if attempt.get("sha") is not None:
+        values["GITHUB_SHA"] = attempt["sha"]
+    return values
+
+
+def _soft_defaults():
+    """`CI` and `HOME`. A later env layer may replace either one."""
+
+    if _ATTEMPT.get() is None:
+        return {}
+    return {"CI": "true", "HOME": _HOME}
+
+
+def _runner_dirs(workspace):
+    """Create the attempt directories beside the workspace, mode 0700.
+
+    They are `home`, `runner-temp`, and `tool-cache`. They sit outside the
+    workspace, so they are not in the artifact manifest. `usage` counts them
+    because they live under the state directory with the attempt.
+    """
+
+    root = Path(workspace).parent
+    made = {}
+    for name in ("home", "runner-temp", "tool-cache"):
+        path = root / name
+        if path.is_symlink():
+            _setup("attempt directory is not accepted")
+        path.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(path, 0o700)
+        if "," in os.fspath(path) or "\n" in os.fspath(path) or "\0" in os.fspath(path):
+            _setup("workspace path is not accepted")
+        made[name] = path
+    return made
+
+
+def _empty_directory(path):
+    """Remove children of `path`. A child that cannot be deleted stays."""
+
+    if path is None or not path.is_dir():
+        return
+    for child in path.iterdir():
+        try:
+            if child.is_symlink() or not child.is_dir():
+                child.unlink()
+            else:
+                shutil.rmtree(child)
+        except OSError:
+            continue
 
 
 class RunError(Exception):
@@ -313,7 +462,7 @@ def _resolve_image(docker, reference, digest, deadline):
     )
     if not matches_id and not matches_repo:
         _setup("image digest will not resolve")
-    return digest
+    return digest, _runner_arch(info.get("Os"), info.get("Architecture"))
 
 
 def _inspect(docker, reference, deadline):
@@ -480,6 +629,7 @@ def _defaults(body):
 
 def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_reserved=None):
     merged = {}
+    merged.update(_soft_defaults())
     merged.update(_env_layer(workflow.get("env")))
     merged.update(_env_layer(job.get("env")))
     if runtime is not None:
@@ -488,6 +638,7 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
     if path_value is not None:
         merged["PATH"] = path_value
     reserved = _reserved_env(script_name)
+    reserved.update(_protected_defaults(job, workflow))
     if extra_reserved:
         reserved.update(extra_reserved)
     merged.update(reserved)
@@ -751,7 +902,7 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
     for label in (snapshot_dir, workspace):
         if "," in os.fspath(label) or "\n" in os.fspath(label):
             _setup("workspace path is not accepted")
-    return reference, digest, workflow, jobs, encoded, workspace
+    return reference, digest, workflow, jobs, encoded, workspace, manifest
 
 
 def _discover_socket(docker):
@@ -797,7 +948,9 @@ def _job_socket(docker, docker_socket):
     return path, info.st_gid
 
 
-def _create_args(name, workspace, private, commands, reference, network, socket_path, socket_gid):
+def _create_args(
+    name, workspace, private, commands, reference, network, socket_path, socket_gid, runner_dirs
+):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
     args = [
@@ -828,6 +981,12 @@ def _create_args(name, workspace, private, commands, reference, network, socket_
             f"type=bind,source={private},destination=/run/rookrunner,readonly",
             "--mount",
             f"type=bind,source={commands},destination=/run/rookrunner-cmd",
+            "--mount",
+            f"type=bind,source={runner_dirs['home']},destination={_HOME}",
+            "--mount",
+            f"type=bind,source={runner_dirs['runner-temp']},destination={_RUNNER_TEMP}",
+            "--mount",
+            f"type=bind,source={runner_dirs['tool-cache']},destination={_TOOL_CACHE}",
         ]
     )
     if socket_path is not None:
@@ -1586,6 +1745,7 @@ def run_job(
     owner=None,
     network=DEFAULT_NETWORK,
     docker_socket=False,
+    event_name=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -1614,8 +1774,16 @@ def run_job(
 
     if network not in _NETWORKS:
         _setup("container network is not accepted")
+    if event_name is not None and (
+        not isinstance(event_name, str)
+        or event_name == ""
+        or "\0" in event_name
+        or "\n" in event_name
+        or "\r" in event_name
+    ):
+        _setup("event name is not accepted")
     started = time.monotonic()
-    reference, digest, workflow, jobs, event_bytes, workspace = _prepare(
+    reference, digest, workflow, jobs, event_bytes, workspace, manifest = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
     )
     deadline = started + _job_seconds(jobs[0])
@@ -1633,8 +1801,19 @@ def run_job(
     failure = None
     records = []
     service_cleanup = 0
+    attempt_token = None
+    path_token = None
     try:
-        resolved = _resolve_image(docker_bin, reference, digest, deadline)
+        resolved, arch = _resolve_image(docker_bin, reference, digest, deadline)
+        runner_dirs = _runner_dirs(workspace)
+        attempt_token = _ATTEMPT.set(
+            {
+                "arch": arch,
+                "event_name": event_name,
+                "sha": _commit_sha(manifest),
+                "temp": runner_dirs["runner-temp"],
+            }
+        )
         (private / "event.json").write_bytes(event_bytes)
         os.chmod(private / "event.json", 0o600)
         scripts = {}
@@ -1648,7 +1827,15 @@ def run_job(
         code, _stdout, _stderr = _invoke_within(
             docker_bin,
             _create_args(
-                name, workspace, private, commands, reference, network, socket_path, socket_gid
+                name,
+                workspace,
+                private,
+                commands,
+                reference,
+                network,
+                socket_path,
+                socket_gid,
+                runner_dirs,
             ),
             60,
             deadline,
@@ -1759,62 +1946,74 @@ def run_job(
                             needs,
                             inputs=inputs,
                         )
-                        resolved_inputs = _resolve_call_inputs(
-                            job["call"]["inputs"],
-                            passed_values,
-                            lambda explicit, call_workflow=job["call"]["workflow"]: (
-                                _expression_values(
-                                    event,
-                                    call_workflow,
-                                    {"env": {}},
-                                    {"env": {}},
-                                    [],
-                                    cancelled,
-                                    inputs=explicit,
-                                )
-                            ),
-                        )
-                    except (ExprError, _CallInputError) as exc:
+                    except ExprError as exc:
                         _mark_call(job, path, str(exc))
                         results[job["id"]] = {"result": "failure", "outputs": {}}
                         continue
-                    inner_results = _execute_jobs(
-                        job["call"]["jobs"],
-                        job["call"]["workflow"],
-                        resolved_inputs,
-                        path + (job["id"],),
-                        reset_first=True,
+                    call_path = job["call"].get("path")
+                    call_token = _WORKFLOW_PATH.set(
+                        call_path if isinstance(call_path, str) and call_path != "" else None
                     )
-                    if inner_results is None:
-                        return None
-                    output_values = _expression_values(
-                        event,
-                        job["call"]["workflow"],
-                        {"env": {}},
-                        {"env": {}},
-                        [],
-                        cancelled,
-                        inputs=resolved_inputs,
-                    )
-                    output_values["jobs"] = {
-                        item_id: {
-                            "result": item["result"],
-                            "outputs": dict(item["outputs"]),
+                    try:
+                        try:
+                            resolved_inputs = _resolve_call_inputs(
+                                job["call"]["inputs"],
+                                passed_values,
+                                lambda explicit, call_workflow=job["call"]["workflow"]: (
+                                    _expression_values(
+                                        event,
+                                        call_workflow,
+                                        {"env": {}},
+                                        {"env": {}},
+                                        [],
+                                        cancelled,
+                                        inputs=explicit,
+                                    )
+                                ),
+                            )
+                        except (ExprError, _CallInputError) as exc:
+                            _mark_call(job, path, str(exc))
+                            results[job["id"]] = {"result": "failure", "outputs": {}}
+                            continue
+                        inner_results = _execute_jobs(
+                            job["call"]["jobs"],
+                            job["call"]["workflow"],
+                            resolved_inputs,
+                            path + (job["id"],),
+                            reset_first=True,
+                        )
+                        if inner_results is None:
+                            return None
+                        output_values = _expression_values(
+                            event,
+                            job["call"]["workflow"],
+                            {"env": {}},
+                            {"env": {}},
+                            [],
+                            cancelled,
+                            inputs=resolved_inputs,
+                        )
+                        output_values["jobs"] = {
+                            item_id: {
+                                "result": item["result"],
+                                "outputs": dict(item["outputs"]),
+                            }
+                            for item_id, item in inner_results.items()
                         }
-                        for item_id, item in inner_results.items()
-                    }
-                    produced, output_bytes = _job_outputs(
-                        {"outputs": job["call"]["outputs"]},
-                        output_values,
-                        output_bytes,
-                    )
-                    call_failed = any(
-                        item["result"] == "failure" for item in inner_results.values()
-                    )
-                    results[job["id"]] = {
-                        "result": "failure" if call_failed else "success",
-                        "outputs": produced,
-                    }
+                        produced, output_bytes = _job_outputs(
+                            {"outputs": job["call"]["outputs"]},
+                            output_values,
+                            output_bytes,
+                        )
+                        call_failed = any(
+                            item["result"] == "failure" for item in inner_results.values()
+                        )
+                        results[job["id"]] = {
+                            "result": "failure" if call_failed else "success",
+                            "outputs": produced,
+                        }
+                    finally:
+                        _WORKFLOW_PATH.reset(call_token)
                     continue
                 runs = _combination_contexts(job)
                 if not runs:
@@ -1875,6 +2074,9 @@ def run_job(
                                 cancelled_run = True
                                 break
                     if not cancelled_run:
+                        attempt = _ATTEMPT.get()
+                        if attempt is not None:
+                            _empty_directory(attempt.get("temp"))
                         for matrix, strategy_context in runs:
                             if owner is not None and owner.cancelled():
                                 graceful = True
@@ -1958,6 +2160,10 @@ def run_job(
                 }
             return results
 
+        workflow_path = manifest.get("workflow") if isinstance(manifest, dict) else None
+        path_token = _WORKFLOW_PATH.set(
+            workflow_path if isinstance(workflow_path, str) and workflow_path != "" else None
+        )
         finished = _execute_jobs(jobs, workflow, {}, (), reset_first=False)
         if finished is not None:
             outcome = _outcome(resolved, reference, records, failed)
@@ -1973,6 +2179,10 @@ def run_job(
     except Exception as exc:
         failure = exc
     finally:
+        if path_token is not None:
+            _WORKFLOW_PATH.reset(path_token)
+        if attempt_token is not None:
+            _ATTEMPT.reset(attempt_token)
         cleanup_code = 0
         if name is not None and (created or graceful):
             try:
@@ -2052,8 +2262,10 @@ def _expression_values(
 ):
     """Contexts for one step `if`. Missing properties stay missing.
 
-    `env` is the workflow env, the job env, `GITHUB_ENV` from earlier steps
-    in this job, then this step's env. Values that contain `${{ }}` are not
+    `env` starts with `CI` and `HOME` while an attempt is running, then the
+    workflow env, the job env, `GITHUB_ENV` from earlier steps in this job,
+    then this step's env. The default `GITHUB_*` and `RUNNER_*` variables
+    are not copied into `env`. Values that contain `${{ }}` are not
     expanded. `steps.<id>.outputs` is what earlier steps wrote to
     `GITHUB_OUTPUT`. The command-file paths are not part of this map.
     `inputs` is empty unless the caller passes workflow inputs or composite
@@ -2064,6 +2276,7 @@ def _expression_values(
     """
 
     env = {}
+    env.update(_soft_defaults())
     env.update(_env_layer(workflow.get("env", {})))
     env.update(_env_layer(job.get("env", {})))
     if runtime is not None:
@@ -2089,13 +2302,35 @@ def _expression_values(
     github = {"event": _event_value(event)}
     if isinstance(action_path, str):
         github["action_path"] = action_path
+    runner = {"os": "Linux"}
+    attempt = _ATTEMPT.get()
+    if attempt is not None:
+        github["workspace"] = "/workspace"
+        github["event_path"] = _EVENT_FILE
+        job_id = job.get("id") if isinstance(job, dict) else None
+        if isinstance(job_id, str) and job_id != "":
+            github["job"] = job_id
+        label = _workflow_label(workflow)
+        if label is not None:
+            github["workflow"] = label
+        if attempt.get("event_name") is not None:
+            github["event_name"] = attempt["event_name"]
+        if attempt.get("sha") is not None:
+            github["sha"] = attempt["sha"]
+        runner = {
+            "os": "Linux",
+            "arch": attempt["arch"],
+            "environment": "self-hosted",
+            "temp": _RUNNER_TEMP,
+            "tool_cache": _TOOL_CACHE,
+        }
     return {
         "github": github,
         "needs": needs if isinstance(needs, dict) else {},
         "strategy": strategy if isinstance(strategy, dict) else {},
         "matrix": matrix if isinstance(matrix, dict) else {},
         "job": {"status": job_status},
-        "runner": {"os": "Linux"},
+        "runner": runner,
         "env": env,
         "vars": {},
         "steps": steps,
