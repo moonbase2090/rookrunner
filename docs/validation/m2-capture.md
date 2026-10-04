@@ -84,8 +84,8 @@ The allow-list is copied to a sibling `git.json`
 `uses: actions/checkout@v4` and does not replace those files
 ([design](../design/checkout.md)). Other checkout actions stay rejected.
 The trees and blobs of the captured base commit are stored beside the
-manifest ([design](../design/git-objects.md)). Commit objects stay
-excluded. A synthesized commit for that tree is designed
-([design](../design/synthesized-commit.md)) and is not implemented.
+manifest ([design](../design/git-objects.md)). The original commit
+object stays excluded. One synthesized commit for that tree is stored
+([design](../design/synthesized-commit.md)).
 See the
 [implemented capture contract](../design/source-capture.md).

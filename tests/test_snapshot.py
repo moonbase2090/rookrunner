@@ -68,7 +68,8 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(contents).hexdigest(), entry["sha256"])
         return result, manifest, location / "files"
 
-    def _assert_objects(self, location, result, manifest):
+    def _assert_objects(self, location, result, manifest, capture=None):
+        capture = self.capture if capture is None else capture
         names = sorted(path.name for path in location.iterdir())
         store = location / "objects"
         if result["git_objects_digest"] is None:
@@ -82,6 +83,7 @@ class SnapshotTests(unittest.TestCase):
         algorithm = manifest["git_object_format"]
         width = 40 if algorithm == "sha1" else 64
         ids = []
+        commits = []
         for bucket in store.iterdir():
             self.assertTrue(bucket.is_dir())
             self.assertEqual(stat.S_IMODE(bucket.stat().st_mode), 0o700)
@@ -95,13 +97,39 @@ class SnapshotTests(unittest.TestCase):
                 raw = zlib.decompress(leaf.read_bytes())
                 header, payload = raw.split(b"\0", 1)
                 kind, size = header.split(b" ")
-                self.assertIn(kind, (b"blob", b"tree"))
+                self.assertIn(kind, (b"blob", b"tree", b"commit"))
                 self.assertEqual(int(size), len(payload))
                 self.assertEqual(hashlib.new(algorithm, raw).hexdigest(), oid)
                 self.assertNotIn(b"fixture@example.invalid", payload)
+                self.assertNotIn(b"Fixture", payload)
+                if kind == b"commit":
+                    commits.append((oid, payload))
                 ids.append(oid)
         ids.sort()
         self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len(commits), 1)
+        commit_id, payload = commits[0]
+        root = (
+            capture.git("rev-parse", "--verify", f"{manifest['base_commit']}^{{tree}}")
+            .stdout.decode("ascii")
+            .strip()
+        )
+        expected = (
+            f"tree {root}\n"
+            "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+            "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+            "\n"
+            "captured tree\n"
+        ).encode("ascii")
+        self.assertEqual(payload, expected)
+        self.assertNotIn(b"parent ", payload)
+        hashed = (
+            capture.git("hash-object", "-t", "commit", "--stdin", input=payload)
+            .stdout.decode("ascii")
+            .strip()
+        )
+        self.assertEqual(hashed, commit_id)
+        self.assertNotIn(commit_id, (location / "git.json").read_text())
         self.assertEqual(
             hashlib.sha256(canonical(ids).encode()).hexdigest(),
             result["git_objects_digest"],
@@ -148,6 +176,7 @@ class SnapshotTests(unittest.TestCase):
         first, _, _ = self.snapshot()
         second, _, _ = self.snapshot()
         self.assertEqual(first["digest"], second["digest"])
+        self.assertEqual(first["git_objects_digest"], second["git_objects_digest"])
         self.assertNotEqual(first["snapshot_id"], second["snapshot_id"])
 
     def test_working_changes_modes_symlinks_and_explicit_untracked(self):
@@ -479,11 +508,21 @@ class SnapshotTests(unittest.TestCase):
         self.assertFalse((snapshot / "HEAD").exists())
         self.assertIsNotNone(result["git_objects_digest"])
         self.assertEqual((files / "source.txt").read_text(), "original\n")
+        headers = [
+            zlib.decompress(leaf.read_bytes()).split(b"\0", 1)[0]
+            for bucket in (snapshot / "objects").iterdir()
+            for leaf in bucket.iterdir()
+        ]
+        self.assertEqual(sum(header.startswith(b"commit ") for header in headers), 1)
 
     def test_dirty_file_keeps_the_committed_blob(self):
+        clean, _, _ = self.snapshot()
         self.write("source.txt", "dirty-bytes\n")
         result, _, files = self.snapshot()
         self.assertTrue(result["dirty"])
+        self.assertNotEqual(result["digest"], clean["digest"])
+        self.assertEqual(result["base_commit"], clean["base_commit"])
+        self.assertEqual(result["git_objects_digest"], clean["git_objects_digest"])
         self.assertEqual((files / "source.txt").read_text(), "dirty-bytes\n")
         payloads = []
         store = files.parent / "objects"
@@ -494,6 +533,50 @@ class SnapshotTests(unittest.TestCase):
                 payloads.append(payload)
         self.assertIn(b"original\n", payloads)
         self.assertNotIn(b"dirty-bytes\n", payloads)
+
+    def test_new_tree_changes_the_synthesized_commit(self):
+        first, _, _ = self.snapshot()
+        self.write("added.txt", "added\n")
+        self.capture.git("add", "added.txt")
+        self._commit("add")
+        second, second_manifest, _ = self.snapshot()
+        self.assertNotEqual(second["base_commit"], first["base_commit"])
+        self.assertNotEqual(second["git_objects_digest"], first["git_objects_digest"])
+        self.assertNotEqual(second["digest"], first["digest"])
+        self.assertEqual(second_manifest["base_commit"], second["base_commit"])
+
+    def test_sha256_repository_stores_one_sha256_commit(self):
+        repo = self.root / "sha256-repo"
+        repo.mkdir()
+        capture = SourceCapture(repo, self.state)
+        created = capture.git(
+            "init",
+            "--object-format=sha256",
+            "--initial-branch=main",
+            allow_failure=True,
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        workflow = repo / ".github" / "workflows"
+        workflow.mkdir(parents=True)
+        (workflow / "test.yml").write_text("name: fixture\non: push\njobs: {}\n")
+        (repo / "source.txt").write_text("original\n")
+        capture.git("add", ".")
+        capture.git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "fixture",
+        )
+        result = capture.capture(".github/workflows/test.yml")
+        location = self.state / "snapshots" / result["snapshot_id"]
+        manifest = json.loads((location / "manifest.json").read_bytes())
+        self.assertEqual(manifest["git_object_format"], "sha256")
+        self.assertEqual(manifest["base_commit"], result["base_commit"])
+        ids = self._assert_objects(location, result, manifest, capture)
+        self.assertTrue(all(len(oid) == 64 for oid in ids))
 
     def test_excluded_tree_path_stores_no_objects(self):
         self.write(".env", "not-a-secret\n")

@@ -73,14 +73,17 @@ added.
 ## What stays excluded
 
 Capture does not copy the items below. The base commit's trees and
-blobs are copied separately ([git objects](git-objects.md)).
+blobs are copied separately ([git objects](git-objects.md)). One
+synthesized commit for that tree is stored with those objects
+([synthesized commit](synthesized-commit.md)).
 
 - `.git` itself, including config, hooks, objects, packs, alternates,
   replace refs, packed-refs, and worktree pointers
 - remote URLs, remote names, and remote-tracking refs
 - credential helpers, tokens, and `http.extraheader`
 - `user.name` and `user.email`, from configuration or from a commit
-- commit objects, and therefore authors, committers, and messages
+- the original commit object, and therefore its author, committer,
+  and message
 - tags, notes, and reflogs
 - `github.token` or `GITHUB_TOKEN`
 
@@ -147,8 +150,8 @@ and reports no metadata digest.
 
 The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). The original commit object stays
-excluded. A synthesized commit is designed in
-[synthesized commit](synthesized-commit.md) and is not implemented.
+excluded. One synthesized commit for that tree is stored
+([synthesized commit](synthesized-commit.md)).
 Filling the `github` context and publishing a GitHub-equivalence claim
 are later work. Each of those still needs its own design. The owned
 checkout in [checkout](checkout.md) does not authorize them.

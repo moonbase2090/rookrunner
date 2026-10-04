@@ -90,9 +90,8 @@ added.
 ## Out of scope
 
 The trees and blobs of the captured base commit are copied
-([git objects](git-objects.md)). A synthesized commit is designed in
-[synthesized commit](synthesized-commit.md) and is not implemented.
-Creating a `.git` directory, fetching, persisting a credential, and
-filling the `github` context each need their own design. A later `run`
-step still has no Git repository. This design does not authorize those
-behaviors.
+([git objects](git-objects.md)). One synthesized commit for that tree
+is stored ([synthesized commit](synthesized-commit.md)). Creating a
+`.git` directory, fetching, persisting a credential, and filling the
+`github` context each need their own design. A later `run` step still
+has no Git repository. This design does not authorize those behaviors.
