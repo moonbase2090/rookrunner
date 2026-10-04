@@ -1,0 +1,297 @@
+{
+  "scope": "NS-38",
+  "date": "2026-10-04",
+  "capability_version": 12,
+  "version_11_plans_migrated": false,
+  "adds_capability": false,
+  "check_yml_changed": false,
+  "success_criterion_met": false,
+  "ruff_failure_criterion_met": true,
+  "identified_run": {
+    "run_id": "f271e3b2-e92b-47d8-9751-063402fbf7e6",
+    "attempt_id": "a824bca8-29b0-4c95-8586-21c37dd0d4ae",
+    "worker_id": "6c6d1cf8-102f-4e7c-bb87-12d59259aafe",
+    "submission_key": "ns38-check-bb634af-py3",
+    "state": "failed",
+    "exit_code": 137,
+    "started_at": "2026-10-04T16:52:37.595458+00:00",
+    "finished_at": "2026-10-04T16:52:55.472932+00:00",
+    "cleanup": "confirmed_no_external_resources",
+    "error": null,
+    "node24": {
+      "digest": "cda9ff6099e6eeb9fc394600bd930a1f75fa525cc93bbe7cea714471a8cdee10",
+      "version": "v24.21.0"
+    },
+    "snapshot_id": "c41cf9f2-cdef-49ca-97fd-ed54baea3de5",
+    "snapshot_digest": "d8d7e0d72af601444ef1ec7ce990a9e12368438d43d905ef7584b2e61ab12d85",
+    "manifest_digest": "d8d7e0d72af601444ef1ec7ce990a9e12368438d43d905ef7584b2e61ab12d85",
+    "workflow_digest": "10acd3ca2d7ede3567edb05b214da2c120db5f90bd2a9e62d76da23ed534d71f",
+    "plan_digest": "b00428a2b65790adc933751211109c2ad1f86c62cb7e1c329a240a8c65aedf53",
+    "event_digest": "eb7fd7245b33a392d7ddc13910e63dcbe5cbe9894f740e042d69d1cbe2cfd26f",
+    "image_digest": "sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "actions": [
+      {
+        "commit": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
+        "digest": "0d06cc3d1548074d7b9bc86a682b10d13c2859157c27c16551eb904e9a130839",
+        "owner": "astral-sh",
+        "path": "",
+        "repository": "setup-uv"
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "id": null,
+        "name": "Checkout",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "index": 1,
+        "id": null,
+        "name": "Install uv and Python",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null,
+        "stdout": "Fetching manifest data from https://raw.githubusercontent.com/astral-sh/versions/main/v1/uv.ndjson ...\nDownloading uv from \"https://releases.astral.sh/github/uv/releases/download/0.12.18/uv-aarch64-unknown-linux-gnu.tar.gz\" ...\n[command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /github/runner-temp/7a7c45db-96ee-4bc4-8aab-3ff4d4ed52bf -f /github/runner-temp/96959ae1-fd3c-4d24-8eb4-d6feba9cef95\nAdded /github/home/.local/bin to the path\nAdded /github/tool-cache/uv/0.12.18/aarch64 to the path\nSet UV_PYTHON_INSTALL_DIR to /github/home/.local/share/uv/python\nAdded /github/home/.local/share/uv/python to the path\nSet UV_PYTHON to 3.12\n##[add-matcher]/actions/astral-sh/setup-uv/c18668ad3cf93ea998bef934396af7bb5c839dc7/.github/python.json\nSuccessfully installed uv version 0.12.18\n"
+      },
+      {
+        "index": 2,
+        "id": null,
+        "name": "Sync the lockfile",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null,
+        "stderr": "Using CPython 3.12.3 interpreter at: /usr/bin/python3.12\nCreating virtual environment at: .venv\nResolved 9 packages in 3ms\nDownloading ruff (11.7MiB)\n Downloaded ruff\nPrepared 8 packages in 607ms\nwarning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.\n         If the cache and target directories are on different filesystems, hardlinking may not be supported.\n         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.\nInstalled 8 packages in 112ms\n + attrs==26.1.0\n + jsonschema==4.25.1\n + jsonschema-specifications==2025.9.1\n + pyyaml==6.0.3\n + referencing==0.37.0\n + rpds-py==2026.6.3\n + ruff==0.12.12\n + typing-extensions==4.16.0\n"
+      },
+      {
+        "index": 3,
+        "id": null,
+        "name": "Ruff",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null,
+        "stdout": "All checks passed!\n34 files already formatted\n"
+      },
+      {
+        "index": 4,
+        "id": null,
+        "name": "Unit tests",
+        "status": "failed",
+        "exit_code": 137,
+        "error": null,
+        "stderr": "....................................................................................................................................................................................................E"
+      },
+      {
+        "index": 5,
+        "id": null,
+        "name": "Install uv and Python",
+        "status": "skipped",
+        "exit_code": null,
+        "error": null
+      }
+    ],
+    "follow_exit_code": 1,
+    "commit": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+    "commit_on_main": true,
+    "base_commit": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+    "dirty": false,
+    "git_json_head": null,
+    "event_name": "push",
+    "event": {
+      "ref": "refs/heads/main",
+      "before": "06dba059f6ed889b4b7751256f1d2236a56a588a",
+      "after": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+      "repository": {
+        "full_name": "moonbase2090/rookrunner"
+      }
+    },
+    "network": "bridge",
+    "docker_socket": true,
+    "counts_as_success": false,
+    "failing_step": {
+      "index": 4,
+      "name": "Unit tests",
+      "exit_code": 137
+    }
+  },
+  "ruff_run": {
+    "run_id": "5770752f-7e8f-447e-97a1-cb5f910d53c5",
+    "attempt_id": "06a85889-1767-487b-b722-979af669f7f6",
+    "worker_id": "b6db6c57-9b17-451f-9c93-74a6b54a0764",
+    "submission_key": "ns38-ruff-violation",
+    "state": "failed",
+    "exit_code": 1,
+    "started_at": "2026-10-04T16:53:35.630833+00:00",
+    "finished_at": "2026-10-04T16:53:38.806008+00:00",
+    "cleanup": "confirmed_no_external_resources",
+    "error": null,
+    "node24": {
+      "digest": "cda9ff6099e6eeb9fc394600bd930a1f75fa525cc93bbe7cea714471a8cdee10",
+      "version": "v24.21.0"
+    },
+    "snapshot_id": "01f6c0c0-593b-437d-9504-3d1d0a617d9b",
+    "snapshot_digest": "4298f1c77b2833cf56703d0d08bd602752de5dbc57821da5b61c53726e3516b4",
+    "manifest_digest": "4298f1c77b2833cf56703d0d08bd602752de5dbc57821da5b61c53726e3516b4",
+    "workflow_digest": "10acd3ca2d7ede3567edb05b214da2c120db5f90bd2a9e62d76da23ed534d71f",
+    "plan_digest": "b00428a2b65790adc933751211109c2ad1f86c62cb7e1c329a240a8c65aedf53",
+    "event_digest": "9750808bb3f9c72dd1e5f583398ae995d070af37d2f60a72b75884f33d17a561",
+    "image_digest": "sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "actions": [
+      {
+        "commit": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
+        "digest": "0d06cc3d1548074d7b9bc86a682b10d13c2859157c27c16551eb904e9a130839",
+        "owner": "astral-sh",
+        "path": "",
+        "repository": "setup-uv"
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "id": null,
+        "name": "Checkout",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null
+      },
+      {
+        "index": 1,
+        "id": null,
+        "name": "Install uv and Python",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null,
+        "stdout": "Fetching manifest data from https://raw.githubusercontent.com/astral-sh/versions/main/v1/uv.ndjson ...\nDownloading uv from \"https://releases.astral.sh/github/uv/releases/download/0.12.18/uv-aarch64-unknown-linux-gnu.tar.gz\" ...\n[command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /github/runner-temp/2a740701-a023-42d8-98c8-e2dee00422ee -f /github/runner-temp/2bfa302b-e6c6-4c50-be06-16e70a3aafc8\nAdded /github/home/.local/bin to the path\nAdded /github/tool-cache/uv/0.12.18/aarch64 to the path\nSet UV_PYTHON_INSTALL_DIR to /github/home/.local/share/uv/python\nAdded /github/home/.local/share/uv/python to the path\nSet UV_PYTHON to 3.12\n##[add-matcher]/actions/astral-sh/setup-uv/c18668ad3cf93ea998bef934396af7bb5c839dc7/.github/python.json\nSuccessfully installed uv version 0.12.18\n"
+      },
+      {
+        "index": 2,
+        "id": null,
+        "name": "Sync the lockfile",
+        "status": "succeeded",
+        "exit_code": 0,
+        "error": null,
+        "stderr": "Using CPython 3.12.3 interpreter at: /usr/bin/python3.12\nCreating virtual environment at: .venv\nResolved 9 packages in 3ms\nDownloading ruff (11.7MiB)\n Downloaded ruff\nPrepared 8 packages in 533ms\nwarning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.\n         If the cache and target directories are on different filesystems, hardlinking may not be supported.\n         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.\nInstalled 8 packages in 105ms\n + attrs==26.1.0\n + jsonschema==4.25.1\n + jsonschema-specifications==2025.9.1\n + pyyaml==6.0.3\n + referencing==0.37.0\n + rpds-py==2026.6.3\n + ruff==0.12.12\n + typing-extensions==4.16.0\n"
+      },
+      {
+        "index": 3,
+        "id": null,
+        "name": "Ruff",
+        "status": "failed",
+        "exit_code": 1,
+        "error": null,
+        "stdout": "F401 `os` imported but unused\n --> src/execution_core/__init__.py:3:8\n  |\n1 | \"\"\"Rookrunner's local execution contract prototype.\"\"\"\n2 |\n3 | import os\n  |        ^^\n4 |\n5 | __version__ = \"0.0.1\"\n  |\nhelp: Remove unused import: `os`\n\nFound 1 error.\n"
+      },
+      {
+        "index": 4,
+        "id": null,
+        "name": "Unit tests",
+        "status": "skipped",
+        "exit_code": null,
+        "error": null
+      },
+      {
+        "index": 5,
+        "id": null,
+        "name": "Install uv and Python",
+        "status": "skipped",
+        "exit_code": null,
+        "error": null
+      }
+    ],
+    "follow_exit_code": 1,
+    "commit": "4648b3e05fb080d0cdfe51d65b65f634cc879a80",
+    "commit_on_main": false,
+    "pushed": false,
+    "parent": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+    "base_commit": "4648b3e05fb080d0cdfe51d65b65f634cc879a80",
+    "dirty": false,
+    "violation": "unused import os in src/execution_core/__init__.py",
+    "event_name": "push",
+    "event": {
+      "ref": "refs/heads/disposable",
+      "before": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+      "after": "4648b3e05fb080d0cdfe51d65b65f634cc879a80",
+      "repository": {
+        "full_name": "moonbase2090/rookrunner"
+      }
+    },
+    "network": "bridge",
+    "docker_socket": true,
+    "failing_step": {
+      "index": 3,
+      "name": "Ruff",
+      "exit_code": 1
+    }
+  },
+  "github_hosted_reference": {
+    "role": "observed reference, not a comparison dispatched by this run",
+    "name": "check",
+    "event": "push",
+    "head_sha": "bb634af7a211540ab54070179b7c6c873cf9c7d4",
+    "conclusion": "success",
+    "url": "https://github.com/moonbase2090/rookrunner/actions/runs/37217343292",
+    "job_url": "https://github.com/moonbase2090/rookrunner/actions/runs/37217343292/job/111480431867"
+  },
+  "gap": {
+    "next_slice_is_this_gap": true,
+    "next_slice_is_ns_40": false,
+    "summary": "The unit-test step starts job containers through the host Docker socket. Those containers bind-mount temporary directories that exist only in the outer job, and the test cleanup deletes every container named rookrunner-*, including the job container.",
+    "recorded_stderr": "196 '.' characters and one 'E', then the step exits 137 with no traceback",
+    "discovery_index": 197,
+    "test": "test_run.DockerRunTests.test_always_runs_after_a_failed_step",
+    "probe_daemon_error": "Error response from daemon: invalid mount config for type \"bind\": bind source path does not exist: /host_mnt/private/tmp/run-docker-7txs14qa/state/attempts/run-1",
+    "cleanup_filter": "docker ps -aq --filter name=rookrunner-",
+    "job_container_name": "rookrunner- plus 16 hexadecimal characters"
+  },
+  "image": {
+    "id": "sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "os": "linux",
+    "architecture": "arm64",
+    "base": "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55",
+    "packages": [
+      "bash",
+      "git",
+      "ca-certificates",
+      "curl",
+      "python3"
+    ],
+    "python3": "3.12.3",
+    "docker_client": {
+      "version": "29.8.0",
+      "archive": "docker-29.8.0.tgz",
+      "archive_sha256": "1462a696be6029bd478d7d60d7f3c31cdd15affd1178a4a278aaf4a1d1b7f8b5",
+      "source": "https://download.docker.com/linux/static/stable/aarch64/docker-29.8.0.tgz"
+    },
+    "dockerfile": "FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55\nRUN apt-get update && apt-get install -y --no-install-recommends bash git ca-certificates curl python3 && rm -rf /var/lib/apt/lists/*\nCOPY docker/docker /usr/local/bin/docker\nRUN chmod 755 /usr/local/bin/docker\n"
+  },
+  "node24": {
+    "version": "v24.21.0",
+    "tarball": "node-v24.21.0-linux-arm64.tar.xz",
+    "tarball_sha256": "6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2",
+    "source": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-arm64.tar.xz",
+    "directory_digest": "cda9ff6099e6eeb9fc394600bd930a1f75fa525cc93bbe7cea714471a8cdee10",
+    "mount": "/opt/node24",
+    "probed_version": "v24.21.0"
+  },
+  "setup_uv": {
+    "commit": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
+    "digest": "0d06cc3d1548074d7b9bc86a682b10d13c2859157c27c16551eb904e9a130839",
+    "uses": "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+  },
+  "host": {
+    "uname_machine": "arm64",
+    "docker": "linux/aarch64 29.8.0",
+    "cli_python": "/Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python"
+  },
+  "commands": {
+    "worker": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state worker --repository /tmp/rookrunner-ns38-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
+    "submit": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state submit --key ns38-check-bb634af-py3 --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for bb634af> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "follow": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state follow f271e3b2-e92b-47d8-9751-063402fbf7e6",
+    "ruff_worker": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff worker --repository /tmp/rookrunner-ns38-ruff --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64",
+    "ruff_submit": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff submit --key ns38-ruff-violation --workflow .github/workflows/check.yml --job-id check --event-name push --event <push event for 4648b3e> --image sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8",
+    "ruff_follow": "PYTHONPATH=src /Users/brandan/Projects/Moonbase2090/Rookrunner/.venv/bin/python -m execution_core --state /tmp/rookrunner-ns38-state-ruff follow 5770752f-7e8f-447e-97a1-cb5f910d53c5",
+    "network_flag": "omitted; the CLI default is bridge"
+  }
+}
