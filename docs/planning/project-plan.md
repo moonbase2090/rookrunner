@@ -42,12 +42,14 @@ The owner's 2026-10-03 priorities change the horizons:
   ended `succeeded` with exit code 0 for
   `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. NS-38's run of
   `bb634af7a211540ab54070179b7c6c873cf9c7d4` stays `failed` with exit
-  code 137. The next slice is NS-39. The capability version stays 12.
+  code 137. NS-39 designs owner CI. The credential stays an owner
+  decision. The next slice is NS-40. The capability version stays 12.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
 - **Next:** the `ownerci` epic reports push and pull request results for
-  owner repositories to GitHub as commit statuses (NS-39–NS-43).
+  owner repositories to GitHub as commit statuses. NS-39 designs that
+  path. NS-40 through NS-43 implement it and are not started.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
 
 The `dogfood` and `ownerci` stories in the [backlog manifest](backlog.json)
