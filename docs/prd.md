@@ -291,7 +291,7 @@ it. The worker is not an unattended production service.
 | Dashboard direction | Runnable visual options, then a selection. | Dashboard implementation |
 | Private remote workers and managed capacity | Discovery only. Each needs its own requirements. Neither blocks the local preview. | Any remote or hosted design |
 | Event payload and workflow wire version | The workflow methods in the protocol draft are not the implemented v0 submit body. They need a negotiated version. | Workflow acceptance |
-| Reporting results to GitHub | Proposed 2026-10-03 as CI-1: commit statuses for the owner's own repositories, from a clean capture of a polled SHA ([next steps](planning/next-steps.md#re-prioritization-2026-10-03)). Outbound HTTPS only. No listener. The credential type is an owner decision. | Posting any status |
+| Reporting results to GitHub | Designed 2026-10-04 as CI-1 in [owner CI](design/owner-ci.md): commit statuses for the owner's own repositories, from a clean capture of the tested commit. Outbound HTTPS only. No listener. Commit statuses are the reporting form. The credential type stays an owner decision. | Posting any status |
 
 Source capture of tracked working files plus explicitly included untracked
 files is no longer an open product choice. It is the implemented capture

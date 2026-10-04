@@ -17,8 +17,10 @@ exit code 137. The gap that record names is closed. A later run of
 `21a3f5ad5058027fda62b2b9af6bbba9e336bf83` ended `succeeded` with
 exit code 0. A disposable ruff violation ended `failed` with exit
 code 1 at the Ruff step. The record is
-[dogfood check](../validation/dogfood-check.md). The next slice is
-NS-39. NS-39 through NS-43 are not started.
+[dogfood check](../validation/dogfood-check.md). NS-39 designs owner
+CI in [owner CI](../design/owner-ci.md). The credential stays an
+owner decision. The next slice is NS-40. NS-40 through NS-43 are
+not started.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -1341,7 +1343,7 @@ No slice below adds a numeric limit without a GitHub source. Read
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
 | Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | NS-39 |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
-| Pending runs in a concurrency group | 100, with `queue: max` | same | Provisional P2 |
+| Pending runs in a concurrency group | 100, with `queue: max` | same | Provisional P1 |
 
 The poll interval is the operator's schedule, not a number in code. A
 poll pass follows GitHub's rate-limit response headers. It does not
@@ -1723,8 +1725,8 @@ with exit code 1 at the Ruff step. The record is
 [dogfood check](../validation/dogfood-check.md). The gap that record
 names is closed by a later run of
 `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`, which ended `succeeded`
-with exit code 0. That record is in the same document. The next
-slice is NS-39.
+with exit code 0. That record is in the same document. NS-39 designs
+owner CI. The next slice is NS-40.
 
 This slice is a validation record. It adds no capability. The run uses
 a clean clone of this repository at an identified commit on `main`.
@@ -1769,11 +1771,35 @@ Acceptance criteria:
 
 **NS-39. Design CI for owner repositories.**
 
-Status: not started. Docs only. The planner seat may draft it during
-NS-31 through NS-38. It merges after NS-38.
+Status: designed. The design is [owner CI](../design/owner-ci.md).
+This slice does not change the engine. The capability version stays
+12. A version 11 plan is not migrated.
 
-A new design document, `docs/design/owner-ci.md`, settles these
-questions:
+Settled there, so later slices do not reopen them:
+
+1. **Trust.** Only a configured repository runs. A fork pull request
+   is recorded and is not run. `pull_request_target` is not evaluated.
+2. **Trigger.** A one-shot poll started by the OS scheduler. No
+   listener and no runner registration.
+3. **Source.** A push tests the tip. A pull request tests the merge
+   commit on `refs/pull/<n>/merge` and posts the status on the head
+   SHA. A missing merge ref runs nothing.
+4. **Event payload.** `ref`, `before`, `after`,
+   `repository.full_name`, and the pull request number, head, and
+   base. Nothing else.
+5. **Reporting.** Commit statuses, context
+   `rookrunner/<workflow file>/<job>`. The state mapping is NS-40.
+   Check runs stay deferred.
+6. **Credential.** Open. A GitHub App installation token or a
+   fine-grained token. Read at call time from an operator file. It
+   never enters state, a job, a snapshot, or a log.
+7. **Limits.** The table already in this file. Nothing else.
+8. **Coexistence.** GitHub-hosted checks keep running. Required
+   contexts stay an owner decision.
+9. **Inventory.** `concurrency` blocks 17 of the 18 push or
+   pull-request workflows. The ranked list is in the design.
+
+The questions answered in that document:
 
 1. **Trust.** Only the operator's own repositories run, and they are
    trusted code. A pull request from a fork never runs. The PRD trust
@@ -1827,12 +1853,16 @@ Acceptance criteria:
 Status: not started. It follows NS-39.
 
 A CLI command posts one commit status for one run. The command takes
-the run, the repository, the SHA, and the context. It refuses, with a
+the run, the repository, the status SHA, and the context. The status
+SHA and the tested commit are the ones
+[owner CI](../design/owner-ci.md) names. For a push they are the same
+SHA. For a pull request the status SHA is the head SHA and the tested
+commit is the merge commit. It refuses, with a
 structured error and no HTTP request, unless all of these hold:
 
 - The run is a workflow run.
 - Its snapshot is clean, with no included files.
-- `base_commit` equals the SHA.
+- `base_commit` equals the tested commit.
 
 The state mapping:
 
@@ -1845,7 +1875,7 @@ The state mapping:
 
 Nothing else maps to `success`.
 
-The credential is read at call time from the source NS-39 chose. It is
+The credential is read at call time from the source NS-39 left open. It is
 not stored, logged, or echoed in errors. The worker records each
 posted state, so posting the same terminal state again sends nothing.
 That keeps the run far below the 1,000 statuses allowed per SHA and
@@ -1965,21 +1995,24 @@ Acceptance criteria:
 
 ### Provisional after NS-43
 
-These items are ordered from the owner workflows read on 2026-10-03.
-They get NS numbers once the NS-39 inventory is accepted, and they may
-be reordered by it.
+The NS-39 inventory reordered this list. `concurrency` blocks 17 of
+the 18 push or pull-request workflows at plan time. Expressions do
+not. The items still get NS numbers after NS-43.
 
-1. **P1.** Expressions in `run`, `env`, `with`, and `name`, including
-   mixed text. Every owner repository uses them.
-2. **P2.** `concurrency` and `cancel-in-progress` on one worker. With
+1. **P1.** `concurrency` and `cancel-in-progress` on one worker. With
    `queue: max`, at most 100 runs can be pending per group.
-3. **P3.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
-   That one needs history in the snapshot.
-4. **P4.** An owned `actions/upload-artifact` that maps to the artifact
-   manifest.
-5. **P5.** Check runs through a GitHub App, if NS-39 picks an App
-   credential.
+2. **P2.** Expressions in `run`, `env`, `with`, and `name`, including
+   mixed text. Sixteen of the eighteen inventoried workflows contain
+   `${{ }}`. Inside `run`, the text stays literal.
+3. **P3.** An owned `actions/upload-artifact` that maps to the artifact
+   manifest, and the CodeQL SARIF upload that sits next to it.
+4. **P4.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
+   The tag form is on deploy workflows. `fetch-depth` is one Scorecard
+   workflow and needs history in the snapshot.
+5. **P5.** Check runs through a GitHub App, if the owner picks an App
+   credential. NS-39 leaves that choice open.
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
    apt. This is the PRD's runner image question.
 7. **P7.** Steps that require a token, such as `write` permissions and
-   `GITHUB_TOKEN`. These wait for a reviewed secrets design.
+   `GITHUB_TOKEN`. These wait for a reviewed secrets design. macOS
+   jobs stay deferred.

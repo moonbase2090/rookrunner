@@ -162,7 +162,7 @@ success.
 
 The ruff run is the failure criterion. The success criterion of this
 NS-38 run is not met. The gap is below. The closure is the run
-recorded above. The next slice is NS-39.
+recorded above. NS-39 designs owner CI. The next slice is NS-40.
 
 ## Gap
 
