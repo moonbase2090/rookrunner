@@ -172,15 +172,16 @@ disk budget counts them. The default budget stays
   the committed bytes.
 - A non-empty alternates file fails capture and publishes nothing.
 - The workspace has no `.git`, no `git.json`, and no `objects`.
-- Creating a `.git` directory and filling the `github` context remain
-  unstarted. One synthesized commit is stored when the object store is
-  present.
+- An owned `.git` directory is designed in
+  [Git directory](git-directory.md) and is not written. Filling the
+  `github` context remains unstarted. One synthesized commit is stored
+  when the object store is present.
 
 ## Out of scope
 
 One synthesized commit for the stored tree is written
-([synthesized commit](synthesized-commit.md)). Creating a `.git`
-directory, fetching, persisting a credential, and filling the
-`github` context each still need their own design. A later `run` step
-still has no Git repository. This design does not authorize those
-behaviors.
+([synthesized commit](synthesized-commit.md)). An owned `.git`
+directory is designed in [Git directory](git-directory.md) and is not
+written. Fetching, persisting a credential, and filling the `github`
+context each still need their own design. A later `run` step still has
+no Git repository. This design does not authorize those behaviors.

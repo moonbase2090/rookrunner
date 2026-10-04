@@ -29,7 +29,9 @@ The capability version stays 8. No plan digest changes.
 
 `materialize_attempt` keeps copying only manifest entries. The attempt
 workspace does not receive `git.json` and does not receive a `.git`
-directory. A job step that runs Git still has no repository. The disk
+directory. An owned `.git` is designed in
+[Git directory](git-directory.md) and is not written. A job step that
+runs Git still has no repository. The disk
 budget already counts files under the state directory. This design adds
 no byte cap and no other numeric limit.
 
@@ -151,7 +153,9 @@ and reports no metadata digest.
 The trees and blobs of the captured base commit are copied
 ([git objects](git-objects.md)). The original commit object stays
 excluded. One synthesized commit for that tree is stored
-([synthesized commit](synthesized-commit.md)).
-Filling the `github` context and publishing a GitHub-equivalence claim
-are later work. Each of those still needs its own design. The owned
-checkout in [checkout](checkout.md) does not authorize them.
+([synthesized commit](synthesized-commit.md)). An owned `.git`
+directory is designed in [Git directory](git-directory.md) and is not
+written. Filling the `github` context and publishing a
+GitHub-equivalence claim are later work. Each of those still needs its
+own design. The owned checkout in [checkout](checkout.md) does not
+authorize them.
