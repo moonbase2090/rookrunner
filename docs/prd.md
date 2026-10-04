@@ -118,11 +118,15 @@ Implemented:
   a captured digest. A remote action pinned by 40 lowercase hexadecimal
   characters is fetched before acceptance and stored under its content
   digest. A remote composite's `run` steps execute from that plan.
-  `node24` and Docker actions are still rejected. `worker --node24 DIR`
-  mounts that directory read-only at `/opt/node24` and does not put it
-  on `PATH`. `worker.describe` reports its digest only when the flag is
-  set. A run that uses the mount records that digest and the version
-  `node --version` prints. The worker does not download Node.
+  A remote `node24` action with `main` and no `pre` or `post` runs as
+  one step from a copy mounted read-write at `/actions`. The store is
+  not mounted. `pre`, `post`, `node20`, and Docker actions are still
+  rejected. `worker --node24 DIR` mounts that directory read-only at
+  `/opt/node24` and does not put it on `PATH`. `worker.describe`
+  reports its digest only when the flag is set. A run that uses the
+  mount records that digest and the version `node --version` prints.
+  The worker does not download Node. The capability version is 12.
+  A version 11 plan is not migrated.
 - Version 1 `run.submit` accepts that job only after capture, verification,
   and planning. The worker records an attempt, then executes it with `run_job`
   in one caller-pinned container. Success is `succeeded` and exit code 0. A
@@ -158,7 +162,7 @@ Milestones are outcome gates, not dates. Detail and exit evidence are in the
 | --- | --- | --- |
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Documents exist. The workflow protocol in [protocol.md](design/protocol.md) is still a draft. |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks on a development backend | Complete for synthetic fixtures. Not workflow compatibility. |
-| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it, an artifact manifest of files a workflow attempt writes under its workspace, evaluation of step `if` on that job, the selected job's `needs` closure and job outputs, and environment files and stdout workflow commands for later steps in the same job are implemented. Local composite actions whose steps are `run` steps are loaded from the snapshot. Expressions in workflow `run` and `env` stay literal. JavaScript and Docker actions are not implemented. Local reusable workflows from the snapshot are called by a job `uses`. A job may run digest-pinned service containers. Those containers do not receive the engine socket. |
+| M2 — Real workflow execution | Owned parser and planner, capture bound to acceptance, supervised container lifecycle | Capture, planning, snapshot verification, attempt materialization, digest-pinned Bash execution, version 1 execution of one accepted job, paging of that job's step stdout and stderr, job and step timeouts, caller cancellation of a running container, restart reconciliation of a container left by a killed worker, a disk budget that refuses a new submission when state, snapshots, and attempt workspaces would exceed it, an artifact manifest of files a workflow attempt writes under its workspace, evaluation of step `if` on that job, the selected job's `needs` closure and job outputs, and environment files and stdout workflow commands for later steps in the same job are implemented. Local composite actions whose steps are `run` steps are loaded from the snapshot. Expressions in workflow `run` and `env` stay literal. A remote node24 main runs from a copy in the attempt. pre, post, node20, and Docker actions are not implemented. Local reusable workflows from the snapshot are called by a job `uses`. A job may run digest-pinned service containers. Those containers do not receive the engine socket. |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval through the same protocol | Not started. |
 | M4 — Downloadable preview | License, public names, packaged artifact, P01–P12 on a clean machine | Not started. |
 
@@ -172,8 +176,8 @@ the same job are implemented. Local composite actions from the snapshot are
 implemented. The differences are in the [next steps](planning/next-steps.md).
 A local reusable workflow is called from a job `uses` in the same
 snapshot. Inputs are boolean, number, or string. Secrets are not passed.
-JavaScript actions and Docker actions are later increments of the same
-engine. Those later increments are not promised in the first slice, and
+A remote `node24` `main` is implemented. `post`, `node20`, and Docker
+actions remain later increments of the same engine. Those later increments are not promised in the first slice, and
 they are not permanently excluded. An owned checkout accepts
 `uses: actions/checkout@v4` and does not replace the captured files. A job may run service containers from
 a digest-pinned image. They do not receive the engine socket. A literal

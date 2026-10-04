@@ -509,3 +509,80 @@ class ActionStore:
             key=lambda item: (item["owner"], item["repository"], item["path"], item["commit"])
         )
         self._write_pins(pins)
+
+
+def _node24_steps(job, found):
+    if not isinstance(job, dict):
+        return
+    call = job.get("call")
+    if isinstance(call, dict):
+        for inner in call.get("jobs") or []:
+            _node24_steps(inner, found)
+        return
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and step.get("javascript") == "node24":
+            found.append(step)
+
+
+def _mkdir_private(path):
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def stage_node24_actions(plan, store, destination, over_budget):
+    """Copy each node24 action into ``destination``.
+
+    The content store is not modified and is not the mount. The same pin is
+    copied once. ``over_budget(size)`` runs before any copy. A true result
+    copies nothing.
+    """
+
+    found = []
+    for job in plan.get("jobs") or []:
+        _node24_steps(job, found)
+    if not found:
+        return None
+    copies = []
+    seen = set()
+    total = 0
+    for step in found:
+        owner = step.get("action_owner")
+        repository = step.get("action_repository")
+        path = step.get("action_path")
+        commit = step.get("action_commit")
+        digest = step.get("content_digest")
+        if not all(isinstance(item, str) and item != "" for item in (owner, repository, commit)):
+            raise ActionUnavailable("action tree is not accepted")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            raise ActionUnavailable("action tree is not accepted")
+        relative = PurePosixPath(path)
+        if relative.is_absolute() or ".." in relative.parts or "." in relative.parts:
+            raise ActionUnavailable("action tree is not accepted")
+        key = (owner, repository, path, commit)
+        if key in seen:
+            continue
+        seen.add(key)
+        stored = store.resolve(owner, repository, path, commit)
+        if stored.digest != digest:
+            raise ActionUnavailable("action directory changed")
+        try:
+            total += usage(stored.path)
+        except OSError as exc:
+            raise ActionUnavailable("action tree is not accepted") from exc
+        dest = Path(destination) / owner / repository / commit
+        if path:
+            dest = dest.joinpath(*relative.parts)
+        copies.append((dest, stored.path))
+    if over_budget(total):
+        raise ActionStorageFull()
+    root = Path(destination)
+    if root.exists() and (root.is_symlink() or not root.is_dir()):
+        raise ActionUnavailable("action tree is not accepted")
+    _mkdir_private(root)
+    for dest, source in copies:
+        if dest.exists():
+            continue
+        _mkdir_private(dest.parent)
+        _copy_tree(source, dest)
+        os.chmod(dest, 0o700)
+    return root

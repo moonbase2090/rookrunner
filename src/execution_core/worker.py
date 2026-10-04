@@ -10,6 +10,8 @@ socket only when this worker was started with the docker socket flag. The
 job then keeps the caller uid and is added to the groups that can open
 that socket. `worker --node24 DIR` mounts that directory read-only at
 `/opt/node24`. It is not added to `PATH`. The worker does not download Node.
+A remote `node24` main is copied into the attempt and mounted read-write
+at `/actions`. The content store is not mounted.
 Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
@@ -39,7 +41,13 @@ import uuid
 from datetime import datetime, timezone
 
 from . import __version__
-from .actions import DEFAULT_ACTION_REMOTE, ActionStore
+from .actions import (
+    DEFAULT_ACTION_REMOTE,
+    ActionStorageFull,
+    ActionStore,
+    ActionUnavailable,
+    stage_node24_actions,
+)
 from .artifacts import ArtifactError, file_identity, read_bytes, written_files
 from .attempt import AttemptError, materialize_attempt
 from .disk import DEFAULT_DISK_BUDGET, usage
@@ -748,6 +756,22 @@ class Worker:
             raise
         if self._abandoned(record["run_id"]):
             raise _Abandoned()
+        try:
+            actions_root = stage_node24_actions(
+                planned["plan"],
+                store,
+                attempt_root / "actions",
+                self._over_budget,
+            )
+        except ActionStorageFull as exc:
+            raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
+        except ActionUnavailable as exc:
+            message = (
+                "action directory changed"
+                if str(exc) == "action directory changed"
+                else "action repository could not be fetched"
+            )
+            raise RunError("SETUP_FAILED", message) from exc
         event_name = request.get("event_name") if isinstance(request, dict) else None
         return run_job(
             snapshot,
@@ -761,6 +785,7 @@ class Worker:
             docker_socket=self.docker_socket,
             event_name=event_name,
             node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
+            actions=actions_root,
         )
 
     def _abandoned(self, run_id):
@@ -1047,8 +1072,8 @@ class Worker:
                 "backend": {"name": "workflow", "version": __version__},
                 "compatibility_notes": [
                     "The selected closure runs one job at a time in one caller-pinned container. Matrix combinations and reusable workflows share that container and run one at a time.",
-                    "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and local reusable workflows are evaluated. Secrets are not passed. JavaScript and Docker actions are not claimed. Services do not receive the engine socket.",
-                    "A remote composite action pinned by a 40-character commit SHA is fetched with Git and no credential. Its run steps execute. JavaScript and Docker actions stay rejected.",
+                    "Step if, job needs, job outputs, environment files, local composite actions, job matrices, and reusable workflows are evaluated. Secrets are not passed. A node24 main runs. post, node20, and Docker are unclaimed. Services do not receive the engine socket.",
+                    "A remote action pinned by a 40-character commit SHA is fetched with Git and no credential. Composite run steps execute. A node24 main entry runs from a copy in the attempt. post, node20, and Docker stay rejected.",
                 ],
                 "accepted_at": now(),
                 "started_at": None,

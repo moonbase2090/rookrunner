@@ -1,7 +1,7 @@
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not pull images, start containers, or accept a run. It fetches
-an action only through a caller-supplied store. Capability version 11 records
+an action only through a caller-supplied store. Capability version 12 records
 declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
 snapshot, a literal job matrix, a local reusable workflow, service
@@ -19,7 +19,10 @@ and `ports` are rejected. A selected job includes the jobs it needs. A
 dependency that is not defined in the workflow is rejected. Anything this
 slice cannot describe is rejected. A remote action pinned by a
 40-character lowercase commit SHA is read from the caller-supplied store.
-The planner does not fetch one when that store is absent.
+The planner does not fetch one when that store is absent. A remote
+action with ``runs.using: node24`` and ``main``, and no ``pre`` or
+``post``, is one step. ``node20``, Docker, ``pre``, and ``post`` are
+rejected by name. A version 11 plan is not migrated.
 """
 
 import hashlib
@@ -45,7 +48,7 @@ from .expr import (
 )
 from .protocol import canonical
 
-CAPABILITY_VERSION = 11
+CAPABILITY_VERSION = 12
 # https://docs.github.com/en/actions/reference/limits
 GITHUB_ACTIONS_LIMITS = "https://docs.github.com/en/actions/reference/limits"
 # Workflow file size: 500 KB per file (500 * 1024 bytes). A larger file does
@@ -215,10 +218,13 @@ PERMISSION_SCOPES = frozenset(
 PERMISSION_ACCESS = frozenset({"read", "none"})
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
-# Local composite metadata only. JavaScript and Docker runtimes are rejected.
+# Local composite metadata, plus a remote node24 action that has main.
+# node20, Docker, pre, and post stay rejected.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 ACTION_KEYS = {"name", "description", "author", "branding", "inputs", "outputs", "runs"}
 COMPOSITE_RUN_KEYS = {"using", "steps"}
+NODE24_RUN_KEYS = {"using", "main"}
+_LIFECYCLE_KEYS = ("pre", "pre-if", "post", "post-if")
 COMPOSITE_STEP_KEYS = {"run", "shell", "if", "name", "id", "env", "working-directory"}
 ACTION_INPUT_KEYS = {"description", "required", "default", "deprecationMessage"}
 ACTION_OUTPUT_KEYS = {"description", "value"}
@@ -1394,7 +1400,11 @@ class _Planner:
                     recorded["with"] = self._action_with(body, step_field, action["inputs"])
                     recorded["inputs"] = action["inputs"]
                     recorded["outputs"] = action["outputs"]
-                    recorded["steps"] = action["steps"]
+                    if action.get("javascript") == "node24":
+                        recorded["javascript"] = "node24"
+                        recorded["main"] = action["main"]
+                    else:
+                        recorded["steps"] = action["steps"]
                     if "content_digest" in action:
                         recorded["action_owner"] = action["owner"]
                         recorded["action_repository"] = action["repository"]
@@ -1548,7 +1558,7 @@ class _Planner:
         self.seen_stack.append(set())
         try:
             body = self._mapping(node, field)
-            parsed = self._composite_body(body, field, remote.path)
+            parsed = self._composite_body(body, field, remote.path, javascript=True)
         finally:
             self.seen_stack.pop()
         parsed["owner"] = remote.owner
@@ -1557,7 +1567,7 @@ class _Planner:
         parsed["content_digest"] = stored.digest
         return parsed
 
-    def _composite_body(self, body, field, relative):
+    def _composite_body(self, body, field, relative, javascript=False):
         self._allow(body, field, ACTION_KEYS)
         name = self._required_text(body, field, "name")
         description = self._required_text(body, field, "description")
@@ -1565,9 +1575,31 @@ class _Planner:
             self._string_scalar(body["author"][1], _join(field, "author"))
         if "branding" in body:
             self._data(body["branding"][1], _join(field, "branding"), 1)
+        runtime = self._action_steps(body, field, javascript=javascript)
+        node24 = isinstance(runtime, dict)
         inputs = self._action_inputs(body, field)
-        outputs = self._action_outputs(body, field)
-        steps = self._action_steps(body, field)
+        outputs = self._action_outputs(body, field, require_value=not node24)
+        if node24:
+            main = runtime["main"]
+            digest_body = {
+                "path": relative,
+                "name": name,
+                "description": description,
+                "inputs": inputs,
+                "outputs": outputs,
+                "javascript": "node24",
+                "main": main,
+            }
+            digest = hashlib.sha256(canonical(digest_body).encode("ascii")).hexdigest()
+            return {
+                "path": relative,
+                "digest": digest,
+                "inputs": inputs,
+                "outputs": outputs,
+                "javascript": "node24",
+                "main": main,
+            }
+        steps = runtime
         digested = []
         for step in steps:
             digested.append({key: value for key, value in step.items() if key != "location"})
@@ -1671,7 +1703,7 @@ class _Planner:
             recorded[key] = item
         return recorded
 
-    def _action_outputs(self, items, field):
+    def _action_outputs(self, items, field, require_value=True):
         if "outputs" not in items:
             return {}
         path = _join(field, "outputs")
@@ -1689,14 +1721,49 @@ class _Planner:
             description = self._string_scalar(spec["description"][1], description_field)
             value_field = _join(item_field, "value")
             if "value" not in spec:
-                _invalid(f"{value_field} is required", value_field)
+                if require_value:
+                    _invalid(f"{value_field} is required", value_field)
+                recorded[key] = {"description": description}
+                continue
             text = self._string_scalar(spec["value"][1], value_field)
+            if not require_value:
+                recorded[key] = {"description": description}
+                continue
             if _whole_expression(text):
                 self._check_expression(text, value_field, check_step_if)
             recorded[key] = {"description": description, "value": text}
         return recorded
 
-    def _action_steps(self, items, field):
+    def _reject_lifecycle(self, runs, runs_field):
+        for key in _LIFECYCLE_KEYS:
+            if key not in runs:
+                continue
+            path = _join(runs_field, key)
+            raise PlanError(
+                "CAPABILITY_UNSUPPORTED",
+                f"{path}: capability is unsupported ({METADATA_SYNTAX})",
+                path,
+            )
+
+    def _relative_file(self, text, field):
+        if text == "" or "\\" in text or "\0" in text or text.startswith("/"):
+            _invalid(f"{field}: action path is not accepted", field)
+        parts = text.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            _invalid(f"{field}: action path is not accepted", field)
+        return "/".join(parts)
+
+    def _node24_main(self, runs, runs_field):
+        """Accept one remote node24 main. pre and post stay rejected."""
+
+        self._reject_lifecycle(runs, runs_field)
+        self._allow(runs, runs_field, NODE24_RUN_KEYS)
+        main_field = _join(runs_field, "main")
+        if "main" not in runs:
+            _invalid(f"{main_field} is required", main_field)
+        return self._relative_file(self._string_scalar(runs["main"][1], main_field), main_field)
+
+    def _action_steps(self, items, field, javascript=False):
         runs_field = _join(field, "runs")
         if "runs" not in items:
             _invalid(f"{runs_field} is required", runs_field)
@@ -1705,12 +1772,15 @@ class _Planner:
         if "using" not in body:
             _invalid(f"{using_field} is required", using_field)
         using = self._string_scalar(body["using"][1], using_field)
+        if using == "node24" and javascript:
+            return {"javascript": "node24", "main": self._node24_main(body, runs_field)}
         if using != "composite":
             raise PlanError(
                 "CAPABILITY_UNSUPPORTED",
                 f"{using_field}: capability is unsupported ({METADATA_SYNTAX})",
                 using_field,
             )
+        self._reject_lifecycle(body, runs_field)
         self._allow(body, runs_field, COMPOSITE_RUN_KEYS)
         steps_field = _join(runs_field, "steps")
         if "steps" not in body:
