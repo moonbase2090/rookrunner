@@ -12,7 +12,7 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. The next slice is that gap, not NS-40. NS-39–NS-43 are not started |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. The next slice is NS-39. NS-39–NS-43 are not started |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
 
@@ -75,8 +75,10 @@ through NS-43 in [next steps](planning/next-steps.md).
    (NS-35, implemented). Run a `node24` `main` entry (NS-36, implemented). Run `post`
    (NS-37, implemented).
 5. Record this repository's `check.yml` run from the CLI (NS-38, recorded).
-   The identified commit ended `failed`. The next slice is the gap named in
-   [that record](validation/dogfood-check.md), not NS-40.
+   The identified commit ended `failed`. The gap named in
+   [that record](validation/dogfood-check.md) is closed. A later run of
+   `21a3f5ad5058027fda62b2b9af6bbba9e336bf83` ended `succeeded` with
+   exit code 0. The next slice is NS-39.
 6. Design owner CI. Report runs as commit statuses, evaluate `on` for push
    and pull request, and poll owner repositories from an OS-scheduled pass
    (NS-39–NS-42).

@@ -1,8 +1,151 @@
 # Dogfood `check.yml` validation
 
-Date: 2026-10-04. Scope: NS-38. This slice adds no capability. The
-capability version stays 12. A version 11 plan is not migrated.
-`.github/workflows/check.yml` is unchanged.
+Date: 2026-10-04. The capability version stays 12. A version 11 plan
+is not migrated. `.github/workflows/check.yml` is unchanged.
+
+## Gap closed
+
+NS-38 recorded a run of `bb634af7a211540ab54070179b7c6c873cf9c7d4` that
+ended `failed` with exit code 137. That record is below and is
+unchanged. The gap it names is closed.
+
+The identified commit of this closure is
+`21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. The clone was detached, so
+`git.json` `head` is null. `dirty` is false. The commit is not on
+`main`. The run ended `succeeded` with exit code 0. `follow` exited 0.
+The disposable ruff run ended `failed` with exit code 1 at the Ruff
+step. `follow` exited 1. That commit was not pushed. Queued, running,
+cancelled, lost, and unknown outcomes are not reported as success.
+
+| Run | Commit | State | Exit | Failing step |
+| --- | --- | --- | --- | --- |
+| Identified | `21a3f5ad5058027fda62b2b9af6bbba9e336bf83` | `succeeded` | 0 | none |
+| Disposable ruff violation | `3f967e925a6061346005942fa805ce6614b1181b` | `failed` | 1 | Ruff (step 3) |
+
+This closure adds no capability. Test cleanup leaves the job container
+in place when the process hostname is that container's id. With
+`--docker-socket`, the job's temporary directory is a private Docker
+volume mounted at that volume's mountpoint. `TMPDIR`, `TEMP`, and
+`TMP` default to it. The volume is removed with the job container. The
+host `/tmp` is not mounted. The job is not privileged.
+
+### Identified run
+
+Clean clone of `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. The snapshot
+digest is the SHA-256 of the canonical manifest.
+
+| Field | Value |
+| --- | --- |
+| Run | `e8c4f018-3e96-4b6a-827e-c25aec04052b` |
+| Attempt | `058738ca-50b6-40a5-824c-d9ced1c85deb` |
+| Snapshot | `272044bd-9575-4467-9b59-d3c9ca072b7b` |
+| Snapshot and manifest SHA-256 | `7c9e0185f8d3c7a30ed086ec9681c5258e3e88f7188b06a65fafaa328e675e49` |
+| Workflow SHA-256 | `10acd3ca2d7ede3567edb05b214da2c120db5f90bd2a9e62d76da23ed534d71f` |
+| Plan SHA-256 | `b00428a2b65790adc933751211109c2ad1f86c62cb7e1c329a240a8c65aedf53` |
+| Event SHA-256 | `308d5f1932b60fd361c5f298d460bea188d9f3a44129926d52ecfe09c7175469` |
+| Image | `sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8` |
+| Node directory SHA-256 | `cda9ff6099e6eeb9fc394600bd930a1f75fa525cc93bbe7cea714471a8cdee10` |
+| Node version | `v24.21.0` |
+| setup-uv commit | `c18668ad3cf93ea998bef934396af7bb5c839dc7` |
+| setup-uv action SHA-256 | `0d06cc3d1548074d7b9bc86a682b10d13c2859157c27c16551eb904e9a130839` |
+| Network | `bridge` (the CLI default; `--network` was omitted) |
+| Started | `2026-10-04T18:41:26.396777+00:00` |
+| Finished | `2026-10-04T18:45:13.099998+00:00` |
+| Worker | `6c018153-457f-4c34-b0c5-4a2274103230` |
+| `follow` exit | 0 |
+
+| Index | Name | Status | Exit |
+| --- | --- | --- | --- |
+| 0 | Checkout | succeeded | 0 |
+| 1 | Install uv and Python | succeeded | 0 |
+| 2 | Sync the lockfile | succeeded | 0 |
+| 3 | Ruff | succeeded | 0 |
+| 4 | Unit tests | succeeded | 0 |
+| 5 | Install uv and Python | succeeded | 0 |
+
+Step 1 is the setup-uv `main`. It installed uv 0.12.18. Step 2 used
+the image's CPython 3.12.3. Step 3 printed `All checks passed!` and
+`36 files already formatted`. Step 4 printed `Ran 340 tests in
+222.234s` and `OK`. Step 5 is that action's `post`. It ran. Its stdout
+says `UV_PYTHON_INSTALL_DIR` is already set.
+
+The push event's `after` is the identified commit and its `before` is
+`70361e946571815bc05d3c8419dd95d3cb0f4143`. `ref` is
+`refs/heads/ns-38-gap`. `event-name` is `push`.
+
+### Ruff run
+
+Disposable local commit, parent
+`21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. It is not on `main` and it
+was not pushed. The only change is an unused `import os` in
+`src/execution_core/__init__.py`. `dirty` is false.
+
+| Field | Value |
+| --- | --- |
+| Run | `1b7c1d8a-f7ef-4375-9f3f-50b7503cfc47` |
+| Attempt | `b8a5f2f9-1944-43d8-825e-d0b6ff9eef48` |
+| Snapshot | `888530d4-9ae3-43a2-bb73-55f33131c1d9` |
+| Snapshot and manifest SHA-256 | `d14fdad336575ae908f69cc60616b7ab4d4efafc2058cc3a5ac32027b4a2229f` |
+| Workflow SHA-256 | `10acd3ca2d7ede3567edb05b214da2c120db5f90bd2a9e62d76da23ed534d71f` |
+| Plan SHA-256 | `b00428a2b65790adc933751211109c2ad1f86c62cb7e1c329a240a8c65aedf53` |
+| Event SHA-256 | `4ec56359b42e00b50f253c252796e324c1301edd581d911d0227b938bdaa85f8` |
+| Image | `sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8` |
+| Node directory SHA-256 | `cda9ff6099e6eeb9fc394600bd930a1f75fa525cc93bbe7cea714471a8cdee10` |
+| Node version | `v24.21.0` |
+| setup-uv commit | `c18668ad3cf93ea998bef934396af7bb5c839dc7` |
+| setup-uv action SHA-256 | `0d06cc3d1548074d7b9bc86a682b10d13c2859157c27c16551eb904e9a130839` |
+| Network | `bridge` |
+| Started | `2026-10-04T18:45:59.686409+00:00` |
+| Finished | `2026-10-04T18:46:04.003636+00:00` |
+| Worker | `c113bdbd-5d33-48c4-8671-1f7f89b2f7b9` |
+| `follow` exit | 1 |
+
+| Index | Name | Status | Exit |
+| --- | --- | --- | --- |
+| 0 | Checkout | succeeded | 0 |
+| 1 | Install uv and Python | succeeded | 0 |
+| 2 | Sync the lockfile | succeeded | 0 |
+| 3 | Ruff | failed | 1 |
+| 4 | Unit tests | skipped | none |
+| 5 | Install uv and Python | skipped | none |
+
+Ruff printed `F401` for the unused `os` import in
+`src/execution_core/__init__.py`. The unit-test step was skipped. The
+setup-uv `post` was skipped because the main step had failed and the
+action's `post-if` is `success()`.
+
+The push event's `ref` is `refs/heads/disposable`. Its `before` is the
+identified commit and its `after` is
+`3f967e925a6061346005942fa805ce6614b1181b`.
+
+### Command lines
+
+Worker, from the clean clone, state mode `0700`. `--network` omitted.
+`$REPO` is the checkout root:
+
+```
+PYTHONPATH=src $REPO/.venv/bin/python -m execution_core --state /tmp/rookrunner-gap-state-ok worker --repository /tmp/rookrunner-gap-src --docker-socket --node24 /private/tmp/rookrunner-ns38-build/node/node-v24.21.0-linux-arm64
+```
+
+Submit and follow used that state directory, submission key
+`ns-gap-check-21a3f5a`, workflow `.github/workflows/check.yml`, job
+`check`, event name `push`, and image
+`sha256:b6a558fc0e0310b8579fbe31f0a09ee413daf422d586a7c3f8e66bdbbbd4bbb8`.
+`follow e8c4f018-3e96-4b6a-827e-c25aec04052b` exited 0.
+
+The ruff worker used state directory `/tmp/rookrunner-gap-state-ruff`
+and repository `/tmp/rookrunner-gap-ruff`. The same image, Node
+directory, socket flag, and default network were used. Submission key
+`ns-gap-ruff-3f967e9`. `follow 1b7c1d8a-f7ef-4375-9f3f-50b7503cfc47`
+exited 1.
+
+The image and Node tree are the ones named in the NS-38 record. This
+commit is not on `main`, so this closure has no GitHub-hosted run.
+The hosted result recorded below is for the NS-38 commit.
+
+## NS-38 record
+
+Scope: NS-38. This slice adds no capability.
 
 The identified run did not succeed. Only `succeeded` with exit code 0
 for that snapshot would count. It ended `failed` with exit code 137.
@@ -17,8 +160,9 @@ success.
 | Identified `main` | `bb634af7a211540ab54070179b7c6c873cf9c7d4` | `failed` | 137 | Unit tests (step 4) |
 | Disposable ruff violation | `4648b3e05fb080d0cdfe51d65b65f634cc879a80` | `failed` | 1 | Ruff (step 3) |
 
-The ruff run is the failure criterion. The success criterion is not
-met. The next slice is the gap below, not NS-40.
+The ruff run is the failure criterion. The success criterion of this
+NS-38 run is not met. The gap is below. The closure is the run
+recorded above. The next slice is NS-39.
 
 ## Gap
 
