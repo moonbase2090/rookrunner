@@ -89,8 +89,10 @@ through NS-43 in [next steps](planning/next-steps.md).
    100 runs can be pending in a group. NS-46 names selected workspace
    files in the artifact manifest and records one local CodeQL SARIF
    file ([upload artifact](design/upload-artifact.md)). The capability
-   version stays 12. The next item is P4. The rest of the provisional
-   list is not numbered yet.
+   version stays 12. P4 designs an owned checkout for major tags and for
+   `fetch-depth: 0` ([checkout tag](design/checkout-tag.md)). The
+   engine is unchanged. The implementation follows that design. The rest
+   of the provisional list is not numbered yet.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request
    (NS-41, implemented). Poll owner repositories from an OS-scheduled

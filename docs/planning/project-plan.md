@@ -53,7 +53,9 @@ The owner's 2026-10-03 priorities change the horizons:
   group. NS-46 names selected workspace files in the artifact manifest
   and records one local CodeQL SARIF file
   ([upload artifact](../design/upload-artifact.md)). The capability
-  version stays 12. The next item is P4.
+  version stays 12. P4 designs an owned checkout for major tags and for
+  `fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
+  engine is unchanged. The implementation follows that design.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -68,8 +70,11 @@ The owner's 2026-10-03 priorities change the horizons:
   names selected workspace files in the artifact manifest and records
   one local CodeQL SARIF file
   ([upload artifact](../design/upload-artifact.md)). The capability
-  version stays 12. The next item is P4. The rest of the provisional
-  list in [next steps](next-steps.md) is not numbered yet.
+  version stays 12. P4 designs an owned checkout for major tags and for
+  `fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
+  engine is unchanged. The implementation follows that design. The rest
+  of the provisional list in [next steps](next-steps.md) is not numbered
+  yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
 
 The `dogfood` and `ownerci` stories in the [backlog manifest](backlog.json)

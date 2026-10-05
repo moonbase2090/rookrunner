@@ -7,6 +7,10 @@ lowercase hexadecimal characters. That SHA is stored and is not
 verified. The step does not read an action file, fetch a ref, or run the
 JavaScript action. This is not a GitHub-equivalence claim.
 
+Major tags other than the accepted `v4` literal, and `fetch-depth`,
+stay rejected here. P4 designs both in [checkout tag](checkout-tag.md).
+That design does not change this engine.
+
 The workspace already holds the captured working files before the first
 step. Those bytes include dirty files and explicitly included untracked
 files. `actions/checkout` fetches a commit and, by default, persists a
