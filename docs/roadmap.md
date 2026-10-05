@@ -94,7 +94,11 @@ through NS-43 in [next steps](planning/next-steps.md).
    `fetch-depth` to the YAML integer `0`
    ([checkout tag](design/checkout-tag.md)). Omitting `fetch-depth`
    keeps one parentless synthesized commit and still excludes the
-   original commit. `.github/workflows/check.yml` is unchanged. The rest
+   original commit. `.github/workflows/check.yml` is unchanged. P6
+   designs an operator-built image for `ubuntu-latest` jobs that use
+   `sudo` and apt ([runner image](design/runner-image.md)). The engine
+   is unchanged. The caller still pins the image by digest. P5 stays
+   unstarted until the owner picks an App credential. The rest
    of the provisional list is not numbered yet.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request

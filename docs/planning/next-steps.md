@@ -36,8 +36,12 @@ owned checkout and copies ancestor history when that plan sets
 `fetch-depth` to the YAML integer `0`
 ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
 keeps one parentless synthesized commit and still excludes the original
-commit. `.github/workflows/check.yml` is unchanged. The rest of the
-provisional list is not numbered yet.
+commit. `.github/workflows/check.yml` is unchanged. P6 designs an
+operator-built image for `ubuntu-latest` jobs that use `sudo` and apt
+([runner image](../design/runner-image.md)). The engine is unchanged.
+The caller still pins the image by digest. P5 stays unstarted until
+the owner picks an App credential. The rest of the provisional list
+is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -221,7 +225,9 @@ Status: implemented.
 
 This is the library used by later worker code. It is not a protocol method.
 The caller passes an image already pinned by digest. No project default
-image is selected. That choice remains the open PRD question.
+image is selected. P6 designs that choice in
+[runner image](../design/runner-image.md) and does not change the
+engine. The caller still pins the image by digest.
 
 Omitted shell, `bash`, and `sh` follow the Linux runner commands reviewed
 2026-10-02. Explicit `bash` enables pipefail. An omitted shell does not.
@@ -2199,13 +2205,41 @@ Settled there, so a later slice does not reopen them:
    only in history mode. `HEAD` stays the synthesized id.
    `github.sha` is unchanged.
 
+**P6. Runner image for ubuntu-latest.**
+
+Status: designed. The design is
+[runner image](../design/runner-image.md). This slice does not change
+the engine. The capability version stays 12. A version 11 plan is not
+migrated. `.github/workflows/check.yml` is unchanged. `run_job` still
+requires a digest and still does not select a default. P5 stays
+unstarted until the owner picks an App credential.
+
+Settled there, so the implementation does not reopen them:
+
+1. **Image.** The operator builds one Ubuntu image with `bash`, `git`,
+   `ca-certificates`, `sudo`, and the Docker client. The engine does
+   not pull, build, or publish it.
+2. **Default.** `worker --runner-image` supplies that digest when a
+   submit or poll omits `image` and every selected job has
+   `runs-on: ubuntu-latest`. An explicit `image` still wins. Any other
+   label stays `CAPABILITY_UNSUPPORTED` and names `runs-on`.
+3. **sudo.** Steps stay the caller uid. One short root command adds
+   that uid and passwordless sudo only for the operator image. A
+   different caller image is unchanged. The container stays
+   unprivileged.
+4. **Open choices.** The Ubuntu release, the sudoers command list,
+   the Docker client, and whether `image` may be omitted are the
+   owner decisions in that document. The recommendation there is the
+   choice unless a review names another.
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
-NS-46 implements item 3. P4 implements item 4. The remaining items are
-not numbered yet.
+NS-46 implements item 3. P4 implements item 4. P6 designs item 6. The
+implementation follows that design and is not this slice. P5 stays
+unstarted until the owner picks an App credential. P7 stays unstarted.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2226,9 +2260,13 @@ not numbered yet.
    capture still excludes the original commit. Deploy workflows that
    need `actions/setup-node` or a `write` permission stay blocked.
 5. **P5.** Check runs through a GitHub App, if the owner picks an App
-   credential. NS-39 leaves that choice open.
+   credential. NS-39 leaves that choice open. Unstarted. This slice
+   does not choose the credential.
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
-   apt. This is the PRD's runner image question.
+   apt. Designed. The implementation follows
+   [runner image](../design/runner-image.md) and is not this slice.
+   The engine is unchanged. The caller still pins the image by digest.
+   This is the PRD's runner image question.
 7. **P7.** Steps that require a token, such as `write` permissions and
    `GITHUB_TOKEN`. These wait for a reviewed secrets design. macOS
    jobs stay deferred.
