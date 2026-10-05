@@ -1,11 +1,12 @@
 # Owned upload of workspace files
 
-Status: design. This slice writes this document and does not change the
-engine. The capability version stays 12. A version 11 plan is not
-migrated. `.github/workflows/check.yml` is unchanged. This is not a
-GitHub-equivalence claim.
+Status: accepted. An owned `actions/upload-artifact` names files in the
+artifact manifest, and an owned CodeQL SARIF upload records one local
+file under the name `codeql-sarif`. The capability version stays 12.
+A version 11 plan is not migrated. `.github/workflows/check.yml` is
+unchanged. This is not a GitHub-equivalence claim.
 
-The implementation follows this document. It is the next slice.
+The implementation follows this document. The next item is P4.
 
 ## Why this slice is a design
 
@@ -194,9 +195,8 @@ unchanged.
 
 ## Manifest
 
-`ArtifactEntry` today requires `id`, `path`, `size`, and `digest`, and
-sets `additionalProperties` to false. This slice does not edit that
-schema. The implementation adds an optional `name`. Old manifests omit
+`ArtifactEntry` requires `id`, `path`, `size`, and `digest`, and sets
+`additionalProperties` to false. `name` is optional. Old manifests omit
 it. Selected files from one upload share one name. The capability
 version stays 12. An optional entry field does not change the plan
 version. A version 11 plan is not migrated.
@@ -282,8 +282,8 @@ secrets design. macOS stays deferred.
 
 ## What this slice does not do
 
-No engine change. No schema edit. No credential, no poll, and no
-status POST. No zip, no HTTP artifact service, and no
-`GITHUB_ARTIFACTS` file. No token. No change to the permissions
-rejection. No `hashFiles`. No `download-artifact`. The owned step
-runs no `node24` program and has no post step.
+No zip, no HTTP artifact service, and no `GITHUB_ARTIFACTS` file. No
+token. No credential, no poll, and no status POST. Permissions are
+unchanged. `security-events: write` and `actions: write` stay rejected.
+No `hashFiles`. No `download-artifact`. The owned step runs no `node24`
+program and has no post step.

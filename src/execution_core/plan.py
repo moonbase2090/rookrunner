@@ -7,9 +7,13 @@ declared fields, including step and job
 snapshot, a literal job matrix, a local reusable workflow, service
 containers, an owned checkout of the captured files for
 `uses: actions/checkout@v4` and for `actions/checkout` pinned by a full
-commit SHA, and a read-only `permissions` value.
+commit SHA, an owned upload for `actions/upload-artifact` and
+`github/codeql-action/upload-sarif` pinned by a full commit SHA, and a
+read-only `permissions` value.
 That checkout does not fetch a ref, replace
-those files, or persist a credential. The SHA is stored and is not verified. It checks that expressions can be
+those files, or persist a credential. The SHA is stored and is not verified.
+The owned upload stores its `uses` string and does not fetch the action,
+read an action file, or run its program. It checks that expressions can be
 parsed and does not evaluate them. `run`, `env`, `with`, and step and
 job `name` are checked, including mixed text. The plan stores the
 source. Workflow `name`, service `env`, and action output `value`
@@ -204,6 +208,61 @@ def owned_checkout_uses(text):
     return text == CHECKOUT_USES or (
         isinstance(text, str) and _CHECKOUT_SHA.fullmatch(text) is not None
     )
+
+
+# Owned upload of workspace files, and one local CodeQL SARIF file. The
+# SHA is stored and is not fetched or verified. This does not read an
+# action file or run the action program. Inventory pins are examples.
+# https://github.com/actions/upload-artifact
+# https://github.com/github/codeql-action
+_UPLOAD_SHA = re.compile(r"actions/upload-artifact@[0-9a-f]{40}")
+_SARIF_SHA = re.compile(r"github/codeql-action/upload-sarif@[0-9a-f]{40}")
+_UPLOAD_FILE_KEYS = {
+    "name",
+    "path",
+    "if-no-files-found",
+    "include-hidden-files",
+    "archive",
+    "overwrite",
+}
+_UPLOAD_BOOL_KEYS = {"include-hidden-files", "archive", "overwrite"}
+_UPLOAD_NO_FILES = {"warn", "error", "ignore"}
+_SARIF_KEYS = {"sarif_file"}
+_SARIF_REJECTED = {
+    "token",
+    "checkout_path",
+    "ref",
+    "sha",
+    "matrix",
+    "category",
+    "wait-for-processing",
+}
+_REJECTED_USES = (
+    "actions/download-artifact",
+    "github/codeql-action/init",
+    "github/codeql-action/analyze",
+)
+
+
+def owned_upload_kind(text):
+    """Return ``files``, ``sarif``, or None for an owned upload reference."""
+
+    if isinstance(text, str) and _UPLOAD_SHA.fullmatch(text):
+        return "files"
+    if isinstance(text, str) and _SARIF_SHA.fullmatch(text):
+        return "sarif"
+    return None
+
+
+def _rejected_remote_uses(text):
+    """Reject download and the other CodeQL entry points before any fetch."""
+
+    if not isinstance(text, str):
+        return False
+    for prefix in _REJECTED_USES:
+        if text == prefix or text.startswith(prefix + "@") or text.startswith(prefix + "/"):
+            return True
+    return False
 
 
 # permissions scopes on the workflow syntax page, read 2026-10-04.
@@ -1491,6 +1550,10 @@ class _Planner:
                 uses_text = self._string_scalar(body["uses"][1], uses_field)
                 if owned_checkout_uses(uses_text):
                     recorded.update(self._checkout(body, step_field, uses_text))
+                elif owned_upload_kind(uses_text) is not None:
+                    recorded.update(self._owned_upload(body, step_field, uses_text))
+                elif _rejected_remote_uses(uses_text):
+                    _unsupported(uses_field)
                 else:
                     action = self._composite(uses_text, uses_field)
                     recorded["uses"] = uses_text
@@ -1568,6 +1631,45 @@ class _Planner:
             accepted[key] = False
         recorded["with"] = accepted
         return recorded
+
+    def _owned_upload(self, body, step_field, uses_text):
+        """Record an owned upload. The action file is not read."""
+
+        kind = owned_upload_kind(uses_text)
+        return {
+            "uses": uses_text,
+            "upload": kind,
+            "with": self._upload_with(body, step_field, kind),
+        }
+
+    def _upload_with(self, body, step_field, kind):
+        path = _join(step_field, "with")
+        required = "sarif_file" if kind == "sarif" else "path"
+        required_field = _join(path, required)
+        if "with" not in body:
+            _invalid(f"{required_field} is required", required_field)
+        items = self._mapping(body["with"][1], path, allow_uses=True, forbid=False)
+        allowed = _SARIF_KEYS if kind == "sarif" else _UPLOAD_FILE_KEYS
+        rejected = _SARIF_REJECTED if kind == "sarif" else set()
+        accepted = {}
+        for key, (_, value) in items.items():
+            field = _join(path, key)
+            if key in rejected or key not in allowed:
+                _unsupported(field)
+            if key in _UPLOAD_BOOL_KEYS:
+                flag = self._bool_scalar(value, field)
+                if key == "overwrite" and flag is True:
+                    _unsupported(field)
+                accepted[key] = flag
+                continue
+            text = self._string_scalar(value, field)
+            self._check_expression(text, field, check_step_text)
+            if key == "if-no-files-found" and "${{" not in text and text not in _UPLOAD_NO_FILES:
+                _invalid(f"{field}: if-no-files-found is not accepted", field)
+            accepted[key] = text
+        if required not in accepted:
+            _invalid(f"{required_field} is required", required_field)
+        return accepted
 
     def _uses_relative(self, text, field):
         """Accept `./path` and `$/path`. Anything else stays unsupported.
@@ -1892,6 +1994,33 @@ class _Planner:
             recorded["post_if"] = condition
         return recorded
 
+    def _composite_upload(self, step_body, step_field, child, index, seen_ids, uses_text):
+        """Record one owned upload inside a local composite. Shell is optional."""
+
+        step_id = self._optional_string(step_body, step_field, "id")
+        if step_id:
+            if step_id in seen_ids:
+                _invalid(f"{step_field}: duplicate step id", step_field)
+            seen_ids.add(step_id)
+        shell = self._optional_string(step_body, step_field, "shell")
+        shell_field = _join(step_field, "shell")
+        if shell is not None and shell.strip() == "":
+            _invalid(f"{shell_field} is required", shell_field)
+        recorded = {
+            "index": index,
+            "location": _location(child),
+            "id": step_id,
+            "name": self._checked_name(step_body, step_field, check_step_text),
+            "shell": shell,
+            "working_directory": self._optional_string(step_body, step_field, "working-directory"),
+            "env": self._env(step_body, step_field, check_step_text),
+        }
+        recorded.update(self._owned_upload(step_body, step_field, uses_text))
+        condition = self._if_text(step_body, step_field, check_step_if)
+        if condition is not None:
+            recorded["if"] = condition
+        return recorded
+
     def _action_steps(self, items, field, javascript=False):
         runs_field = _join(field, "runs")
         if "runs" not in items:
@@ -1924,8 +2053,24 @@ class _Planner:
         seen_ids = set()
         for index, child in enumerate(node.value):
             step_field = _join(steps_field, index)
-            step_body = self._mapping(child, step_field)
-            self._allow(step_body, step_field, COMPOSITE_STEP_KEYS)
+            step_body = self._mapping(child, step_field, allow_uses=not javascript)
+            allowed = COMPOSITE_STEP_KEYS
+            if not javascript:
+                allowed = COMPOSITE_STEP_KEYS | {"uses", "with"}
+            self._allow(step_body, step_field, allowed)
+            if not javascript and "uses" in step_body:
+                if "run" in step_body:
+                    _invalid(f"{step_field}: step must be run or uses", step_field)
+                uses_field = _join(step_field, "uses")
+                uses_text = self._string_scalar(step_body["uses"][1], uses_field)
+                if owned_upload_kind(uses_text) is None:
+                    _unsupported(uses_field)
+                steps.append(
+                    self._composite_upload(step_body, step_field, child, index, seen_ids, uses_text)
+                )
+                continue
+            if "with" in step_body:
+                _unsupported(_join(step_field, "with"))
             if "run" not in step_body:
                 _invalid(f"{step_field}: action step must be a run step", step_field)
             shell_field = _join(step_field, "shell")

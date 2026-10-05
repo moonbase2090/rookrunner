@@ -86,11 +86,11 @@ through NS-43 in [next steps](planning/next-steps.md).
    expressions in `run`, `env`, `with`, and step and job `name`,
    including mixed text. NS-45 evaluates `concurrency` and
    `cancel-in-progress` on this one worker. With `queue: max`, at most
-   100 runs can be pending in a group. NS-46 designs an owned upload of
-   workspace files and the CodeQL SARIF upload
-   ([upload artifact](design/upload-artifact.md)). The engine is
-   unchanged. The implementation follows that design. The capability
-   version stays 12.
+   100 runs can be pending in a group. NS-46 names selected workspace
+   files in the artifact manifest and records one local CodeQL SARIF
+   file ([upload artifact](design/upload-artifact.md)). The capability
+   version stays 12. The next item is P4. The rest of the provisional
+   list is not numbered yet.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request
    (NS-41, implemented). Poll owner repositories from an OS-scheduled

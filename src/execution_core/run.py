@@ -149,6 +149,12 @@ either key does not mean the upstream default of true
 (https://github.com/actions/checkout). This is not a GitHub-equivalence
 claim.
 
+An owned `actions/upload-artifact` or `github/codeql-action/upload-sarif`
+pinned by a full commit SHA records selected workspace paths on the
+attempt. It does not start a process, zip files, or open a network
+connection. `working-directory` does not change the path root. A false
+`if` records nothing. The finish scan remains the source of bytes.
+
 The job deadline is `timeout-minutes` on the plan (default 360). It starts
 when `run_job` starts and covers setup and steps. Reaching it stops the owned
 container and returns status `cancelled`. A step `timeout-minutes` fails that
@@ -197,7 +203,9 @@ from .plan import (
     MAX_JOB_TIMEOUT_MINUTES,
     MAX_STEP_TIMEOUT_MINUTES,
     owned_checkout_uses,
+    owned_upload_kind,
 )
+from .upload import NO_FILES_LINE, SARIF_NAME, UploadBook, UploadError, select_files, select_sarif
 from .protocol import canonical
 from .verify import VerifyError, verify_snapshot
 
@@ -567,6 +575,8 @@ def _accept_jobs(jobs):
                     _setup("plan is not accepted")
                 if step.get("checkout") == "captured":
                     _accept_checkout(step)
+                elif step.get("upload") in {"files", "sarif"}:
+                    _accept_upload(step)
                 elif step.get("javascript") == "node24":
                     _accept_javascript(step)
                 elif "uses" in step:
@@ -721,6 +731,60 @@ def _accept_checkout(step):
         _setup("plan is not accepted")
 
 
+def _accept_upload(step):
+    """Accept an owned upload. It has no action path and starts no process."""
+
+    kind = owned_upload_kind(step.get("uses"))
+    if kind is None or step.get("upload") != kind:
+        _setup("plan is not accepted")
+    for key in (
+        "run",
+        "action_path",
+        "action_digest",
+        "steps",
+        "inputs",
+        "outputs",
+        "javascript",
+        "checkout",
+    ):
+        if key in step:
+            _setup("plan is not accepted")
+    raw = step.get("with")
+    if not isinstance(raw, dict):
+        _setup("plan is not accepted")
+    if kind == "files":
+        allowed = {
+            "name",
+            "path",
+            "if-no-files-found",
+            "include-hidden-files",
+            "archive",
+            "overwrite",
+        }
+        if "path" not in raw or not isinstance(raw["path"], str) or "\0" in raw["path"]:
+            _setup("plan is not accepted")
+        for key, value in raw.items():
+            if key not in allowed:
+                _setup("plan is not accepted")
+            if key in {"include-hidden-files", "archive", "overwrite"}:
+                if type(value) is not bool or (key == "overwrite" and value is True):
+                    _setup("plan is not accepted")
+            elif not isinstance(value, str) or "\0" in value:
+                _setup("plan is not accepted")
+    elif set(raw) != {"sarif_file"} or not isinstance(raw["sarif_file"], str):
+        _setup("plan is not accepted")
+    elif "\0" in raw["sarif_file"]:
+        _setup("plan is not accepted")
+    _env_layer(step.get("env"))
+    for key in ("id", "name", "shell", "working_directory", "if"):
+        value = step.get(key)
+        if value is not None and (not isinstance(value, str) or "\0" in value):
+            _setup("plan is not accepted")
+    timeout = step.get("timeout_minutes")
+    if timeout is not None and type(timeout) is not int:
+        _setup("plan is not accepted")
+
+
 def _accept_composite(step):
     uses = step.get("uses")
     action_path = step.get("action_path")
@@ -746,6 +810,9 @@ def _accept_composite(step):
     for index, inner in enumerate(nested):
         if not isinstance(inner, dict) or inner.get("index") != index:
             _setup("plan is not accepted")
+        if inner.get("upload") in {"files", "sarif"}:
+            _accept_upload(inner)
+            continue
         if not isinstance(inner.get("run"), str) or "\0" in inner["run"]:
             _setup("plan is not accepted")
         shell = inner.get("shell")
@@ -2020,7 +2087,7 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
             _write_job_scripts(planned["call"]["jobs"], planned_path, private, scripts, counter)
             continue
         for step in planned["steps"]:
-            if step.get("checkout") == "captured":
+            if step.get("checkout") == "captured" or step.get("upload") in {"files", "sarif"}:
                 scripts[(planned_path, step["index"])] = None
                 continue
             if step.get("javascript") == "node24":
@@ -2031,6 +2098,9 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
             if "uses" in step:
                 names = []
                 for inner in step["steps"]:
+                    if inner.get("upload") in {"files", "sarif"}:
+                        names.append(None)
+                        continue
                     script_name = f"step-{counter[0]}"
                     counter[0] += 1
                     _write_script(private, script_name, inner["run"])
@@ -2145,6 +2215,7 @@ def run_job(
                 "sha": _commit_sha(manifest),
                 "temp": runner_dirs["runner-temp"],
                 "socket_temp": socket_temp,
+                "uploads": UploadBook(Path(workspace).parent / "uploads.json"),
             }
         )
         (private / "event.json").write_bytes(event_bytes)
@@ -2653,7 +2724,16 @@ def run_job(
     return outcome
 
 
+def _upload_records():
+    attempt = _ATTEMPT.get()
+    book = None if not isinstance(attempt, dict) else attempt.get("uploads")
+    if isinstance(book, UploadBook):
+        return list(book.records)
+    return []
+
+
 def _outcome(image_digest, reference, records, failed):
+    uploads = _upload_records()
     if failed is None:
         return {
             "image_digest": image_digest,
@@ -2662,6 +2742,7 @@ def _outcome(image_digest, reference, records, failed):
             "exit_code": 0,
             "failed_step": None,
             "steps": records,
+            "uploads": uploads,
         }
     return {
         "image_digest": image_digest,
@@ -2674,6 +2755,7 @@ def _outcome(image_digest, reference, records, failed):
             "name": failed["name"],
         },
         "steps": records,
+        "uploads": uploads,
     }
 
 
@@ -2685,6 +2767,7 @@ def _cancelled(image_digest, reference, records):
         "exit_code": None,
         "failed_step": None,
         "steps": records,
+        "uploads": _upload_records(),
     }
 
 
@@ -2926,6 +3009,8 @@ def _consider_step(
             return _step_result(prepared, "failed", None, "", "", str(exc)[:512], job_id)
     if step.get("checkout") == "captured":
         return _step_result(prepared, "succeeded", 0, "", "", None, job_id)
+    if step.get("upload") in {"files", "sarif"}:
+        return _run_upload(prepared, workspace, values, job_id)
     if prepared.get("javascript") == "node24":
         return _run_javascript(
             docker,
@@ -2986,6 +3071,64 @@ def _consider_step(
         runtime,
         commands,
     )
+
+
+def _upload_failure(step, job_id, stderr):
+    return _step_result(step, "failed", 1, "", stderr, None, job_id)
+
+
+def _run_upload(step, workspace, values, job_id):
+    """Record selected paths. This starts no process and opens no socket."""
+
+    attempt = _ATTEMPT.get()
+    book = None if not isinstance(attempt, dict) else attempt.get("uploads")
+    if not isinstance(book, UploadBook):
+        _setup("plan is not accepted")
+    raw = step.get("with")
+    if not isinstance(raw, dict):
+        _setup("plan is not accepted")
+    scoped = _scoped_values(values, STEP_TEXT_CONTEXTS)
+    rendered = {}
+    try:
+        for key, value in raw.items():
+            if isinstance(value, str):
+                rendered[key] = _render_expr(value, scoped)
+            elif type(value) is bool:
+                rendered[key] = value
+            else:
+                _setup("plan is not accepted")
+    except ExprError as exc:
+        return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
+    label = job_id if isinstance(job_id, str) else ""
+    try:
+        if step.get("upload") == "sarif":
+            relative = select_sarif(workspace, rendered.get("sarif_file", ""))
+            book.add(label, SARIF_NAME, [relative])
+            return _step_result(step, "succeeded", 0, "", "", None, job_id)
+        include_hidden = rendered.get("include-hidden-files", False)
+        archive = rendered.get("archive", True)
+        if type(include_hidden) is not bool or type(archive) is not bool:
+            _setup("plan is not accepted")
+        found = select_files(workspace, rendered.get("path", ""), include_hidden=include_hidden)
+        if not found:
+            policy = rendered.get("if-no-files-found", "warn")
+            if policy == "warn":
+                return _step_result(step, "succeeded", 0, NO_FILES_LINE, "", None, job_id)
+            if policy == "ignore":
+                return _step_result(step, "succeeded", 0, "", "", None, job_id)
+            if policy == "error":
+                return _upload_failure(step, job_id, "no files were found\n")
+            return _upload_failure(step, job_id, "if-no-files-found is not accepted\n")
+        if archive is False and len(found) != 1:
+            return _upload_failure(step, job_id, "archive false accepts one file\n")
+        if archive is False:
+            artifact_name = PurePosixPath(found[0]).name
+        else:
+            artifact_name = rendered["name"] if "name" in rendered else "artifact"
+        book.add(label, artifact_name, found)
+    except UploadError as exc:
+        return _upload_failure(step, job_id, f"{exc}\n")
+    return _step_result(step, "succeeded", 0, "", "", None, job_id)
 
 
 def _is_whole_expression(text):
@@ -3286,6 +3429,14 @@ def _run_composite(
             inner_scoped = _scoped_values(if_values, STEP_TEXT_CONTEXTS)
             if isinstance(inner.get("name"), str):
                 runnable["name"] = _render_expr(inner["name"], inner_scoped)
+            if inner.get("upload") in {"files", "sarif"}:
+                record = _run_upload(runnable, workspace, if_values, job_id)
+                inner_prior.append(record)
+                stdout_parts.append(record["stdout"])
+                stderr_parts.append(record["stderr"])
+                if record["status"] == "failed" and failed is None:
+                    failed = record
+                continue
             runnable["run"] = _render_expr(inner["run"], inner_scoped)
         except ExprError as exc:
             record = _step_result(inner, "failed", None, "", "", str(exc)[:512], job_id)
