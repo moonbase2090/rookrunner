@@ -47,7 +47,11 @@ digest and still does not select a default. P5 posts one check run
 through the Rookrunner GitHub App when `--app-key` is set, then posts
 the commit status with that installation token. Omitting `--app-key`
 keeps the NS-40 token file ([check runs](../design/check-runs.md)).
-The plan schema is unchanged. P7 stays unstarted. The rest of the
+The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and
+`write` permissions for owner-repository push and pull-request runs
+on this one local worker and does not change the engine
+([secrets](../design/secrets.md)). Open questions remain for MB2090.
+The rest of the
 provisional list is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
@@ -1394,8 +1398,10 @@ assume a fixed rate.
   guidance says self-hosted runners should almost never run public
   repository pull requests
   (https://docs.github.com/en/actions/reference/security/secure-use).
-- Secrets, `GITHUB_TOKEN`, `write` permissions, and deploy workflows.
-  These wait for a reviewed secrets design.
+- Deploy workflows. Secrets, `GITHUB_TOKEN`, and `write` permissions
+  are designed in [secrets](../design/secrets.md). The engine is
+  unchanged. Open questions remain for MB2090. Deploy workflows stay
+  deferred until that design is implemented.
 - The `actions/cache` and artifact HTTP services, Docker actions, `pre`
   entries, `node20` actions, tag or branch action refs, and private
   action repositories.
@@ -1828,12 +1834,13 @@ Settled there, so later slices do not reopen them:
    `rookrunner/<workflow file>/<job>`. The state mapping is NS-40.
    Check runs are posted by P5 when `--app-key` is set. Omitting the
    flag keeps this commit-status path.
-6. **Credential.** Recorded by P5 on 2026-10-05. A new GitHub App
-   named Rookrunner, not moonbase2090-agents. Checks write, Commit
-   statuses write, and Contents read. The private key lives only in
-   `~/Secrets/github-app/rookrunner/`. The posting contract is
-   [check runs](../design/check-runs.md). This slice does not change
-   the engine.
+6. **Credential.** Recorded by P5 on 2026-10-05. The GitHub App is
+   Rookrunner-App, App ID 5201333, not moonbase2090-agents. The
+   installation and the private key are still pending. Checks write,
+   Commit statuses write, and Contents read. The private key lives
+   only in `~/Secrets/github-app/rookrunner/`. The posting contract
+   is [check runs](../design/check-runs.md). This slice does not
+   change the engine.
 7. **Limits.** The table already in this file. Nothing else.
 8. **Coexistence.** GitHub-hosted checks keep running. Required
    contexts stay an owner decision.
@@ -2234,7 +2241,9 @@ does, from `--runner-image`. P5 posts one check run through the
 Rookrunner GitHub App when `--app-key` is set, then posts the commit
 status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](../design/check-runs.md)). The plan
-schema is unchanged. P7 stays unstarted.
+schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
+permissions and does not change the engine
+([secrets](../design/secrets.md)). Open questions remain for MB2090.
 
 Settled there, so the implementation does not reopen them:
 
@@ -2264,13 +2273,16 @@ Status: implemented. It follows
 entry are added. The plan schema is unchanged. `run.status` accepts
 optional check fields because that schema rejects unknown properties.
 `.github/workflows/check.yml` is unchanged. Omitting `--app-key` keeps
-the NS-40 token file. P7 stays unstarted.
+the NS-40 token file. P7 designs secrets, `GITHUB_TOKEN`, and `write`
+permissions and does not change the engine
+([secrets](../design/secrets.md)). Open questions remain for MB2090.
 
 The owner chose the credential on 2026-10-05:
 
-1. **App.** A new GitHub App named Rookrunner. It is not the
-   moonbase2090-agents App. The App is not created yet. This
-   implementation does not create it, sign in, or read a key.
+1. **App.** A new GitHub App. Its name is Rookrunner-App. It is not
+   the moonbase2090-agents App. The App exists. Its App ID is
+   5201333. The installation and the private key are still pending.
+   This implementation does not install it, sign in, or read a key.
 2. **Permissions.** Checks write, Commit statuses write, and Contents
    read. The installation token minted for a post requests Checks
    write and Commit statuses write only.
@@ -2284,13 +2296,31 @@ The owner chose the credential on 2026-10-05:
    The check-run post does not mount the key. That warning stays
    ([runner image](../design/runner-image.md)).
 
+**P7. Secrets, GITHUB_TOKEN, and write permissions.**
+
+Status: designed. The design is
+[secrets](../design/secrets.md). This design does not change the
+engine. The capability version stays 12. A version 11 plan is not
+migrated. No plan field is added. The plan schema is unchanged.
+`.github/workflows/check.yml` is unchanged. `write` and `write-all`
+stay rejected. `GITHUB_TOKEN` stays unset. The `secrets` context
+stays withheld. Open questions remain for MB2090. macOS jobs stay
+deferred.
+
+The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
+App ID is 5201333. The installation and the private key are still
+pending. This design does not install the App, does not start a
+sign-in, and does not read a key.
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
 NS-46 implements item 3. P4 implements item 4. P6 implements item 6.
-P5 implements item 5. P7 stays unstarted.
+P5 implements item 5. P7 designs item 7 and does not change the
+engine ([secrets](../design/secrets.md)). Open questions remain for
+MB2090.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2319,8 +2349,10 @@ P5 implements item 5. P7 stays unstarted.
    by path. `--app-key` posts one check run and then the commit status
    with the installation token. Omitting the flag keeps the NS-40
    token file. The plan schema is unchanged. The capability version
-   stays 12. `.github/workflows/check.yml` is unchanged. The App is
-   not created yet. All-command `NOPASSWD` on the P6 image, together
+   stays 12. `.github/workflows/check.yml` is unchanged. The App
+   exists. Its name is Rookrunner-App and its App ID is 5201333.
+   The installation and the private key are still pending.
+   All-command `NOPASSWD` on the P6 image, together
    with its Docker client and `--docker-socket`, is host control, and
    this credential inherits that warning
    ([runner image](../design/runner-image.md)).
@@ -2334,6 +2366,8 @@ P5 implements item 5. P7 stays unstarted.
    set. Version 1 `image` is optional. The capability version stays 12.
    `.github/workflows/check.yml` is unchanged. This is the PRD's runner
    image question for the local worker.
-7. **P7.** Steps that require a token, such as `write` permissions and
-   `GITHUB_TOKEN`. These wait for a reviewed secrets design. macOS
-   jobs stay deferred.
+7. **P7.** Secrets, `GITHUB_TOKEN`, and `write` permissions for
+   owner-repository push and pull-request runs on this one local
+   worker. Designed
+   ([secrets](../design/secrets.md)). The engine is unchanged.
+   Open questions remain for MB2090. macOS jobs stay deferred.

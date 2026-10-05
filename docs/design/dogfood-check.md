@@ -92,7 +92,7 @@ environment of the worker.
 `github.token` stays unset on purpose. The contexts reference describes
 it as a token for the GitHub App installed on the repository.
 https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context
-Secrets and `GITHUB_TOKEN` stay deferred. setup-uv's `github-token`
+Secrets and `GITHUB_TOKEN` stay unset in this workflow. The secrets design does not change it ([secrets](secrets.md)). setup-uv's `github-token`
 input therefore receives an empty string. Its `download-from-astral-mirror`
 default is true, so the dogfood download does not need that token. A
 run that fails closed on the empty token is a gap for NS-38 to name.
