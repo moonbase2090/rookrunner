@@ -25,9 +25,11 @@ under `pull_request` are ignored. NS-42 polls one owner repository.
 NS-43 recorded statuses for one push and one pull request. The record
 is [owner CI validation](../validation/owner-ci-rookrunner.md). NS-44
 evaluates expressions in `run`, `env`, `with`, and step and job `name`,
-including mixed text. The capability version stays 12. A version 11
-plan is not migrated. The next work is the rest of the provisional
-list, which is not numbered yet.
+including mixed text. NS-45 evaluates `concurrency` and
+`cancel-in-progress` on this one worker. With `queue: max`, at most
+100 runs can be pending in a group. The capability version stays 12.
+A version 11 plan is not migrated. The next work is the rest of the
+provisional list, which is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -867,12 +869,12 @@ values back through workflow outputs.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#limitations-of-reusable-workflows
 
-The caller job may set `name`, `uses`, `with`, `needs`, and `if`.
-`strategy`, `secrets`, `concurrency`, `permissions`, `cache-mode`,
+The caller job may set `name`, `uses`, `with`, `needs`, `if`, and
+`concurrency`. `strategy`, `secrets`, `permissions`, `cache-mode`,
 `runs-on`, `steps`, `env`, `outputs`, `timeout-minutes`, and `defaults`
-on that job are unsupported and name the field. GitHub allows a matrix
-on a caller job. This slice does not, and it does not evaluate matrix
-expressions.
+on that job are unsupported and name the field. NS-45 stores
+`concurrency` on that job. GitHub allows a matrix on a caller job.
+This slice does not, and it does not evaluate matrix expressions.
 
 The called workflow's jobs run in the same caller-pinned container and
 attempt workspace, one at a time, after the caller job's `needs`. GitHub
@@ -1350,7 +1352,7 @@ No slice below adds a numeric limit without a GitHub source. Read
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
 | Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | NS-39 |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
-| Pending runs in a concurrency group | 100, with `queue: max` | same | Provisional P1 |
+| Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
 
 The poll interval is the operator's schedule, not a number in code. A
 poll pass follows GitHub's rate-limit response headers. It does not
@@ -1976,9 +1978,10 @@ A run still queued 24 hours after acceptance is cancelled and reported
 as `error`. That is the self-hosted job queue time. A pass stops when
 the rate-limit headers report nothing remaining, and the next pass
 resumes. A pull request from a fork is skipped and recorded, never run.
-Without concurrency support, an older SHA's run finishes even after a
-newer push. There is no listener, no resident service, and no runner
-registration.
+NS-42 does not cancel an older SHA's run when a newer push arrives.
+NS-45 cancels a queued or running run only inside a declared
+concurrency group. There is no listener, no resident service, and no
+runner registration.
 
 https://docs.github.com/en/actions/reference/limits
 https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
@@ -2005,8 +2008,9 @@ workflow, and job. Poll state is `poll.json` in the state directory
 and does not store the credential. A response with nothing remaining
 on `x-ratelimit-remaining` is not applied; the next pass resumes from
 the last checkpoint. This pass lists branches and open pull requests.
-It does not list tags. An older queued run is not cancelled when a
-newer SHA arrives. This is not a GitHub-equivalence claim.
+It does not list tags. NS-42 does not cancel an older queued run when
+a newer SHA arrives. NS-45 cancels only inside a declared concurrency
+group. This is not a GitHub-equivalence claim.
 
 **NS-43. Rookrunner reports its own CI.**
 
@@ -2016,8 +2020,8 @@ moonbase2090/rookrunner. The record is
 [owner CI validation](../validation/owner-ci-rookrunner.md). The
 capability version stays 12. `.github/workflows/check.yml` is
 unchanged. The credential type stays an owner decision. NS-44
-evaluates the expression item from the list below. The rest is not
-numbered yet.
+evaluates the expression item from the list below. NS-45 evaluates
+the concurrency item. The rest is not numbered yet.
 
 This slice is a validation record. The poll pass runs against this
 repository for one push to a branch and one same-repository pull
@@ -2059,8 +2063,8 @@ composite), workflow step `run`, composite `run`, the calling step's
 `with` path are included. Workflow `name` stays literal, and that
 string is `github.workflow`. Service `env` stays literal. An action
 output `value` is still evaluated only when it is one whole
-expression. `working-directory`, `run-name`, `concurrency`, matrix
-expressions, and container fields are not evaluated.
+expression. `working-directory`, `run-name`, matrix expressions, and
+container fields are not evaluated. NS-45 evaluates `concurrency`.
 
 `secrets` is withheld. Naming it is an error. No token is created.
 Keys in one env map do not see other keys in that map. Step `env` is
@@ -2070,14 +2074,56 @@ step outputs exist. A bad expression fails that step. A bad workflow
 or job `env`, or a bad job `name`, fails that job. This is not a
 GitHub-equivalence claim.
 
+**NS-45. Concurrency and cancel-in-progress on one worker.**
+
+Status: implemented. The capability version stays 12. A version 11
+plan is not migrated. `.github/workflows/check.yml` is unchanged.
+
+The plan stores `concurrency` on a workflow, a job, a caller job, and
+a called workflow. A string is the group, with `cancel-in-progress`
+false and `queue` `single`. A mapping requires `group`.
+`cancel-in-progress` is a boolean or one whole expression. `queue` is
+`single` or `max`. `queue: max` with `cancel-in-progress: true` is
+`WORKFLOW_INVALID`. `secrets` is not available. `hashFiles` stays
+`CAPABILITY_UNSUPPORTED`.
+
+When a run is accepted, the worker evaluates the workflow group, the
+selected job's group, and, when that job calls another workflow, the
+called workflow's group. The group may contain mixed text.
+`github.ref` and `github.ref_name` come from the submission event.
+Step expressions still leave `github.ref` unset. `needs`, `strategy`,
+`matrix`, and `vars` are empty at acceptance. An empty group, a group
+longer than 1024 characters, or a group that contains NUL is
+`INVALID_PARAMS` and creates no run. An expression that evaluates
+`cancel-in-progress` to true together with `queue: max` is the same
+fault and creates no run.
+
+Group names match case-insensitively. At most one run in a group is
+running. `queue: single` cancels another queued run in that group.
+`cancel-in-progress: true` also cancels the running run. `queue: max`
+keeps at most 100 pending runs. The 101st run is cancelled and the
+pending runs stay. A run with no group is not part of this rule.
+Cancelling the running container happens after the new run is
+committed. If this process stops before that cancel, the running run
+may finish and the new run stays queued. The scheduler does not start
+a second run in a group that already has one running. This is one
+worker. It is not a distributed lock. This is not a GitHub-equivalence
+claim.
+
+The poll pass still does not cancel an older SHA on its own. NS-45
+cancels only inside a declared group. The 24-hour queue expiry is
+unchanged.
+
 ### Provisional after NS-43
 
-The NS-39 inventory reordered this list. `concurrency` blocks 17 of
-the 18 push or pull-request workflows at plan time. Expressions do
-not. The items still get NS numbers after NS-43.
+The NS-39 inventory reordered this list. At that reading,
+`concurrency` blocked 17 of the 18 push or pull-request workflows at
+plan time. Expressions did not. NS-44 and NS-45 are implemented. The
+remaining items are not numbered yet.
 
-1. **P1.** `concurrency` and `cancel-in-progress` on one worker. With
-   `queue: max`, at most 100 runs can be pending per group.
+1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
+   Implemented. With `queue: max`, at most 100 runs can be pending per
+   group.
 2. **NS-44.** Expressions in `run`, `env`, `with`, and `name`, including
    mixed text. Implemented. Sixteen of the eighteen inventoried
    workflows contain `${{ }}`. `secrets` stays unavailable and

@@ -71,7 +71,7 @@ submission key. `workflow_dispatch` and `schedule` are not evaluated.
 Without `event_name`, `on` is not evaluated. The caller supplies the
 changed-file list. A push with `commit_count` above 1,000, or
 `diff_unavailable`, skips path filters. Only the first 3,000 changed
-files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. The next work is the rest of the provisional list, which is not numbered yet. The stored image digest keeps the `sha256:` prefix.
+files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. NS-45 evaluates `concurrency` and `cancel-in-progress` on this one worker. With `queue: max`, at most 100 runs can be pending in a group. The next work is the rest of the provisional list, which is not numbered yet. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
@@ -183,6 +183,12 @@ context is an empty string. Workflow `env`, job `env`, step `env`,
 evaluated, including mixed text. A composite `run` is evaluated.
 Workflow `name` stays literal. Service `env` stays literal. An action
 output `value` is evaluated only when it is one whole expression.
+A concurrency group on a workflow or job is stored and evaluated when
+the run is accepted. `secrets` is not available there. `queue: max`
+with a true `cancel-in-progress` is rejected. On this one worker,
+`queue: single` replaces another queued run in that group,
+`cancel-in-progress` also cancels the running run, and `queue: max`
+keeps at most 100 pending runs.
 Job outputs have no special functions in that table, so status functions and
 `hashFiles` are not accepted there. `hashFiles` is not implemented. The
 selected job runs after the jobs it needs, one at a time, in one

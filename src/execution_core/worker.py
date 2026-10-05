@@ -13,7 +13,10 @@ that socket. `worker --node24 DIR` mounts that directory read-only at
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.
-Cancelling a running workflow
+A concurrency group is enforced on this one worker when the run is
+accepted. `queue: single` replaces another queued run in that group.
+`cancel-in-progress` also cancels the running run. `queue: max` keeps
+at most 100 pending runs in the group. Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
@@ -51,7 +54,9 @@ from .actions import (
 )
 from .artifacts import ArtifactError, file_identity, read_bytes, written_files
 from .attempt import AttemptError, materialize_attempt
+from .concurrency import decide, eligible, resolve_groups
 from .disk import DEFAULT_DISK_BUDGET, usage
+from .expr import ExprError
 from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
 from .plan import (
@@ -106,19 +111,23 @@ _STATUS_SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$")
 _STEP_TEXT = 65536
-_QUEUED = (
+_QUEUED_ROWS = (
     "SELECT record, request FROM runs "
     "WHERE json_extract(record, '$.state')='queued' "
-    "ORDER BY sequence LIMIT 1"
+    "ORDER BY sequence"
 )
 # While this process holds an unresolved container, leave queued workflow jobs
 # queued. Development fixtures own no container and can still run. Restart
 # keeps a separate retained set and blocks only reuse of those identities.
-_QUEUED_FIXTURE = (
+_QUEUED_FIXTURE_ROWS = (
     "SELECT record, request FROM runs "
     "WHERE json_extract(record, '$.state')='queued' "
     "AND json_extract(record, '$.input.kind')='development_fixture' "
-    "ORDER BY sequence LIMIT 1"
+    "ORDER BY sequence"
+)
+_CONCURRENCY_NOTE = (
+    "Concurrency is enforced on this one worker. A group name is case "
+    "insensitive. queue max keeps at most 100 pending runs in that group."
 )
 
 
@@ -295,6 +304,7 @@ class Worker:
         self.live = {}
         self.unresolved = {}
         self.retained = {}
+        self._pending_concurrency_cancels = []
         self.socket_path = self.state / "worker.sock"
 
     def start(self):
@@ -615,13 +625,11 @@ class Worker:
     def execute_queue(self):
         while not self.stop.is_set():
             lease = None
+            picked = None
             with self.guard:
-                if conflicts_with_unresolved(self.unresolved):
-                    row = self.db.execute(_QUEUED_FIXTURE).fetchone()
-                else:
-                    row = self.db.execute(_QUEUED).fetchone()
-                if row:
-                    record, request = json.loads(row[0]), json.loads(row[1])
+                picked = self._select_queued(conflicts_with_unresolved(self.unresolved))
+                if picked:
+                    record, request = picked
                     kind = record["input"]["kind"]
                     if kind in {"development_fixture", "workflow_job"}:
                         attempt_id = str(uuid.uuid4())
@@ -641,14 +649,82 @@ class Worker:
                             self.save(record)
                     else:
                         self._fail_unclaimed(record)
-                        row = None
-            if not row:
+                        picked = None
+            if not picked:
                 self.stop.wait(0.02)
                 continue
             if kind == "development_fixture":
                 self._finish_fixture(record, request)
             else:
                 self._execute_workflow(record, request, lease)
+
+    def _apply_concurrency(self, record):
+        """Cancel queued peers in this transaction. Return running ids to stop."""
+
+        peers = [
+            json.loads(row[0])
+            for row in self.db.execute(
+                "SELECT record FROM runs WHERE json_extract(record, '$.state') IN ('queued', 'running')"
+            )
+        ]
+        cancel_ids, reject = decide(peers, record)
+        if reject:
+            record.update(
+                state="cancelled",
+                cancel_requested=True,
+                finished_at=now(),
+                cleanup="confirmed_no_external_resources",
+            )
+            self.save(record)
+            return []
+        running_ids = []
+        for peer in peers:
+            if peer.get("run_id") not in cancel_ids:
+                continue
+            if peer.get("state") == "queued":
+                self._mark_queued_cancelled(peer["run_id"])
+            elif peer.get("state") == "running":
+                running_ids.append(peer["run_id"])
+        return running_ids
+
+    def _mark_queued_cancelled(self, run_id):
+        current = self.get(run_id)
+        if current["state"] != "queued":
+            return
+        current.update(
+            state="cancelled",
+            cancel_requested=True,
+            finished_at=now(),
+            exit_code=None,
+            error=None,
+            cleanup="confirmed_no_external_resources",
+        )
+        self.save(current)
+
+    def _select_queued(self, fixture_only):
+        """Return the next queued run that is not waiting on its own group."""
+
+        sql = _QUEUED_FIXTURE_ROWS if fixture_only else _QUEUED_ROWS
+        running = [
+            json.loads(row[0])
+            for row in self.db.execute(
+                "SELECT record FROM runs WHERE json_extract(record, '$.state')='running'"
+            )
+        ]
+        queued = []
+        requests = []
+        for row in self.db.execute(sql):
+            queued.append(json.loads(row[0]))
+            requests.append(json.loads(row[1]))
+        chosen = eligible(queued, running)
+        if chosen is None:
+            return None
+        index = next(
+            position
+            for position, record in enumerate(queued)
+            if record["run_id"] == chosen["run_id"]
+        )
+        return chosen, requests[index]
 
     def _finish_fixture(self, record, request):
         interrupted = self.stop.wait(request["fixture"]["delay_ms"] / 1000)
@@ -1159,6 +1235,18 @@ class Worker:
             if actions:
                 record["input"]["actions"] = actions
             try:
+                groups = resolve_groups(
+                    planned["plan"], p["event"], p.get("event_name"), p["workflow"]
+                )
+            except ExprError as exc:
+                raise Fault("INVALID_PARAMS", str(exc)[:512]) from exc
+            if groups:
+                record["concurrency"] = groups
+                record["compatibility_notes"] = [
+                    *record["compatibility_notes"],
+                    _CONCURRENCY_NOTE,
+                ]
+            try:
                 reserve = usage(snapshot)
             except OSError:
                 raise Fault("STORAGE_FULL", _STORAGE_FULL) from None
@@ -1168,12 +1256,15 @@ class Worker:
             reserve += len(normalized.encode()) + len(canonical(record).encode())
             if self._over_budget(reserve):
                 raise Fault("STORAGE_FULL", _STORAGE_FULL)
+            running_ids = []
             try:
                 with self.db:
                     self.db.execute(
                         "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
                         (record["run_id"], key, normalized, canonical(record), b""),
                     )
+                    if groups:
+                        running_ids = self._apply_concurrency(record)
             except sqlite3.IntegrityError:
                 existing = self.db.execute(
                     "SELECT request, record FROM runs WHERE submission_key=?", (key,)
@@ -1183,6 +1274,7 @@ class Worker:
                 raise Fault(
                     "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
                 ) from None
+            self._pending_concurrency_cancels.extend(running_ids)
             store.commit()
             return record
         finally:
@@ -1602,6 +1694,13 @@ class Worker:
             # the lock again and keeps a terminal result that landed mid-stop.
             if method == "run.cancel":
                 result = self.dispatch(method, params)
+            elif method == "run.submit":
+                with self.guard:
+                    result = self.dispatch(method, params)
+                    pending = list(self._pending_concurrency_cancels)
+                    self._pending_concurrency_cancels = []
+                for run_id in pending:
+                    self._cancel_running_workflow({"run_id": run_id})
             else:
                 with self.guard:
                     result = self.dispatch(method, params)

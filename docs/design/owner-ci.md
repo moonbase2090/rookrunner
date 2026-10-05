@@ -158,7 +158,7 @@ No number is added here. The limits already cited for this track:
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
 | Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | Stays deferred |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
-| Pending runs in a concurrency group | 100, with `queue: max` | same | Provisional P1 |
+| Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
 
 ## Coexistence
 
@@ -209,9 +209,10 @@ Sixteen of the eighteen workflows contain `${{ }}`. The two that do
 not are Rookrunner `check.yml` and prismattyc-website `deploy.yml`.
 The planner stores that text. NS-44 evaluates expressions in `run`,
 `env`, `with`, and step and job `name`, including mixed text.
-`secrets` stays unavailable and `hashFiles` stays unsupported. The
-inventory rank still has `concurrency` first because that field fails
-planning.
+`secrets` stays unavailable and `hashFiles` stays unsupported. NS-45
+accepts `concurrency` on a workflow or job and evaluates the group
+when the run is accepted. The inventory rank below is the 2026-10-04
+reading, when that field failed planning.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website
