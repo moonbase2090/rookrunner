@@ -8,8 +8,8 @@ The capability version stays 12. A version 11 plan is not migrated.
 No plan field is added. `.github/workflows/check.yml` is unchanged.
 `run_job` still requires a digest and still does not select a default.
 This is not a GitHub-equivalence claim. P5's credential is the
-dedicated Rookrunner GitHub App recorded in
-[check runs](check-runs.md). This document does not create that App.
+GitHub App Rookrunner-App, App ID 5201333, recorded in
+[check runs](check-runs.md). This document does not install that App.
 
 The implementation follows this document.
 
@@ -58,8 +58,12 @@ design does not change that workflow.
 P5 posts one check run through the Rookrunner GitHub App when
 `--app-key` is set, then posts the commit status with that
 installation token ([check runs](check-runs.md)). Omitting `--app-key`
-keeps the NS-40 token file. The plan schema is unchanged. The App is
-not created yet. This document does not create it. P7 stays unstarted.
+keeps the NS-40 token file. The plan schema is unchanged. The App
+exists. Its name is Rookrunner-App and its App ID is 5201333. The
+installation and the private key are still pending. This document
+does not install it. P7 designs secrets, `GITHUB_TOKEN`, and
+`write` permissions and does not change this image
+([secrets](secrets.md)). Open questions remain for MB2090.
 
 ## Options
 
@@ -187,8 +191,9 @@ The implementation does the following.
    already stores the image digest. `.github/workflows/check.yml` stays
    unchanged. The dogfood caller still passes `--image`. `GITHUB_TOKEN`
    stays unset. `security-events: write`
-   and `actions: write` stay rejected. P7 stays unstarted.
-   macOS stays deferred.
+   and `actions: write` stay rejected. The secrets design does not
+   change this image ([secrets](secrets.md)). Open questions remain
+   for MB2090. macOS stays deferred.
 
 ## Open owner decisions
 
@@ -243,6 +248,7 @@ The engine does not build, pull, or publish the image. The operator
 builds the Dockerfile. No root job. No privileged container. No host
 credential mount. No change to `runs-on` for a caller who passes
 `image`. No macOS image. No `actions/runner` agent. No `GITHUB_TOKEN`.
-P7 stays unstarted. The default capture
+The secrets design does not change this image
+([secrets](secrets.md)). The default capture
 still excludes the original commit. Decision 0002 still holds for every image that is
 not this operator digest: the caller passes the pin.

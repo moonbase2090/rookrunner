@@ -7,13 +7,16 @@ plan is not migrated. No plan field and no capability entry are added.
 The plan schema is unchanged. `run.status` accepts optional check
 fields because that schema rejects unknown properties. Those fields
 are not on `run.get`. `.github/workflows/check.yml` is unchanged. This
-is not a GitHub-equivalence claim. P7 stays unstarted.
+is not a GitHub-equivalence claim. P7 designs secrets,
+`GITHUB_TOKEN`, and `write` permissions and does not change this
+post ([secrets](secrets.md)). Open questions remain for MB2090.
 
-The owner chose the credential on 2026-10-05. It is a new GitHub App
-named Rookrunner. It is not the moonbase2090-agents App. The App is
-not created yet. This document does not create it, does not start a
-sign-in, and does not read a key. It contains no App id, client id,
-installation id, or key material.
+The owner chose the credential on 2026-10-05. It is a new GitHub App.
+Its name is Rookrunner-App. It is not the moonbase2090-agents App.
+The App exists. Its App ID is 5201333. The installation and the
+private key are still pending. This document does not install the
+App, does not start a sign-in, and does not read a key. It contains
+no client id, installation id, or key material.
 
 ## Credential
 
@@ -184,7 +187,8 @@ key path, or a response body.
 `GITHUB_TOKEN` stays unset. The installation token is not exported to
 the job. `security-events: write` and `actions: write` stay rejected.
 A `write` permissions value stays rejected. Job secrets stay disabled.
-P7 stays unstarted. The key directory is not a job mount.
+The secrets design does not change this post
+([secrets](secrets.md)). The key directory is not a job mount.
 
 ## Host control
 
@@ -216,9 +220,12 @@ does not remove that warning.
 
 ## What this implementation does not do
 
-The App is not created and is not installed. No sign-in is started.
-No file under `~/Secrets/github-app/rookrunner/` is read by a test or
-by this repository. Omitting `--app-key` still posts a commit status
-from the NS-40 token file. Poll list requests stay unauthenticated.
-Contents read does not become a fetch. There is no webhook, no runner
-registration, and no `GITHUB_TOKEN`. P7 stays unstarted.
+The App exists. Its name is Rookrunner-App and its App ID is
+5201333. It is not installed, and the private key is still pending.
+No sign-in is started. No file under
+`~/Secrets/github-app/rookrunner/` is read by a test or by this
+repository. Omitting `--app-key` still posts a commit status from
+the NS-40 token file. Poll list requests stay unauthenticated.
+Contents read does not become a fetch. There is no webhook, no
+runner registration, and no `GITHUB_TOKEN` in the job. The secrets
+design does not change this post ([secrets](secrets.md)).

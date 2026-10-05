@@ -8,8 +8,11 @@ one pull request for moonbase2090/rookrunner
 is the Rookrunner GitHub App recorded below. P5 posts one check run
 when `--app-key` is set, then posts the commit status with that
 installation token ([check runs](check-runs.md)). Omitting `--app-key`
-keeps the NS-40 token file. The plan schema is unchanged. P7 stays
-unstarted. This is not a GitHub-equivalence claim.
+keeps the NS-40 token file. The plan schema is unchanged. P7 designs
+secrets, `GITHUB_TOKEN`, and `write` permissions for
+owner-repository push and pull-request runs on this one local worker
+and does not change the engine ([secrets](secrets.md)). Open
+questions remain for MB2090. This is not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
 only. There is no listener, no runner registration, no Terraform, and
@@ -136,9 +139,11 @@ https://docs.github.com/en/rest/checks/runs
 
 ## Credential
 
-Recorded on 2026-10-05. The credential is a new GitHub App named
-Rookrunner. It is not the moonbase2090-agents App. The App is not
-created yet. This slice does not create it, sign in, or read a key.
+Recorded on 2026-10-05. The credential is a new GitHub App. Its name
+is Rookrunner-App. It is not the moonbase2090-agents App. The App
+exists. Its App ID is 5201333. The installation and the private key
+are still pending. This slice does not install it, sign in, or read
+a key.
 
 Repository permissions are Checks write, Commit statuses write, and
 Contents read. The private key lives only in
@@ -211,7 +216,7 @@ supplied a store and that pin ran. That uses is not a new gap.
 | Rank | Field | Workflows | Disposition |
 | --- | --- | --- | --- |
 | 1 | `concurrency` | 17 | The planner rejects the workflow before any job body. This is the first engine gap after NS-43 |
-| 2 | a permissions value of `write` | 10 | Stays rejected until a reviewed secrets design |
+| 2 | a permissions value of `write` | 10 | Stays rejected. The secrets design does not change the engine ([secrets](secrets.md)) |
 | 3 | `actions/upload-artifact` pinned by a full SHA | 8 | The artifact HTTP service is deferred |
 | 4 | `github/codeql-action/upload-sarif` pinned by a full SHA | 6 | Same deferral. These workflows also set `security-events: write` |
 | 5 | `actions/checkout@v5` | 5 | Not a 40-character SHA. All five are deploy workflows, which are out of scope |
@@ -243,7 +248,10 @@ still does not select a default. P5 posts one check run through the
 Rookrunner GitHub App when `--app-key` is set, then posts the commit
 status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](check-runs.md)). The plan schema is
-unchanged. P7 stays unstarted. The rank table
+unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
+permissions for owner-repository push and pull-request runs on this
+one local worker and does not change the engine
+([secrets](secrets.md)). Open questions remain for MB2090. The rank table
 above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
@@ -336,8 +344,9 @@ this inventory. Reordered by the counts above:
    deploy workflows. `fetch-depth` is one Scorecard workflow.
 5. Check runs, if the owner chooses a GitHub App.
 6. A runner image for `ubuntu-latest` jobs that use `sudo` and apt.
-7. `write` permissions and `GITHUB_TOKEN`. These wait for a reviewed
-   secrets design. macOS jobs stay deferred with them.
+7. `write` permissions and `GITHUB_TOKEN`. Designed in
+   [secrets](secrets.md). The engine is unchanged. Open questions
+   remain for MB2090. macOS jobs stay deferred.
 
 ## What this slice does not do
 
