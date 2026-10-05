@@ -135,17 +135,16 @@ job deadline; the step timeout is not a shared budget across inner steps.
 This is not a GitHub-equivalence claim.
 https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax
 
-`uses: actions/checkout@v4` and a full 40-character lowercase SHA pin of
-`actions/checkout` are an owned checkout of the files already in the
-workspace. The plan stores that `uses` string and `checkout` as
-`captured`. The SHA is not fetched and is not verified. The step does not
-start a process, does not modify the workspace, does not create `.git`,
-does not delete one that materialize already wrote, does not read
-`git.json` or the object store, and does not contact a
-network. It succeeds with
-exit code 0 and publishes no outputs. `clean: false` and
-`persist-credentials: false` are the only accepted `with` values. Omitting
-either key does not mean the upstream default of true
+`uses: actions/checkout@v` plus digits, and a full 40-character lowercase
+SHA pin of `actions/checkout`, are an owned checkout of the files already
+in the workspace. The plan stores that `uses` string and `checkout` as
+`captured`. The tag and the SHA are not fetched and are not verified. The
+step does not start a process, does not modify the workspace, does not
+create `.git`, does not delete one that materialize already wrote, does
+not read `git.json` or the object store, and does not contact a network.
+It succeeds with exit code 0 and publishes no outputs. `clean: false`,
+`persist-credentials: false`, and `fetch-depth: 0` are the accepted `with`
+values. Omitting a key does not mean the upstream default
 (https://github.com/actions/checkout). This is not a GitHub-equivalence
 claim.
 
@@ -719,6 +718,10 @@ def _accept_checkout(step):
         if not isinstance(raw, dict):
             _setup("plan is not accepted")
         for key, value in raw.items():
+            if key == "fetch-depth":
+                if type(value) is not int or value != 0:
+                    _setup("plan is not accepted")
+                continue
             if key not in {"clean", "persist-credentials"} or value is not False:
                 _setup("plan is not accepted")
     _env_layer(step.get("env"))

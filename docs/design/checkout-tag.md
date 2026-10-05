@@ -1,31 +1,38 @@
 # Checkout by major tag and fetch-depth 0
 
-Status: design. This slice writes this document and does not change the
-engine. The capability version stays 12. A version 11 plan is not
+Status: accepted. An owned `actions/checkout@v` plus one or more
+digits is the same checkout as `v4`. The tag is stored and is not
+fetched. `fetch-depth` accepts only the YAML integer `0`, which copies
+the ancestor closure of `base_commit` before publish. The synthesized
+commit then names that commit as its parent. Omitting `fetch-depth`
+keeps one parentless synthesized commit and still excludes the original
+commit. The capability version stays 12. A version 11 plan is not
 migrated. `.github/workflows/check.yml` is unchanged. This is not a
 GitHub-equivalence claim.
 
-The implementation follows this document. It is the next slice.
+The implementation follows this document.
 
 ## Why this slice is a design
 
-The owned checkout accepts `actions/checkout@v4` and
-`actions/checkout@` plus 40 lowercase hexadecimal characters
-([checkout](checkout.md)). The tag is not fetched. The step does not
-replace captured files, read an action file, or run the action. Other
-tags stay rejected, including `@v5`. `fetch-depth` stays rejected.
+Before this implementation, the owned checkout accepted
+`actions/checkout@v4` and `actions/checkout@` plus 40 lowercase
+hexadecimal characters ([checkout](checkout.md)). The tag was not
+fetched. The step did not replace captured files, read an action file,
+or run the action. Other tags stayed rejected, including `@v5`.
+`fetch-depth` stayed rejected.
 
 The owner-CI inventory ranks `actions/checkout@v5` on deploy workflows
 and `fetch-depth: 0` on one Scorecard workflow
 ([owner CI](owner-ci.md)). Deploy workflows stay blocked by other
 fields. Scorecard sets `fetch-depth` because it reads commit history.
-The snapshot stores the trees and blobs of one commit and one
-parentless synthesized commit
+Before this implementation, the snapshot stored the trees and blobs of
+one commit and one parentless synthesized commit
 ([git objects](git-objects.md),
 [synthesized commit](synthesized-commit.md)).
-The attempt `.git` requires that single commit
-([Git directory](git-directory.md)). Parent commits are not walked.
-The original commit object stays excluded on that path.
+The attempt `.git` required that single commit
+([Git directory](git-directory.md)). Parent commits were not walked.
+The original commit object stayed excluded on that path. The default
+capture still does.
 
 `fetch-depth: 0` on `actions/checkout` means all history for all
 branches and tags
@@ -212,7 +219,7 @@ protocol field, error kind, or schema entry is added.
 
 ## What this slice does not do
 
-No engine change. No fetch and no unshallow. No copy of other branches
+No fetch and no unshallow. No copy of other branches
 or tags. No credential and no token. `GITHUB_TOKEN` stays unset.
 `actions/setup-node` stays rejected. Deploy workflows that need it, or
 that need a `write` permission, stay blocked. P5, P6, and P7 stay

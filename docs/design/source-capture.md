@@ -85,9 +85,13 @@ repository. One synthesized commit for that tree is stored
 ([synthesized commit](synthesized-commit.md)). When the object store is present, the attempt workspace receives an
 owned `.git` ([Git directory](git-directory.md)). An absent store still
 has no `.git`. A Git command inside that workspace can see the
-synthesized commit. `uses: actions/checkout@v4`
-is an owned checkout of the captured files and does not fetch or replace
-them. Other checkout actions stay rejected. The
+synthesized commit. `uses: actions/checkout@v4` and `actions/checkout@v` plus digits
+are an owned checkout of the captured files and do not fetch or replace
+them. Dotted tags and other actions stay rejected. When the accepted
+plan sets `fetch-depth` to the YAML integer `0`, the original commit
+and its ancestors are stored
+([checkout tag](checkout-tag.md)). The default capture still excludes
+that commit. The
 [sanitized metadata design](git-metadata.md) names the only fields copied into
 the sibling `git.json`. The owned checkout is [checkout](checkout.md).
 

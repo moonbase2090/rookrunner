@@ -2,8 +2,11 @@
 
 Snapshots contain plain files, a canonical manifest, the loose trees and
 blobs of the captured base commit, and one synthesized commit for that
-tree. They never contain the original commit, Git configuration,
-credentials, hooks, or a repository. A sibling git.json records only the
+tree. The default capture does not store the original commit. History,
+when the caller asks for it before publish, also stores that commit and
+every ancestor reachable from it. The synthesized commit then names that
+commit as its parent. Snapshots do not contain Git configuration, hooks,
+or a copied repository directory. A sibling git.json records only the
 sanitized allow-list. The caller must use a private, trusted state root.
 """
 
@@ -83,24 +86,44 @@ def _loose_object(kind, payload, algorithm, oid):
     return zlib.compress(raw)
 
 
-def _synthesized_commit(root_tree, algorithm):
-    """Id and payload of the fixed parentless commit for this root tree.
+def _synthesized_commit(root_tree, algorithm, parent=None):
+    """Id and payload of the fixed commit for this root tree.
 
     The name, email, timestamp, and message are not read from the original
     commit, Git configuration, or the environment. Unix time 0 keeps the id
-    a pure function of the tree.
+    a pure function of the tree, plus the parent when history is stored.
     https://git-scm.com/book/en/v2/Git-Internals-Git-Objects
     """
 
-    payload = (
-        f"tree {root_tree}\n"
+    payload = f"tree {root_tree}\n"
+    if parent is not None:
+        payload += f"parent {parent}\n"
+    payload += (
         "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
         "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
         "\n"
         "captured tree\n"
-    ).encode("ascii")
-    raw = f"commit {len(payload)}\0".encode("ascii") + payload
-    return hashlib.new(algorithm, raw).hexdigest(), payload
+    )
+    encoded = payload.encode("ascii")
+    raw = f"commit {len(encoded)}\0".encode("ascii") + encoded
+    return hashlib.new(algorithm, raw).hexdigest(), encoded
+
+
+def _commit_parents(payload, algorithm):
+    """Return parent ids named in a commit header. A bad id is rejected."""
+
+    parents = []
+    header = payload.split(b"\n\n", 1)[0]
+    for line in header.split(b"\n"):
+        if not line.startswith(b"parent "):
+            continue
+        try:
+            parent = line[len(b"parent ") :].decode("ascii")
+        except UnicodeError:
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        _check_base(parent, algorithm)
+        parents.append(parent)
+    return parents
 
 
 def _one_oid(raw, algorithm):
@@ -451,13 +474,18 @@ class SourceCapture:
         finally:
             os.close(root)
 
-    def _objects(self, oids, algorithm):
-        """Read tree and blob payloads. A missing object is not fetched.
+    def _objects(self, oids, algorithm, payloads=None, allow_commits=False):
+        """Read object payloads. A missing object is not fetched.
 
+        The default batch accepts trees and blobs. History also accepts
+        commits and applies the blob size limit to every new payload.
         https://git-scm.com/docs/git-cat-file
         """
 
         requested = list(oids)
+        if not requested:
+            return {}
+        allowed = (b"blob", b"tree", b"commit") if allow_commits else (b"blob", b"tree")
         result = self.git(
             "cat-file",
             "--batch",
@@ -481,7 +509,7 @@ class SourceCapture:
                 reported = parts[0].decode("ascii")
             except UnicodeError:
                 reject("SOURCE_INVALID", "Git could not inspect the selected repository")
-            if reported != oid or parts[1] not in (b"blob", b"tree"):
+            if reported != oid or parts[1] not in allowed:
                 reject("SOURCE_INVALID", "Git could not inspect the selected repository")
             try:
                 size = int(parts[2])
@@ -493,10 +521,12 @@ class SourceCapture:
                 or data[offset + size : offset + size + 1] != b"\n"
             ):
                 reject("SOURCE_INVALID", "Git could not inspect the selected repository")
-            if parts[1] == b"blob" and size > MAX_FILE_BYTES:
+            if size > MAX_FILE_BYTES and (parts[1] == b"blob" or allow_commits):
                 reject("SOURCE_LIMIT", "blob exceeds capture byte limit")
             payload = data[offset : offset + size]
             offset += size + 1
+            if payloads is not None:
+                payloads[oid] = (parts[1].decode("ascii"), payload)
             found[oid] = _loose_object(parts[1].decode("ascii"), payload, algorithm, oid)
         if offset != len(data):
             reject("SOURCE_INVALID", "Git could not inspect the selected repository")
@@ -689,120 +719,150 @@ class SourceCapture:
         ).stdout
 
     def capture(self, workflow, include=()):
+        """Stage and publish a parentless snapshot. History is not copied."""
+
+        with self.prepare(workflow, include) as prepared:
+            return prepared.publish()
+
+    @contextmanager
+    def prepare(self, workflow, include=()):
+        """Stage a snapshot and publish it only when the caller says so.
+
+        The caller can plan the staged tree and add history before publish.
+        Leaving the block without publishing removes the staging directory.
+        Exceptions from the caller are not turned into capture errors.
+        """
+
         workflow = relative_path(workflow)
         include = sorted({relative_path(path) for path in include})
         private_directory(self.state)
         snapshots = self.state / "snapshots"
         private_directory(snapshots)
         staging = Path(tempfile.mkdtemp(prefix=".preparing-", dir=snapshots))
+        prepared = None
         try:
-            initial = self.inventory()
-            (
-                _,
-                tracked,
-                base,
-                tree,
-                algorithm,
-                head_name,
-                root_tree,
-                object_ids,
-                alternates,
-            ) = initial
-            if any(self.excluded(path) for path in [workflow, *include]):
+            try:
+                prepared = self._stage(workflow, include, staging, snapshots)
+            except CaptureError:
+                raise
+            except (UnicodeError, ValueError):
+                reject("SOURCE_INVALID", "repository metadata or paths are not supported UTF-8")
+            except subprocess.TimeoutExpired:
+                reject("SOURCE_UNSTABLE", "Git inspection timed out")
+            except OSError:
                 reject(
-                    "SOURCE_EXCLUDED", "workflow or explicit input is excluded by capture policy"
+                    "SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot"
                 )
-            paths = sorted((set(tracked) | set(include)) - {p for p in tracked if self.excluded(p)})
-            if len(paths) > MAX_FILES:
-                reject("SOURCE_LIMIT", "selected file count exceeds capture limit")
-            if workflow not in paths:
-                reject("SOURCE_INVALID", "workflow must be tracked or explicitly included")
-            attrs = self.filters(paths)
-            if any(value == b"lfs" for value in attrs.split(b"\0")[2::3]):
-                reject("CAPABILITY_UNSUPPORTED", "Git LFS files are not supported")
-            files = staging / "files"
-            files.mkdir(mode=0o700)
-            first = self.scan(paths, tracked, algorithm, files)
-            second = self.scan(paths, tracked, algorithm)
-            if first != second or self.inventory() != initial or self.filters(paths) != attrs:
-                reject(
-                    "SOURCE_UNSTABLE",
-                    "source or Git selection changed during capture; retry explicitly",
-                )
-            if alternates == "nonempty":
-                reject("CAPABILITY_UNSUPPORTED", "object alternates are not supported")
-            if alternates not in ("absent", "empty"):
-                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
-            entries, _, objects, deleted = first
-            deleted = sorted(set(deleted) | (set(tree) - set(objects)))
-            selected = next((e for e in entries if e["path"] == workflow), None)
-            if not selected or selected["kind"] != "file":
-                reject("SOURCE_INVALID", "workflow must be a captured regular file")
-            _check_base(base, algorithm)
-            manifest = {
-                "format_version": 1,
-                "base_commit": base,
-                "dirty": objects != tree,
-                "git_object_format": algorithm,
-                "workflow": workflow,
-                "workflow_digest": selected["sha256"],
-                "included": include,
-                "excluded": sorted(p for p in tracked if self.excluded(p)),
-                "deleted": deleted,
-                "entries": entries,
-            }
-            encoded = canonical(manifest).encode()
-            digest = hashlib.sha256(encoded).hexdigest()
-            with (staging / "manifest.json").open("xb") as output:
-                output.write(encoded)
-                output.flush()
-                os.fsync(output.fileno())
-            metadata = {
-                "format_version": 1,
-                "base_commit": base,
-                "dirty": manifest["dirty"],
-                "git_object_format": algorithm,
-                "head": None if base is None else head_name,
-            }
-            git_encoded = canonical(metadata).encode()
-            _write_private(staging / "git.json", git_encoded)
-            objects_canonical = None
-            if object_ids is not None:
-                # Computed after the inventory reads agree. The original commit
-                # is not read, and this id is not added to the cat-file batch.
-                commit_id, commit_payload = _synthesized_commit(root_tree, algorithm)
-                commit_loose = _loose_object("commit", commit_payload, algorithm, commit_id)
-                stored_ids = tuple(sorted((*object_ids, commit_id)))
-                objects_root = staging / "objects"
-                objects_root.mkdir(mode=0o700)
-                for oid, payload in self._objects(object_ids, algorithm).items():
-                    bucket = objects_root / oid[:2]
-                    bucket.mkdir(mode=0o700, exist_ok=True)
-                    _write_private(bucket / oid[2:], payload)
-                bucket = objects_root / commit_id[:2]
-                bucket.mkdir(mode=0o700, exist_ok=True)
-                _write_private(bucket / commit_id[2:], commit_loose)
-                objects_canonical = canonical(list(stored_ids)).encode()
-            for directory, _, _ in os.walk(staging, topdown=False, followlinks=False):
-                sync_directory(directory)
-            snapshot_id = str(uuid.uuid4())
-            staging.rename(snapshots / snapshot_id)
-            sync_directory(snapshots)
-            return {
-                "snapshot_id": snapshot_id,
-                "digest": digest,
-                "workflow_digest": selected["sha256"],
-                "base_commit": base,
-                "dirty": manifest["dirty"],
-                "file_count": len(entries),
-                "total_bytes": sum(e["size"] for e in entries),
-                "git_metadata_digest": hashlib.sha256(git_encoded).hexdigest(),
-                "git_objects_digest": (
-                    None
-                    if objects_canonical is None
-                    else hashlib.sha256(objects_canonical).hexdigest()
-                ),
-            }
+            yield prepared
+        finally:
+            if (prepared is None or not prepared.published) and staging.exists():
+                shutil.rmtree(staging)
+
+    def _stage(self, workflow, include, staging, snapshots):
+        initial = self.inventory()
+        (
+            _,
+            tracked,
+            base,
+            tree,
+            algorithm,
+            head_name,
+            root_tree,
+            object_ids,
+            alternates,
+        ) = initial
+        if any(self.excluded(path) for path in [workflow, *include]):
+            reject("SOURCE_EXCLUDED", "workflow or explicit input is excluded by capture policy")
+        paths = sorted((set(tracked) | set(include)) - {p for p in tracked if self.excluded(p)})
+        if len(paths) > MAX_FILES:
+            reject("SOURCE_LIMIT", "selected file count exceeds capture limit")
+        if workflow not in paths:
+            reject("SOURCE_INVALID", "workflow must be tracked or explicitly included")
+        attrs = self.filters(paths)
+        if any(value == b"lfs" for value in attrs.split(b"\0")[2::3]):
+            reject("CAPABILITY_UNSUPPORTED", "Git LFS files are not supported")
+        files = staging / "files"
+        files.mkdir(mode=0o700)
+        first = self.scan(paths, tracked, algorithm, files)
+        second = self.scan(paths, tracked, algorithm)
+        if first != second or self.inventory() != initial or self.filters(paths) != attrs:
+            reject(
+                "SOURCE_UNSTABLE",
+                "source or Git selection changed during capture; retry explicitly",
+            )
+        if alternates == "nonempty":
+            reject("CAPABILITY_UNSUPPORTED", "object alternates are not supported")
+        if alternates not in ("absent", "empty"):
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        entries, _, objects, deleted = first
+        deleted = sorted(set(deleted) | (set(tree) - set(objects)))
+        selected = next((e for e in entries if e["path"] == workflow), None)
+        if not selected or selected["kind"] != "file":
+            reject("SOURCE_INVALID", "workflow must be a captured regular file")
+        _check_base(base, algorithm)
+        manifest = {
+            "format_version": 1,
+            "base_commit": base,
+            "dirty": objects != tree,
+            "git_object_format": algorithm,
+            "workflow": workflow,
+            "workflow_digest": selected["sha256"],
+            "included": include,
+            "excluded": sorted(p for p in tracked if self.excluded(p)),
+            "deleted": deleted,
+            "entries": entries,
+        }
+        encoded = canonical(manifest).encode()
+        digest = hashlib.sha256(encoded).hexdigest()
+        with (staging / "manifest.json").open("xb") as output:
+            output.write(encoded)
+            output.flush()
+            os.fsync(output.fileno())
+        metadata = {
+            "format_version": 1,
+            "base_commit": base,
+            "dirty": manifest["dirty"],
+            "git_object_format": algorithm,
+            "head": None if base is None else head_name,
+        }
+        git_encoded = canonical(metadata).encode()
+        _write_private(staging / "git.json", git_encoded)
+        objects_root = None
+        commit_id = None
+        objects_canonical = None
+        if object_ids is not None:
+            # Computed after the inventory reads agree. The original commit
+            # is not read, and this id is not added to the cat-file batch.
+            commit_id, commit_payload = _synthesized_commit(root_tree, algorithm)
+            commit_loose = _loose_object("commit", commit_payload, algorithm, commit_id)
+            stored_ids = tuple(sorted((*object_ids, commit_id)))
+            objects_root = staging / "objects"
+            objects_root.mkdir(mode=0o700)
+            for oid, payload in self._objects(object_ids, algorithm).items():
+                _store_loose(objects_root, oid, payload)
+            _store_loose(objects_root, commit_id, commit_loose)
+            objects_canonical = canonical(list(stored_ids)).encode()
+        return _PreparedCapture(
+            self,
+            staging,
+            snapshots,
+            base=base,
+            algorithm=algorithm,
+            root_tree=root_tree,
+            object_ids=object_ids,
+            objects_root=objects_root,
+            commit_id=commit_id,
+            objects_canonical=objects_canonical,
+            digest=digest,
+            selected=selected,
+            entries=entries,
+            git_encoded=git_encoded,
+            dirty=manifest["dirty"],
+        )
+
+    def _add_history(self, prepared):
+        try:
+            self._copy_history(prepared)
         except CaptureError:
             raise
         except (UnicodeError, ValueError):
@@ -811,6 +871,129 @@ class SourceCapture:
             reject("SOURCE_UNSTABLE", "Git inspection timed out")
         except OSError:
             reject("SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot")
-        finally:
-            if staging.exists():
-                shutil.rmtree(staging)
+
+    def _copy_history(self, prepared):
+        """Copy the ancestor closure into the staging store before publish.
+
+        A missing parent, including one absent from a shallow repository, is
+        not fetched. An unborn repository has no base commit. Either failure
+        leaves the staging directory unpublished.
+        """
+
+        if (
+            prepared.base is None
+            or prepared.object_ids is None
+            or prepared.root_tree is None
+            or prepared.objects_root is None
+            or prepared.commit_id is None
+        ):
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        listed = self._history_oids(prepared.base, prepared.algorithm)
+        if prepared.base not in listed:
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        already = set(prepared.object_ids)
+        needed = [oid for oid in listed if oid not in already]
+        payloads = {}
+        found = self._objects(needed, prepared.algorithm, payloads=payloads, allow_commits=True)
+        commits = {oid for oid, (kind, _payload) in payloads.items() if kind == "commit"}
+        if prepared.base not in commits:
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        for oid in commits:
+            for parent in _commit_parents(payloads[oid][1], prepared.algorithm):
+                if parent not in commits:
+                    reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        parented_id, parented_payload = _synthesized_commit(
+            prepared.root_tree, prepared.algorithm, prepared.base
+        )
+        if parented_id in already or parented_id in found or parented_id == prepared.commit_id:
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        _remove_loose(prepared.objects_root, prepared.commit_id)
+        for oid, loose in found.items():
+            _store_loose(prepared.objects_root, oid, loose)
+        loose = _loose_object("commit", parented_payload, prepared.algorithm, parented_id)
+        _store_loose(prepared.objects_root, parented_id, loose)
+        stored = tuple(sorted((*already, *found, parented_id)))
+        prepared.objects_canonical = canonical(list(stored)).encode()
+        prepared.commit_id = parented_id
+
+    def _history_oids(self, base, algorithm):
+        raw = self.git("rev-list", "--objects", base).stdout
+        found = []
+        seen = set()
+        for line in raw.splitlines():
+            if not line:
+                continue
+            try:
+                oid = line.split(b" ", 1)[0].decode("ascii")
+            except UnicodeError:
+                reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+            _check_base(oid, algorithm)
+            if oid in seen:
+                continue
+            seen.add(oid)
+            found.append(oid)
+        return found
+
+    def _publish(self, prepared):
+        if prepared.published:
+            reject("SOURCE_INVALID", "Git could not inspect the selected repository")
+        try:
+            for directory, _, _ in os.walk(prepared.staging, topdown=False, followlinks=False):
+                sync_directory(directory)
+            snapshot_id = str(uuid.uuid4())
+            prepared.staging.rename(prepared.snapshots / snapshot_id)
+            prepared.published = True
+            sync_directory(prepared.snapshots)
+        except CaptureError:
+            raise
+        except OSError:
+            reject("SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot")
+        objects_canonical = prepared.objects_canonical
+        return {
+            "snapshot_id": snapshot_id,
+            "digest": prepared.digest,
+            "workflow_digest": prepared.selected["sha256"],
+            "base_commit": prepared.base,
+            "dirty": prepared.dirty,
+            "file_count": len(prepared.entries),
+            "total_bytes": sum(entry["size"] for entry in prepared.entries),
+            "git_metadata_digest": hashlib.sha256(prepared.git_encoded).hexdigest(),
+            "git_objects_digest": (
+                None if objects_canonical is None else hashlib.sha256(objects_canonical).hexdigest()
+            ),
+        }
+
+
+class _PreparedCapture:
+    """Staged snapshot. publish() renames it. History is optional before that."""
+
+    def __init__(self, owner, staging, snapshots, **fields):
+        self.owner = owner
+        self.staging = staging
+        self.snapshots = snapshots
+        self.published = False
+        self.__dict__.update(fields)
+
+    @property
+    def path(self):
+        return self.staging
+
+    def add_history(self):
+        self.owner._add_history(self)
+
+    def publish(self):
+        return self.owner._publish(self)
+
+
+def _store_loose(root, oid, payload):
+    bucket = root / oid[:2]
+    bucket.mkdir(mode=0o700, exist_ok=True)
+    _write_private(bucket / oid[2:], payload)
+
+
+def _remove_loose(root, oid):
+    leaf = root / oid[:2] / oid[2:]
+    leaf.unlink()
+    bucket = leaf.parent
+    if not any(bucket.iterdir()):
+        bucket.rmdir()

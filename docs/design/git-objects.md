@@ -2,10 +2,14 @@
 
 Status: accepted, 2026-10-03. Capture copies the trees and blobs of the
 single commit named by the captured `base_commit`. The original commit
-object, remotes, credentials, and the `.git` directory stay excluded.
-One synthesized commit for the copied tree is written when the store
-is present ([synthesized commit](synthesized-commit.md)). This is not
-a GitHub-equivalence claim.
+object, remotes, credentials, and the `.git` directory stay excluded
+on that default path. One synthesized commit for the copied tree is
+written when the store is present
+([synthesized commit](synthesized-commit.md)). When an accepted plan
+sets `fetch-depth` to the YAML integer `0`, capture also copies that
+commit and its ancestors before publish
+([checkout tag](checkout-tag.md)). Omitting the key keeps this
+exclusion. This is not a GitHub-equivalence claim.
 
 Decision 0002 still holds: the snapshot is plain working files and a
 canonical manifest, and `.git` is not copied. This design does not
@@ -167,7 +171,9 @@ disk budget counts them. The default budget stays
 ## Acceptance
 
 - The trees and blobs of the captured base commit are stored as loose
-  objects. The original commit object is not stored.
+  objects. The original commit object is not stored on the default
+  path. The history path stores it
+  ([checkout tag](checkout-tag.md)).
 - An unborn repository, and a base tree that contains an excluded path,
   store no objects. Capture still succeeds.
 - Dirty captured files stay the working bytes. The copied blob stays

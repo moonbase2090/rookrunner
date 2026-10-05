@@ -6,12 +6,14 @@ declared fields, including step and job
 `if` text, job output expressions, local composite actions read from a
 snapshot, a literal job matrix, a local reusable workflow, service
 containers, an owned checkout of the captured files for
-`uses: actions/checkout@v4` and for `actions/checkout` pinned by a full
-commit SHA, an owned upload for `actions/upload-artifact` and
+`uses: actions/checkout@v` plus digits and for `actions/checkout` pinned
+by a full commit SHA, an owned upload for `actions/upload-artifact` and
 `github/codeql-action/upload-sarif` pinned by a full commit SHA, and a
 read-only `permissions` value.
 That checkout does not fetch a ref, replace
-those files, or persist a credential. The SHA is stored and is not verified.
+those files, or persist a credential. The tag and the SHA are stored and
+are not resolved or verified. `fetch-depth` accepts only the YAML integer
+0. An omitted `fetch-depth` leaves the checkout as it is.
 The owned upload stores its `uses` string and does not fetch the action,
 read an action file, or run its program. It checks that expressions can be
 parsed and does not evaluate them. `run`, `env`, `with`, and step and
@@ -93,6 +95,7 @@ GITHUB_WORKFLOW_SYNTAX = (
 MAX_STEP_TIMEOUT_MINUTES = 360
 STR_TAG = "tag:yaml.org,2002:str"
 BOOL_TAG = "tag:yaml.org,2002:bool"
+INT_TAG = "tag:yaml.org,2002:int"
 MERGE_TAG = "tag:yaml.org,2002:merge"
 SCALAR_TAGS = {
     STR_TAG,
@@ -190,23 +193,27 @@ STEP_KEYS = {
     "uses",
     "with",
 }
-# Owned checkout of files already in the workspace. `actions/checkout@v4`
-# and `actions/checkout@` plus 40 lowercase hex digits are that step. The
-# SHA is stored and is not fetched or verified. This does not read an
-# action file or run the JavaScript action. An omitted `clean` or
-# `persist-credentials` does not mean the upstream default of true.
+# Owned checkout of files already in the workspace. A major tag is
+# `actions/checkout@v` plus one or more digits. `actions/checkout@` plus 40
+# lowercase hex digits is the same step. The tag and the SHA are stored
+# and are not fetched, resolved, or verified. This does not read an action
+# file or run the JavaScript action. An omitted `clean`,
+# `persist-credentials`, or `fetch-depth` does not mean the upstream default.
 # https://docs.github.com/en/actions/reference/security/secure-use
 # https://github.com/actions/checkout
 CHECKOUT_USES = "actions/checkout@v4"
+_CHECKOUT_TAG = re.compile(r"actions/checkout@v[0-9]+")
 _CHECKOUT_SHA = re.compile(r"actions/checkout@[0-9a-f]{40}")
-CHECKOUT_WITH = {"clean", "persist-credentials"}
+CHECKOUT_WITH = {"clean", "persist-credentials", "fetch-depth"}
 
 
 def owned_checkout_uses(text):
     """Return whether `text` is the owned checkout reference."""
 
-    return text == CHECKOUT_USES or (
-        isinstance(text, str) and _CHECKOUT_SHA.fullmatch(text) is not None
+    return isinstance(text, str) and (
+        text == CHECKOUT_USES
+        or _CHECKOUT_TAG.fullmatch(text) is not None
+        or _CHECKOUT_SHA.fullmatch(text) is not None
     )
 
 
@@ -1626,11 +1633,30 @@ class _Planner:
             field = _join(path, key)
             if key not in CHECKOUT_WITH:
                 _unsupported(field)
+            if key == "fetch-depth":
+                accepted[key] = self._fetch_depth(value, field)
+                continue
             if self._bool_scalar(value, field) is not False:
                 _unsupported(field)
             accepted[key] = False
         recorded["with"] = accepted
         return recorded
+
+    def _fetch_depth(self, node, field):
+        """Accept only the YAML integer 0. The value is not evaluated."""
+
+        self._enter(node, field)
+        if not isinstance(node, ScalarNode) or node.tag != INT_TAG:
+            _invalid(f"{field} must be an integer", field)
+        try:
+            value = self.constructor.construct_object(node, deep=False)
+        except yaml.YAMLError:
+            _invalid(f"{field} must be an integer", field)
+        if type(value) is not int:
+            _invalid(f"{field} must be an integer", field)
+        if value != 0:
+            _unsupported(field)
+        return 0
 
     def _owned_upload(self, body, step_field, uses_text):
         """Record an owned upload. The action file is not read."""
@@ -2176,6 +2202,43 @@ def plan_snapshot(snapshot_dir, job_id, action_store=None):
         action_root=root / "files",
         action_store=action_store,
     )
+
+
+def _checkout_wants_history(step):
+    if not isinstance(step, dict) or step.get("checkout") != "captured":
+        return False
+    raw = step.get("with")
+    if not isinstance(raw, dict):
+        return False
+    return raw.get("fetch-depth") == 0
+
+
+def _jobs_want_history(jobs):
+    if not isinstance(jobs, list):
+        return False
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        for step in job.get("steps") or []:
+            if _checkout_wants_history(step):
+                return True
+        call = job.get("call")
+        if isinstance(call, dict) and _jobs_want_history(call.get("jobs")):
+            return True
+    return False
+
+
+def plan_needs_history(plan):
+    """Return whether the accepted plan has an owned checkout with fetch-depth 0.
+
+    A constant-false `if` still counts. The condition can be an expression,
+    and capture cannot know the later result. Composite steps do not carry
+    an owned checkout; that uses string is rejected while planning.
+    """
+
+    if not isinstance(plan, dict):
+        return False
+    return _jobs_want_history(plan.get("jobs"))
 
 
 def remote_action_records(plan):

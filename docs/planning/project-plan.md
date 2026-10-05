@@ -53,9 +53,12 @@ The owner's 2026-10-03 priorities change the horizons:
   group. NS-46 names selected workspace files in the artifact manifest
   and records one local CodeQL SARIF file
   ([upload artifact](../design/upload-artifact.md)). The capability
-  version stays 12. P4 designs an owned checkout for major tags and for
-  `fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
-  engine is unchanged. The implementation follows that design.
+  version stays 12. P4 accepts `actions/checkout@v` plus digits as an
+  owned checkout and copies ancestor history when that plan sets
+  `fetch-depth` to the YAML integer `0`
+  ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
+  keeps one parentless synthesized commit and still excludes the
+  original commit. `.github/workflows/check.yml` is unchanged.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -70,9 +73,12 @@ The owner's 2026-10-03 priorities change the horizons:
   names selected workspace files in the artifact manifest and records
   one local CodeQL SARIF file
   ([upload artifact](../design/upload-artifact.md)). The capability
-  version stays 12. P4 designs an owned checkout for major tags and for
-  `fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
-  engine is unchanged. The implementation follows that design. The rest
+  version stays 12. P4 accepts `actions/checkout@v` plus digits as an
+  owned checkout and copies ancestor history when that plan sets
+  `fetch-depth` to the YAML integer `0`
+  ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
+  keeps one parentless synthesized commit and still excludes the
+  original commit. `.github/workflows/check.yml` is unchanged. The rest
   of the provisional list in [next steps](next-steps.md) is not numbered
   yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.

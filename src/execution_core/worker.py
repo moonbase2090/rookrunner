@@ -1,8 +1,9 @@
 """Single-user Unix worker.
 
 Version 0 submits a synthetic development fixture. It never launches commands
-or reads a workflow. Version 1 captures the repository, verifies that
-snapshot, plans one selected job, and commits a queued run. The scheduler
+or reads a workflow. Version 1 stages the repository, plans one selected job, copies ancestor
+history when that plan has fetch-depth 0, publishes and verifies the
+snapshot, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
 caller-pinned container. That container uses Docker network `bridge` unless
 this worker was started with network `none`. It mounts the Docker engine
@@ -65,6 +66,7 @@ from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
 from .plan import (
     PlanError,
+    plan_needs_history,
     plan_snapshot,
     remote_action_records,
     snapshot_workflow_bytes,
@@ -1160,28 +1162,26 @@ class Worker:
                 "an unresolved owned container blocks a new attempt",
             )
         try:
-            captured = SourceCapture(self.repository, self.state).capture(p["workflow"])
+            capture = SourceCapture(self.repository, self.state)
+            with capture.prepare(p["workflow"]) as prepared:
+                try:
+                    if p.get("event_name") in (
+                        "push",
+                        "pull_request",
+                    ) and not self._event_triggered(p, prepared.path):
+                        return {"triggered": False}
+                except Fault:
+                    raise
+                queued = self.db.execute(
+                    "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
+                ).fetchone()[0]
+                if queued >= MAX_QUEUE:
+                    raise Fault("QUEUE_FULL", "queued run limit reached")
+                store = self.action_store()
+                with store.guard:
+                    return self._plan_and_accept(p, key, normalized, event_text, prepared, store)
         except CaptureError as exc:
             self._capture_fault(exc)
-        snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
-        try:
-            if p.get("event_name") in ("push", "pull_request") and not self._event_triggered(
-                p, snapshot
-            ):
-                self._drop_snapshot(captured["snapshot_id"])
-                return {"triggered": False}
-        except Fault:
-            self._drop_snapshot(captured["snapshot_id"])
-            raise
-        queued = self.db.execute(
-            "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
-        ).fetchone()[0]
-        if queued >= MAX_QUEUE:
-            self._drop_snapshot(captured["snapshot_id"])
-            raise Fault("QUEUE_FULL", "queued run limit reached")
-        store = self.action_store()
-        with store.guard:
-            return self._accept_planned(p, key, normalized, event_text, snapshot, captured, store)
 
     def _event_triggered(self, p, snapshot):
         try:
@@ -1200,16 +1200,48 @@ class Worker:
             p.get("diff_unavailable", False),
         )
 
-    def _accept_planned(self, p, key, normalized, event_text, snapshot, captured, store):
+    def _plan_and_accept(self, p, key, normalized, event_text, prepared, store):
+        """Plan once, copy history before publish, then accept that plan."""
+
         try:
             store.begin()
         except OSError as exc:
-            self._drop_snapshot(captured["snapshot_id"])
             raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
         try:
             try:
+                planned = plan_snapshot(prepared.path, p["job_id"], action_store=store)
+            except PlanError as exc:
+                raise self._plan_fault(exc) from exc
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
+            if plan_needs_history(planned["plan"]):
+                try:
+                    prepared.add_history()
+                except CaptureError as exc:
+                    self._capture_fault(exc)
+            captured = prepared.publish()
+            snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+            return self._accept_planned(
+                p, key, normalized, event_text, snapshot, captured, store, planned
+            )
+        finally:
+            if store.is_open:
+                store.rollback()
+
+    def _accept_planned(
+        self, p, key, normalized, event_text, snapshot, captured, store, planned=None
+    ):
+        if planned is None:
+            try:
+                store.begin()
+            except OSError as exc:
+                self._drop_snapshot(captured["snapshot_id"])
+                raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
+        try:
+            try:
                 manifest = verify_snapshot(snapshot, captured["digest"])
-                planned = plan_snapshot(snapshot, p["job_id"], action_store=store)
+                if planned is None:
+                    planned = plan_snapshot(snapshot, p["job_id"], action_store=store)
             except VerifyError as exc:
                 raise Fault("INTERNAL_ERROR", "captured snapshot failed verification") from exc
             except PlanError as exc:

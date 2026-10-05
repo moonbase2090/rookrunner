@@ -3,7 +3,9 @@
 The workspace is a new directory. It is not the snapshot tree. Bytes are copied
 from the snapshot, not from the original checkout. When the snapshot has an
 object store, the workspace also receives one owned Git directory assembled
-from that store and git.json. A failure removes the partial workspace.
+from that store and git.json. A history store may contain more than one
+commit. HEAD is still the synthesized commit. A failure removes the partial
+workspace.
 """
 
 from contextlib import contextmanager
@@ -268,10 +270,69 @@ def _prepare_git(snapshot_dir):
     metadata = read_git_metadata(snapshot_dir)
     if metadata is None or metadata["base_commit"] is None or not _safe_head(metadata["head"]):
         raise VerifyError("SNAPSHOT_INVALID", "git metadata is not accepted")
-    return metadata, *_read_store(objects, metadata["git_object_format"])
+    return metadata, *_read_store(objects, metadata["git_object_format"], metadata["base_commit"])
 
 
-def _read_store(objects, algorithm):
+def _commit_header(payload):
+    return payload.split(b"\n\n", 1)[0]
+
+
+def _tree_id(payload):
+    first = _commit_header(payload).split(b"\n", 1)[0]
+    if not first.startswith(b"tree "):
+        return None
+    try:
+        return first[len(b"tree ") :].decode("ascii")
+    except UnicodeError:
+        return None
+
+
+def _parent_ids(payload):
+    parents = []
+    for line in _commit_header(payload).split(b"\n"):
+        if not line.startswith(b"parent "):
+            continue
+        try:
+            parents.append(line[len(b"parent ") :].decode("ascii"))
+        except UnicodeError:
+            return None
+    return parents
+
+
+def _history_payload(tree_id, base_commit):
+    return (
+        f"tree {tree_id}\n"
+        f"parent {base_commit}\n"
+        "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+        "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+        "\n"
+        "captured tree\n"
+    ).encode("ascii")
+
+
+def _ancestor_closure(start, parents):
+    seen = set()
+    visiting = set()
+
+    def walk(oid):
+        if oid in seen:
+            return True
+        if oid in visiting or oid not in parents:
+            return False
+        visiting.add(oid)
+        for parent in parents[oid]:
+            if not walk(parent):
+                return False
+        visiting.remove(oid)
+        seen.add(oid)
+        return True
+
+    if not walk(start):
+        return None
+    return seen
+
+
+def _read_store(objects, algorithm, base_commit):
     loose = {}
     kinds = {}
     commits = []
@@ -334,25 +395,46 @@ def _read_store(objects, algorithm):
             kinds[oid] = kind
             if kind == b"commit":
                 commits.append((oid, payload))
-    if len(commits) != 1:
+    if len(commits) == 1:
+        commit_id, payload = commits[0]
+        tree_id = _tree_id(payload)
+        if tree_id is None or kinds.get(tree_id) != b"tree":
+            _failed("object store is not accepted")
+        expected = (
+            f"tree {tree_id}\n"
+            "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+            "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
+            "\n"
+            "captured tree\n"
+        ).encode("ascii")
+        if payload != expected:
+            _failed("object store is not accepted")
+        return commit_id, loose
+    by_id = {}
+    parents = {}
+    synthesized = []
+    for oid, payload in commits:
+        by_id[oid] = payload
+        tree_id = _tree_id(payload)
+        parent_ids = _parent_ids(payload)
+        if tree_id is None or parent_ids is None:
+            _failed("object store is not accepted")
+        parents[oid] = parent_ids
+        if isinstance(base_commit, str) and payload == _history_payload(tree_id, base_commit):
+            synthesized.append((oid, tree_id))
+    if len(synthesized) != 1 or not isinstance(base_commit, str) or base_commit not in by_id:
         _failed("object store is not accepted")
-    commit_id, payload = commits[0]
-    if not payload.startswith(b"tree ") or b"\n" not in payload:
+    synth_id, tree_id = synthesized[0]
+    if kinds.get(tree_id) != b"tree" or _tree_id(by_id[base_commit]) != tree_id:
         _failed("object store is not accepted")
-    try:
-        tree_id = payload.split(b"\n", 1)[0][len(b"tree ") :].decode("ascii")
-    except UnicodeError:
+    for parent_ids in parents.values():
+        for parent in parent_ids:
+            if parent not in by_id:
+                _failed("object store is not accepted")
+    closure = _ancestor_closure(base_commit, parents)
+    if closure is None or synth_id in closure or closure != set(by_id) - {synth_id}:
         _failed("object store is not accepted")
-    expected = (
-        f"tree {tree_id}\n"
-        "author Rookrunner <rookrunner@example.invalid> 0 +0000\n"
-        "committer Rookrunner <rookrunner@example.invalid> 0 +0000\n"
-        "\n"
-        "captured tree\n"
-    ).encode("ascii")
-    if payload != expected or kinds.get(tree_id) != b"tree":
-        _failed("object store is not accepted")
-    return commit_id, loose
+    return synth_id, loose
 
 
 def _ensure_dir(parent_fd, name):

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from execution_core.plan import PlanError, plan_workflow
+from execution_core.plan import plan_workflow
 from execution_core.protocol import canonical
 from execution_core.snapshot import CaptureError, SourceCapture
 
@@ -448,13 +448,15 @@ class SnapshotTests(unittest.TestCase):
         step = planned["job"]["steps"][0]
         self.assertEqual(step["checkout"], "captured")
         self.assertNotIn("action_path", step)
-        with self.assertRaises(PlanError) as raised:
-            plan_workflow(
-                b"name: fixture\non: push\njobs:\n  build:\n    steps:\n"
-                b"      - uses: actions/checkout@v7\n",
-                "build",
-            )
-        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        major = plan_workflow(
+            b"name: fixture\non: push\njobs:\n  build:\n    steps:\n"
+            b"      - uses: actions/checkout@v7\n",
+            "build",
+        )["plan"]
+        major_step = major["job"]["steps"][0]
+        self.assertEqual(major_step["uses"], "actions/checkout@v7")
+        self.assertEqual(major_step["checkout"], "captured")
+        self.assertNotIn("action_path", major_step)
 
     def test_detached_head_stores_null(self):
         self.capture.git("checkout", "--detach")

@@ -215,9 +215,12 @@ when the run is accepted. The inventory rank below is the 2026-10-04
 reading, when that field failed planning. NS-46 names selected
 workspace files in the artifact manifest and records one local CodeQL
 SARIF file ([upload artifact](upload-artifact.md)). The capability
-version stays 12. P4 designs an owned checkout for major tags and for
-`fetch-depth: 0` ([checkout tag](checkout-tag.md)). The engine is
-unchanged. The implementation follows that design. The rank table
+version stays 12. P4 accepts `actions/checkout@v` plus digits as an
+owned checkout and copies ancestor history when that plan sets
+`fetch-depth` to the YAML integer `0`
+([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one
+parentless synthesized commit and still excludes the original commit.
+`.github/workflows/check.yml` is unchanged. The rank table
 above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
