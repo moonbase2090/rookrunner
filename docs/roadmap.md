@@ -12,7 +12,7 @@ the document records the planning baseline.
 | M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
 | M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
 | M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. NS-39 designs owner CI. The credential is the dedicated Rookrunner GitHub App ([check runs](design/check-runs.md)). The engine is unchanged. NS-40 posts one commit status. NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. NS-43 recorded those statuses |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. NS-39 designs owner CI. The credential is the dedicated Rookrunner GitHub App ([check runs](design/check-runs.md)). NS-40 posts one commit status. NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. NS-43 recorded those statuses |
 | M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Not started |
 | M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
 
@@ -100,10 +100,13 @@ through NS-43 in [next steps](planning/next-steps.md).
    `runs-on: ubuntu-latest`
    ([runner image](design/runner-image.md)). An explicit `image` still
    wins. Any other image stays a caller pin. `run_job` still requires
-   a digest and still does not select a default. P5 designs check
-   runs through a dedicated Rookrunner GitHub App and does not change
-   the engine ([check runs](design/check-runs.md)). The rest
-   of the provisional list is not numbered yet.
+   a digest and still does not select a default. P5 posts one check
+   run through the Rookrunner GitHub App when `--app-key` is set, then
+   posts the commit status with that installation token. Omitting
+   `--app-key` keeps the NS-40 token file
+   ([check runs](design/check-runs.md)). The plan schema is unchanged.
+   P7 stays unstarted. The rest of the provisional list is not numbered
+   yet.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request
    (NS-41, implemented). Poll owner repositories from an OS-scheduled

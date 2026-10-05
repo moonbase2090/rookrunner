@@ -112,6 +112,7 @@ from .protocol import (
     valid_id,
 )
 from .snapshot import CaptureError, SourceCapture
+from .checks import check_mapping, check_summary
 from .status import MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
@@ -368,6 +369,15 @@ class Worker:
                     sha TEXT NOT NULL,
                     state TEXT NOT NULL,
                     PRIMARY KEY (run_id, context, sha, state)
+                );
+                CREATE TABLE IF NOT EXISTS check_posts (
+                    run_id TEXT NOT NULL,
+                    context TEXT NOT NULL,
+                    sha TEXT NOT NULL,
+                    check_run_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    conclusion TEXT,
+                    PRIMARY KEY (run_id, context, sha)
                 );
             """)
             columns = {row[1] for row in self.db.execute("PRAGMA table_info(artifacts)")}
@@ -1689,12 +1699,17 @@ class Worker:
         raise Fault("METHOD_NOT_FOUND", "unknown method")
 
     def report_status(self, p):
-        """Decide or record one commit status. The credential is not a parameter."""
+        """Decide or record one commit status. The credential is not a parameter.
+
+        Optional check fields record the check-run id and the mapped status
+        and conclusion. They are not plan fields. `checks` asks for that
+        mapping on a decision. A repeated terminal conclusion is a skip.
+        """
 
         fields(
             p,
             ("run_id", "tested_commit", "status_sha", "context"),
-            ("record",),
+            ("record", "checks", "check_run_id", "check_status", "check_conclusion"),
         )
         tested = p["tested_commit"]
         status_sha = p["status_sha"]
@@ -1707,6 +1722,15 @@ class Worker:
             character in context for character in "\0\r\n"
         ):
             invalid("context must be one line of at most 1024 characters")
+        if "checks" in p and p["checks"] is not True:
+            invalid("checks is not accepted")
+        recording_check = "check_run_id" in p or "check_status" in p or "check_conclusion" in p
+        if p.get("checks") and ("record" in p or recording_check):
+            invalid("missing or unknown parameters")
+        if recording_check and ("check_run_id" not in p or "check_status" not in p):
+            invalid("missing or unknown parameters")
+        if "check_conclusion" in p and "check_run_id" not in p:
+            invalid("missing or unknown parameters")
         record = self.get(p["run_id"])
         if record["input"].get("kind") != "workflow_job":
             raise Fault("STATUS_REFUSED", "run is not a workflow run")
@@ -1719,21 +1743,99 @@ class Worker:
         if manifest["base_commit"] != tested:
             raise Fault("STATUS_REFUSED", "base_commit does not equal the tested commit")
         state = github_state(record["state"], record["exit_code"])
+        check_status, check_conclusion = check_mapping(record["state"], record["exit_code"])
         posted = p.get("record")
-        if posted is None:
+        if posted is None and not recording_check:
+            if p.get("checks"):
+                return self._check_decision(
+                    record, context, status_sha, state, check_status, check_conclusion
+                )
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):
                 return {"action": "skip", "state": state}
             return {"action": "post", "state": state}
-        if posted != state or posted not in {"pending", "success", "failure", "error"}:
+        if posted is not None and (
+            posted != state or posted not in {"pending", "success", "failure", "error"}
+        ):
             invalid("recorded state does not match the run")
+        if recording_check:
+            self._accept_check_record(p, check_status, check_conclusion)
         with self.db:
-            self.db.execute(
-                "INSERT OR IGNORE INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
-                (record["run_id"], context, status_sha, posted),
-            )
+            if recording_check:
+                self.db.execute(
+                    """
+                    INSERT INTO check_posts(
+                        run_id, context, sha, check_run_id, status, conclusion
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id, context, sha) DO UPDATE SET
+                        check_run_id=excluded.check_run_id,
+                        status=excluded.status,
+                        conclusion=excluded.conclusion
+                    """,
+                    (
+                        record["run_id"],
+                        context,
+                        status_sha,
+                        int(p["check_run_id"]),
+                        p["check_status"],
+                        p.get("check_conclusion"),
+                    ),
+                )
+            if posted is not None:
+                self.db.execute(
+                    "INSERT OR IGNORE INTO status_posts(run_id, context, sha, state) "
+                    "VALUES (?, ?, ?, ?)",
+                    (record["run_id"], context, status_sha, posted),
+                )
         return {"action": "recorded", "state": state}
+
+    def _accept_check_record(self, p, check_status, check_conclusion):
+        identifier = integer(p["check_run_id"], 1, 2**63 - 1, "check_run_id")
+        p["check_run_id"] = identifier
+        if p["check_status"] not in {"queued", "in_progress", "completed"}:
+            invalid("recorded check does not match the run")
+        if p["check_status"] != check_status:
+            invalid("recorded check does not match the run")
+        recorded_conclusion = p.get("check_conclusion", None)
+        if check_conclusion is None:
+            if "check_conclusion" in p:
+                invalid("recorded check does not match the run")
+        elif recorded_conclusion != check_conclusion:
+            invalid("recorded check does not match the run")
+        if recorded_conclusion is not None and recorded_conclusion not in {
+            "success",
+            "failure",
+            "cancelled",
+        }:
+            invalid("recorded check does not match the run")
+
+    def _check_decision(self, record, context, status_sha, state, check_status, check_conclusion):
+        row = self.db.execute(
+            "SELECT check_run_id, conclusion FROM check_posts WHERE run_id=? AND context=? AND sha=?",
+            (record["run_id"], context, status_sha),
+        ).fetchone()
+        if (
+            check_conclusion in {"success", "failure", "cancelled"}
+            and row is not None
+            and row["conclusion"] == check_conclusion
+        ):
+            return {"action": "skip", "state": state}
+        result = {
+            "action": "post",
+            "state": state,
+            "check_status": check_status,
+            "check_summary": check_summary(record["state"], record["exit_code"]),
+        }
+        if check_conclusion is not None:
+            result["check_conclusion"] = check_conclusion
+        if row is not None:
+            result["check_run_id"] = row["check_run_id"]
+        if state in TERMINAL_STATUS and self._status_recorded(
+            record["run_id"], context, status_sha, state
+        ):
+            result["status_recorded"] = True
+        return result
 
     def _status_manifest(self, record):
         snapshot_id = record["input"].get("snapshot_id")

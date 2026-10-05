@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import time
 
+from .checks import post_check_flow
 from .poll import PollError, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
@@ -162,6 +163,13 @@ def follow_run(state, run_id):
         time.sleep(POLL_SECONDS)
 
 
+def _one_credential(app_key, credential_file):
+    if app_key and credential_file:
+        raise StatusError("INVALID_PARAMS", "one post accepts one credential")
+    if not app_key and not credential_file:
+        raise StatusError("INVALID_PARAMS", "one post needs one credential")
+
+
 def _status_params(args, record=None):
     params = {
         "run_id": args.run_id,
@@ -171,7 +179,28 @@ def _status_params(args, record=None):
     }
     if record is not None:
         params["record"] = record
+    elif args.app_key:
+        params["checks"] = True
     return params
+
+
+def _record_check(args, decision, posted):
+    if posted.check_id is None and not posted.status_posted:
+        return None
+    params = {
+        "run_id": args.run_id,
+        "tested_commit": args.tested_commit,
+        "status_sha": args.status_sha,
+        "context": args.context,
+    }
+    if posted.status_posted:
+        params["record"] = decision["state"]
+    if posted.check_id is not None:
+        params["check_run_id"] = posted.check_id
+        params["check_status"] = decision["check_status"]
+        if decision.get("check_conclusion") is not None:
+            params["check_conclusion"] = decision["check_conclusion"]
+    return call(args.state, "run.status", params)
 
 
 def _print_status_error(error):
@@ -212,6 +241,7 @@ def report_poll(args):
             jobs=args.job,
             image=args.image,
             credential_file=args.credential_file,
+            app_key=args.app_key,
             api_base=args.api_base,
             state=args.state,
             caller=_worker_caller(args.state),
@@ -230,6 +260,10 @@ def report_poll(args):
 def report_status(args):
     """Post one status after the worker accepts the run. Skip a repeated terminal state."""
 
+    try:
+        _one_credential(args.app_key, args.credential_file)
+    except StatusError as error:
+        _print_status_error(error)
     reply = call(args.state, "run.status", _status_params(args))
     if "error" in reply:
         print(canonical(reply))
@@ -244,6 +278,9 @@ def report_status(args):
     if "error" in described:
         print(canonical(described))
         sys.exit(1)
+    if args.app_key:
+        _report_app_status(args, decision, described["result"]["repository"])
+        return
     try:
         token = read_credential(args.credential_file, args.state, described["result"]["repository"])
         try:
@@ -262,6 +299,35 @@ def report_status(args):
     recorded = call(args.state, "run.status", _status_params(args, decision["state"]))
     print(canonical(recorded))
     sys.exit(1 if "error" in recorded else 0)
+
+
+def _report_app_status(args, decision, repository_root):
+    try:
+        posted = post_check_flow(
+            api_base=args.api_base,
+            repository=args.repository,
+            sha=args.status_sha,
+            context=args.context,
+            run_id=args.run_id,
+            check_status=decision["check_status"],
+            check_conclusion=decision.get("check_conclusion"),
+            check_summary_text=decision["check_summary"],
+            check_run_id=decision.get("check_run_id"),
+            status_state=decision["state"],
+            post_status_request=decision.get("status_recorded") is not True,
+            app_key=args.app_key,
+            state_dir=args.state,
+            repository_root=repository_root,
+        )
+    except StatusError as error:
+        _print_status_error(error)
+    recorded = _record_check(args, decision, posted)
+    if posted.error is not None:
+        if recorded is not None:
+            print(canonical(recorded))
+        _print_status_error(posted.error)
+    print(canonical(recorded))
+    sys.exit(1 if recorded is None or "error" in recorded else 0)
 
 
 def main():
@@ -399,8 +465,16 @@ def main():
     status.add_argument("--context", required=True)
     status.add_argument(
         "--credential-file",
-        required=True,
         help="operator token file read only when a status is posted",
+    )
+    status.add_argument(
+        "--app-key",
+        help=(
+            "private key path for the Rookrunner GitHub App. "
+            "The file must be ~/Secrets/github-app/rookrunner/private-key.pem. "
+            "Omit this flag to post a commit status from --credential-file. "
+            "Passing both refuses before any HTTP request."
+        ),
     )
     status.add_argument(
         "--api-base",
@@ -426,8 +500,15 @@ def main():
     )
     poll.add_argument(
         "--credential-file",
-        required=True,
         help="operator token file read only when a status is posted",
+    )
+    poll.add_argument(
+        "--app-key",
+        help=(
+            "private key path for the Rookrunner GitHub App. "
+            "Omit this flag to post a commit status from --credential-file. "
+            "Passing both refuses before any HTTP request."
+        ),
     )
     poll.add_argument(
         "--api-base",

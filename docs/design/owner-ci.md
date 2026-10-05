@@ -5,9 +5,11 @@ change the engine. The capability version stays 12. A version 11 plan
 is not migrated. NS-40 through NS-43 implement the path. NS-43 recorded one push and
 one pull request for moonbase2090/rookrunner
 ([validation](../validation/owner-ci-rookrunner.md)). The credential
-is the Rookrunner GitHub App recorded below. Check runs are designed
-in [check runs](check-runs.md) and are not implemented. The engine is
-unchanged. This is not a GitHub-equivalence claim.
+is the Rookrunner GitHub App recorded below. P5 posts one check run
+when `--app-key` is set, then posts the commit status with that
+installation token ([check runs](check-runs.md)). Omitting `--app-key`
+keeps the NS-40 token file. The plan schema is unchanged. P7 stays
+unstarted. This is not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
 only. There is no listener, no runner registration, no Terraform, and
@@ -117,7 +119,8 @@ and are not evaluated.
 Commit statuses first. Any credential that can write a commit status
 can create one. Creating a check run is limited to GitHub Apps. The
 credential below is that App. The posting contract is
-[check runs](check-runs.md). This slice does not post a check run.
+[check runs](check-runs.md). P5 posts one check run when `--app-key`
+is set. Omitting the flag keeps the commit status below.
 The context is `rookrunner/` plus the workflow file name plus `/` plus
 the job id. The state mapping is NS-40: `queued` and `running` post
 `pending`, `succeeded` with exit code 0 posts `success`, `failed`
@@ -167,7 +170,7 @@ No number is added here. The limits already cited for this track:
 | REST primary limit, GitHub App installation | 5,000 per hour minimum, 12,500 maximum outside Enterprise Cloud | same | NS-42 |
 | Content-generating requests | 80 per minute and 500 per hour | same | NS-40, NS-42 |
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
-| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | P5, designed |
+| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | P5 |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
 | Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
 
@@ -236,9 +239,11 @@ operator-built image when `worker --runner-image` is set and `image`
 is omitted and every selected job is literal `runs-on: ubuntu-latest`
 ([runner image](runner-image.md)). An explicit `image` still wins. Any
 other image stays a caller pin. `run_job` still requires a digest and
-still does not select a default. P5 designs check runs through a
-dedicated Rookrunner GitHub App and does not change the engine
-([check runs](check-runs.md)). The rank table
+still does not select a default. P5 posts one check run through the
+Rookrunner GitHub App when `--app-key` is set, then posts the commit
+status with that installation token. Omitting `--app-key` keeps the
+NS-40 token file ([check runs](check-runs.md)). The plan schema is
+unchanged. P7 stays unstarted. The rank table
 above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.

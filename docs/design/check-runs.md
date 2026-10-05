@@ -1,11 +1,13 @@
 # Check runs
 
-Status: designed. This slice writes this document and does not change
-the engine. The capability version stays 12. A version 11 plan is not
-migrated. No plan field is added. The plan schema is unchanged.
-`.github/workflows/check.yml` is unchanged. NS-40 still posts one
-commit status from a token file. This is not a GitHub-equivalence
-claim. P7 stays unstarted.
+Status: implemented. `--app-key` posts one check run and then the
+commit status with the installation token. Omitting `--app-key` keeps
+the NS-40 token file. The capability version stays 12. A version 11
+plan is not migrated. No plan field and no capability entry are added.
+The plan schema is unchanged. `run.status` accepts optional check
+fields because that schema rejects unknown properties. Those fields
+are not on `run.get`. `.github/workflows/check.yml` is unchanged. This
+is not a GitHub-equivalence claim. P7 stays unstarted.
 
 The owner chose the credential on 2026-10-05. It is a new GitHub App
 named Rookrunner. It is not the moonbase2090-agents App. The App is
@@ -167,15 +169,17 @@ JWT, the installation token, or the `Authorization` header.
 
 ## What stays out of plans and records
 
-No plan field, protocol field, or capability entry is added. The plan
-schema is unchanged. A plan does not gain a credential, a key path, a
-client id, or an installation id.
+No plan field and no capability entry are added. The plan schema is
+unchanged. `run.status` gains optional check fields because that
+schema rejects unknown properties. The worker stores the integer
+check-run id and the mapped status and conclusion in `check_posts`,
+the same way NS-40 stores a posted commit-status state in
+`status_posts`. `run.get` does not gain those fields. A plan does not
+gain a credential, a key path, a client id, or an installation id.
 
-A run record may store the integer check-run id and the mapped status
-and conclusion, the same way NS-40 stores a posted commit-status state.
-It does not store the private key, the PEM text, the JWT, the
-installation token, the client id, the installation id, the key path,
-or a response body.
+That stored row does not include the private key, the PEM text, the
+JWT, the installation token, the client id, the installation id, the
+key path, or a response body.
 
 `GITHUB_TOKEN` stays unset. The installation token is not exported to
 the job. `security-events: write` and `actions: write` stay rejected.
@@ -210,10 +214,11 @@ does not remove that warning.
 7. The job environment still has no `GITHUB_TOKEN`. `security-events:
    write` and `actions: write` still fail planning.
 
-## What this design does not do
+## What this implementation does not do
 
-No code changes. The App is not created and is not installed. No
-sign-in is started. No secret is read. NS-40's token file still posts
-commit statuses. Poll list requests stay unauthenticated. Contents
-read does not become a fetch. There is no webhook, no runner
+The App is not created and is not installed. No sign-in is started.
+No file under `~/Secrets/github-app/rookrunner/` is read by a test or
+by this repository. Omitting `--app-key` still posts a commit status
+from the NS-40 token file. Poll list requests stay unauthenticated.
+Contents read does not become a fetch. There is no webhook, no runner
 registration, and no `GITHUB_TOKEN`. P7 stays unstarted.

@@ -48,7 +48,7 @@ def github_state(run_state, exit_code):
     return "error"
 
 
-def status_url(api_base, repository, sha):
+def api_origin(api_base):
     parsed = urllib.parse.urlsplit(api_base)
     if (
         parsed.scheme not in {"https", "http"}
@@ -60,11 +60,26 @@ def status_url(api_base, repository, sha):
         or parsed.fragment
     ):
         raise StatusError("INVALID_PARAMS", "api base must be an http or https origin")
+    return api_base.rstrip("/")
+
+
+def require_repository(repository):
     if not isinstance(repository, str) or _REPOSITORY.fullmatch(repository) is None:
         raise StatusError("INVALID_PARAMS", "repository must be owner/name")
+    return repository
+
+
+def require_sha(sha):
     if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
         raise StatusError("INVALID_PARAMS", "status SHA must be 40 or 64 lowercase hex characters")
-    return f"{api_base.rstrip('/')}/repos/{repository}/statuses/{sha}"
+    return sha
+
+
+def status_url(api_base, repository, sha):
+    origin = api_origin(api_base)
+    require_repository(repository)
+    require_sha(sha)
+    return f"{origin}/repos/{repository}/statuses/{sha}"
 
 
 def _inside(path, root):
