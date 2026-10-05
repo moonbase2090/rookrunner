@@ -65,7 +65,7 @@ The owner's 2026-10-03 priorities change the horizons:
   ([runner image](../design/runner-image.md)). An explicit `image`
   still wins. Any other image stays a caller pin. `run_job` still
   requires a digest and still does not select a default. P5
-  posts one check run through the Rookrunner GitHub App when `--app-key` is set, then posts the commit status with that installation token. Omitting `--app-key` keeps the NS-40 token file. The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for owner-repository push and pull-request runs on this one local worker and does not change the engine ([secrets](../design/secrets.md)). Open questions remain for MB2090.
+  posts one check run through the Rookrunner GitHub App when `--app-key` is set, then posts the commit status with that installation token. Omitting `--app-key` keeps the NS-40 token file. The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for owner-repository push and pull-request runs on this one local worker and does not change the engine ([secrets](../design/secrets.md)). MB2090 accepted the amended answers on 2026-10-05.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -92,7 +92,7 @@ The owner's 2026-10-03 priorities change the horizons:
   ([runner image](../design/runner-image.md)). An explicit `image`
   still wins. Any other image stays a caller pin. `run_job` still
   requires a digest and still does not select a default. P5
-  posts one check run through the Rookrunner GitHub App when `--app-key` is set, then posts the commit status with that installation token. Omitting `--app-key` keeps the NS-40 token file. The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for owner-repository push and pull-request runs on this one local worker and does not change the engine ([secrets](../design/secrets.md)). Open questions remain for MB2090. The rest
+  posts one check run through the Rookrunner GitHub App when `--app-key` is set, then posts the commit status with that installation token. Omitting `--app-key` keeps the NS-40 token file. The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for owner-repository push and pull-request runs on this one local worker and does not change the engine ([secrets](../design/secrets.md)). MB2090 accepted the amended answers on 2026-10-05. The rest
   of the provisional list in [next steps](next-steps.md) is not numbered
   yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.

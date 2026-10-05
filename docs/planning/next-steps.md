@@ -50,7 +50,8 @@ keeps the NS-40 token file ([check runs](../design/check-runs.md)).
 The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and
 `write` permissions for owner-repository push and pull-request runs
 on this one local worker and does not change the engine
-([secrets](../design/secrets.md)). Open questions remain for MB2090.
+([secrets](../design/secrets.md)). MB2090 accepted the amended
+answers on 2026-10-05.
 The rest of the
 provisional list is not numbered yet.
 
@@ -1400,8 +1401,8 @@ assume a fixed rate.
   (https://docs.github.com/en/actions/reference/security/secure-use).
 - Deploy workflows. Secrets, `GITHUB_TOKEN`, and `write` permissions
   are designed in [secrets](../design/secrets.md). The engine is
-  unchanged. Open questions remain for MB2090. Deploy workflows stay
-  deferred until that design is implemented.
+  unchanged. MB2090 accepted the amended answers on 2026-10-05.
+  Deploy workflows stay deferred until that plan is implemented.
 - The `actions/cache` and artifact HTTP services, Docker actions, `pre`
   entries, `node20` actions, tag or branch action refs, and private
   action repositories.
@@ -2243,7 +2244,8 @@ status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](../design/check-runs.md)). The plan
 schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions and does not change the engine
-([secrets](../design/secrets.md)). Open questions remain for MB2090.
+([secrets](../design/secrets.md)). MB2090 accepted the amended
+answers on 2026-10-05.
 
 Settled there, so the implementation does not reopen them:
 
@@ -2275,7 +2277,8 @@ optional check fields because that schema rejects unknown properties.
 `.github/workflows/check.yml` is unchanged. Omitting `--app-key` keeps
 the NS-40 token file. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions and does not change the engine
-([secrets](../design/secrets.md)). Open questions remain for MB2090.
+([secrets](../design/secrets.md)). MB2090 accepted the amended
+answers on 2026-10-05.
 
 The owner chose the credential on 2026-10-05:
 
@@ -2304,13 +2307,39 @@ engine. The capability version stays 12. A version 11 plan is not
 migrated. No plan field is added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
 stay rejected. `GITHUB_TOKEN` stays unset. The `secrets` context
-stays withheld. Open questions remain for MB2090. macOS jobs stay
-deferred.
+stays withheld. MB2090 accepted the amended answers on
+2026-10-05. macOS jobs stay deferred.
 
 The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
 App ID is 5201333. The installation and the private key are still
 pending. This design does not install the App, does not start a
 sign-in, and does not read a key.
+
+The seven decisions and the proof for each pull request are in
+[secrets](../design/secrets.md). The implementation order is:
+
+1. **p7-mask.** Token prefixes, including `github_pat_`, plus the
+   base64, JSON, and percent-encoded forms. Line holds,
+   annotations, stored copies, and the check-run body.
+2. **p7-trust-gate.** Forks compare numeric repository ids. A null
+   head repository is a fork. The secret allowlist defaults to a
+   push to the default branch.
+3. **p7-socket-lock.** `--docker-socket` is mutually exclusive with
+   `worker --app-key` and `worker --secrets` unless the `~/Secrets`
+   probe shows that directory is not shared.
+4. **p7-secret-env.** Step `env` and `with` read the fixed root
+   `~/Secrets/rookrunner-secrets/<owner>/<repo>/`. A missing name
+   is an empty string.
+5. **p7-secret-run.** A `run` script is rewritten to
+   `${RR_SECRET_NAME}` for bash and sh only.
+6. **p7-job-token.** Mint only when a step needs a token, revoke it
+   when the job ends, fail the job when the mint fails, and warn at
+   55 minutes. `secrets.GITHUB_TOKEN` aliases the job token. The
+   mint body names the repository and Contents read.
+   `permissions: {}` mints nothing.
+
+Each of those pull requests keeps capability version 12 and leaves
+`.github/workflows/check.yml` unchanged.
 
 ### Provisional after NS-43
 
@@ -2319,8 +2348,8 @@ The NS-39 inventory reordered this list. At that reading,
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
 NS-46 implements item 3. P4 implements item 4. P6 implements item 6.
 P5 implements item 5. P7 designs item 7 and does not change the
-engine ([secrets](../design/secrets.md)). Open questions remain for
-MB2090.
+engine ([secrets](../design/secrets.md)). MB2090 accepted the
+amended answers on 2026-10-05.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2370,4 +2399,7 @@ MB2090.
    owner-repository push and pull-request runs on this one local
    worker. Designed
    ([secrets](../design/secrets.md)). The engine is unchanged.
-   Open questions remain for MB2090. macOS jobs stay deferred.
+   MB2090 accepted the amended answers on 2026-10-05. The
+   implementation order is p7-mask, p7-trust-gate,
+   p7-socket-lock, p7-secret-env, p7-secret-run, and
+   p7-job-token. macOS jobs stay deferred.

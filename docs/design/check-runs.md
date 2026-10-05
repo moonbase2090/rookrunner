@@ -9,7 +9,8 @@ fields because that schema rejects unknown properties. Those fields
 are not on `run.get`. `.github/workflows/check.yml` is unchanged. This
 is not a GitHub-equivalence claim. P7 designs secrets,
 `GITHUB_TOKEN`, and `write` permissions and does not change this
-post ([secrets](secrets.md)). Open questions remain for MB2090.
+post ([secrets](secrets.md)). MB2090 accepted the amended answers
+on 2026-10-05.
 
 The owner chose the credential on 2026-10-05. It is a new GitHub App.
 Its name is Rookrunner-App. It is not the moonbase2090-agents App.
