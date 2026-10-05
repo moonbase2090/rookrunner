@@ -15,6 +15,14 @@ that socket. `worker --node24 DIR` mounts that directory read-only at
 omits `image` when every selected job has `runs-on: ubuntu-latest`.
 The worker does not pull, build, or publish it. An explicit `image`
 still wins.
+`worker --secrets` takes no path and requires `--github-repository`.
+`worker --app-key` accepts only the Rookrunner App key path and does
+not open it. `--secret-ref` and `--secret-pusher` may be repeated.
+`--docker-socket` combined with `--app-key` or `--secrets` refuses
+unless `--runner-image` is set and the `~/Secrets` probe exits 0.
+A worker that starts with `--docker-socket` warns that the exposure
+includes the key directory and the secret root. No secret is injected
+and no job token is minted.
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.
@@ -47,6 +55,7 @@ import signal
 import socket
 import sqlite3
 import stat
+import sys
 import tempfile
 import threading
 import uuid
@@ -113,6 +122,7 @@ from .protocol import (
 )
 from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
+from .socket_lock import HOST_CONTROL_WARNING, accept_socket_flags
 from .status import MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
@@ -277,6 +287,11 @@ class Worker:
         action_remote=None,
         node24=None,
         runner_image=None,
+        secrets=False,
+        github_repository=None,
+        app_key=None,
+        secret_refs=None,
+        secret_pushers=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
@@ -300,6 +315,21 @@ class Worker:
             if self.runner_image is None
             else "sha256:" + self.runner_image.rsplit("sha256:", 1)[1]
         )
+        flags = accept_socket_flags(
+            docker_socket=docker_socket,
+            secrets=secrets,
+            github_repository=github_repository,
+            app_key=app_key,
+            secret_refs=secret_refs,
+            secret_pushers=secret_pushers,
+            runner_image=self.runner_image,
+        )
+        self.secrets = flags.secrets
+        self.github_repository = flags.github_repository
+        self.app_key = flags.app_key
+        self.secret_refs = flags.secret_refs
+        self.secret_pushers = flags.secret_pushers
+        self.host_control_warning = HOST_CONTROL_WARNING if docker_socket else None
         self.action_remote = action_remote
         self._action_store = None
         if disk_budget is None:
@@ -1987,6 +2017,12 @@ def serve(
     docker_socket=False,
     node24=None,
     runner_image=None,
+    *,
+    secrets=False,
+    github_repository=None,
+    app_key=None,
+    secret_refs=None,
+    secret_pushers=None,
 ):
     worker = Worker(
         repository,
@@ -1996,7 +2032,14 @@ def serve(
         docker_socket=docker_socket,
         node24=node24,
         runner_image=runner_image,
+        secrets=secrets,
+        github_repository=github_repository,
+        app_key=app_key,
+        secret_refs=secret_refs,
+        secret_pushers=secret_pushers,
     )
+    if worker.host_control_warning:
+        print(worker.host_control_warning, file=sys.stderr, flush=True)
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()

@@ -1,8 +1,9 @@
 # Secrets, GITHUB_TOKEN, and write permissions
 
-Status: designed. p7-mask and p7-trust-gate are implemented. The
-other four pull requests in the plan are not. MB2090 accepted the
-amended answers for all seven questions on 2026-10-05. The source of
+Status: designed. p7-mask, p7-trust-gate, and p7-socket-lock are
+implemented. The other three pull requests in the plan are not.
+MB2090 accepted the amended answers for all seven questions on
+2026-10-05. The source of
 those answers is the review comment on pull request 63:
 
 https://github.com/moonbase2090/rookrunner/pull/63#issuecomment-6001650970
@@ -10,9 +11,11 @@ https://github.com/moonbase2090/rookrunner/pull/63#issuecomment-6001650970
 This document records the accepted answers and the implementation
 plan. p7-mask changes the job mask. p7-trust-gate compares
 pull-request repositories by numeric id and stores the allowlist
-fields on the event. The capability version stays 12. A
-version 11 plan is not migrated. No plan field and no capability
-entry are added. The plan schema is unchanged.
+fields on the event. p7-socket-lock adds the worker secret flags
+and refuses `--docker-socket` combined with `--app-key` or
+`--secrets` unless the `~/Secrets` probe exits 0. The capability
+version stays 12. A version 11 plan is not migrated. No plan field
+and no capability entry are added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
 stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. The
 `secrets` context stays withheld. No job token is minted. This is
@@ -20,8 +23,9 @@ not a GitHub-equivalence claim.
 
 The seven answers below are accepted direction. Masking from answer
 3 is implemented. The fork comparison and the allowlist match from
-answer 7 are implemented. The secret files, the worker flags, and
-the job token are not. Deploy workflows and
+answer 7 are implemented. The worker flags and the socket lock from
+answer 6 are implemented. The secret files and the job token are
+not. Deploy workflows and
 macOS jobs stay deferred until the implementation plan below has
 landed.
 
@@ -93,7 +97,10 @@ logs a warning that does not include the value. The check-run post
 applies the prefix rules to its request body. An empty or
 whitespace-only value is not a mask. The mask list is not copied
 into the next job. stderr is masked with the masks registered while
-that step's stdout was read. This does not open the secret directory
+that step's stdout was read. Reusable-workflow call outputs are still
+mapped through a fresh mask list. No engine path registers a secret,
+so omission does not apply at that boundary yet. p7-secret-env passes
+the job mask into that mapping. This does not open the secret directory
 and does not mint a token.
 
 The poll compares a pull request's head and base repository ids.
@@ -115,9 +122,31 @@ listed ref matches exactly. A listed login matches with ASCII case
 folding. The default push stays a match when a list is non-empty.
 A missing login does not match a pusher entry. A local submit that
 does not carry those fields does not match the default rule. No
-secret is read and no token is minted. `worker --secrets`,
-`worker --secret-ref`, and `worker --secret-pusher` are not added
-yet.
+secret is read and no token is minted.
+
+`worker --secrets` takes no path and requires
+`worker --github-repository owner/name`. Any other shape is a
+refusal at startup, and the error names the flag.
+`worker --app-key` accepts only
+`~/Secrets/github-app/rookrunner-app/private-key.pem` and does not
+open that file. `worker --secret-ref` and `worker --secret-pusher`
+may be repeated. A ref must be a full ref. A pusher must be a
+GitHub login. `--docker-socket` combined with `--app-key` or
+`--secrets` refuses at startup and names both flags, unless
+`worker --runner-image` is set and the `~/Secrets` probe exits 0.
+The probe's only host mount is `~/Secrets`, read-only. It does not
+receive the Docker socket. Its command prints no file names and no
+file bytes. The probe passes when the mount is rejected or the path
+is not a usable directory. It fails when the path is a usable
+directory. The container is removed before the worker serves. A
+missing runner image, a daemon that cannot be contacted, or an image
+failure other than the mount refuses the combination. A worker that
+sets `--docker-socket` and sets neither `--app-key` nor `--secrets`
+still starts. Its host-control warning names
+`~/Secrets/github-app/rookrunner-app/` and
+`~/Secrets/rookrunner-secrets/`. This does not inject a secret and
+does not mint a job token. `poll` and `status` keep the post
+credential they have today.
 
 ## Threat model
 
@@ -692,7 +721,9 @@ sign-in, or reads a real key.
    An empty file, a bad mode, a symlink, a lowercase file name, a
    second repository's folder, and a `GITHUB_` file are refusals.
    One trailing newline is stripped. The value is registered on
-   the mask list before the step writes a log line. The plan, the
+   the mask list before the step writes a log line. Reusable-workflow
+   call outputs are mapped through that same job mask, not a fresh
+   mask list. The plan, the
    run record, and stored log pages do not contain it.
    `secrets.GITHUB_TOKEN` is recognized and stays unset until the
    token pull request. A reference with `--secrets` omitted stays
@@ -765,7 +796,8 @@ each item proves it.
 
 ## What this design does not do
 
-p7-mask and p7-trust-gate change the engine as the plan names.
+p7-mask, p7-trust-gate, and p7-socket-lock change the engine as
+the plan names.
 No secret directory is created. No token is minted. No sign-in is
 started. No file under
 `~/Secrets/github-app/rookrunner-app/` is read. The App is not

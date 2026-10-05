@@ -13,7 +13,7 @@ secrets, `GITHUB_TOKEN`, and `write` permissions for
 owner-repository push and pull-request runs on this one local worker
 ([secrets](secrets.md)). p7-mask changes the job mask. p7-trust-gate
 compares pull-request repository ids and stores the allowlist fields
-on the event. The other P7 pull requests are not implemented. This is
+on the event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. The other P7 pull requests are not implemented. This is
 not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
@@ -268,8 +268,11 @@ unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions for owner-repository push and pull-request runs on this
 one local worker ([secrets](secrets.md)). p7-mask changes the job
 mask. p7-trust-gate compares pull-request repository ids and stores
-the allowlist fields on the event. The other P7 pull requests are
-not implemented. MB2090 accepted the amended answers on 2026-10-05.
+the allowlist fields on the event. p7-socket-lock adds the worker
+secret flags and refuses --docker-socket combined with --app-key or
+--secrets unless the ~/Secrets probe exits 0. The other P7 pull
+requests are not implemented. MB2090 accepted the amended answers on
+2026-10-05.
 The rank table above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
@@ -363,7 +366,8 @@ this inventory. Reordered by the counts above:
 5. Check runs, if the owner chooses a GitHub App.
 6. A runner image for `ubuntu-latest` jobs that use `sudo` and apt.
 7. `write` permissions and `GITHUB_TOKEN`. Designed in
-   [secrets](secrets.md). p7-mask and p7-trust-gate are implemented.
+   [secrets](secrets.md). p7-mask, p7-trust-gate, and p7-socket-lock
+   are implemented.
    MB2090 accepted the amended answers on 2026-10-05. macOS jobs stay
    deferred.
 
