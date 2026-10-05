@@ -55,9 +55,11 @@ uses `ubuntu-latest` and does not run `sudo` or `apt`. Its identified
 Rookrunner run already succeeded with a caller-pinned image. This
 design does not change that workflow.
 
-P5 designs check runs through the Rookrunner GitHub App and does not
-change the engine ([check runs](check-runs.md)). The App is not
-created yet. This document does not create it.
+P5 posts one check run through the Rookrunner GitHub App when
+`--app-key` is set, then posts the commit status with that
+installation token ([check runs](check-runs.md)). Omitting `--app-key`
+keeps the NS-40 token file. The plan schema is unchanged. The App is
+not created yet. This document does not create it. P7 stays unstarted.
 
 ## Options
 
@@ -185,8 +187,7 @@ The implementation does the following.
    already stores the image digest. `.github/workflows/check.yml` stays
    unchanged. The dogfood caller still passes `--image`. `GITHUB_TOKEN`
    stays unset. `security-events: write`
-   and `actions: write` stay rejected. The P5 implementation and P7
-   stay unstarted.
+   and `actions: write` stay rejected. P7 stays unstarted.
    macOS stays deferred.
 
 ## Open owner decisions
@@ -242,6 +243,6 @@ The engine does not build, pull, or publish the image. The operator
 builds the Dockerfile. No root job. No privileged container. No host
 credential mount. No change to `runs-on` for a caller who passes
 `image`. No macOS image. No `actions/runner` agent. No `GITHUB_TOKEN`.
-The P5 implementation and P7 stay unstarted. The default capture
+P7 stays unstarted. The default capture
 still excludes the original commit. Decision 0002 still holds for every image that is
 not this operator digest: the caller passes the pin.

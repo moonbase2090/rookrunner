@@ -5,9 +5,10 @@ branch heads and open pull requests, fetches into the dedicated clone,
 submits each new SHA, and posts commit statuses. It then exits. It is
 not a resident service, a listener, or a runner registration.
 
-List requests are conditional and do not send the credential. The
-credential is read only when a status is posted, which is the NS-40
-rule. A response whose rate-limit header reports nothing remaining is
+List requests are conditional and do not send a credential. The token
+file is read only when a status is posted on the NS-40 path. With
+``--app-key``, the key is read only when that post is about to be sent.
+A response whose rate-limit header reports nothing remaining is
 not applied, and the pass makes no further HTTP request. The next pass
 starts from the last saved checkpoint.
 
@@ -42,6 +43,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+from .checks import post_check_flow
 from .protocol import canonical, strict_json
 from .status import (
     StatusError,
@@ -279,13 +281,25 @@ def _diff(clone, before, after):
 
 class Pass:
     def __init__(
-        self, *, repository, clone, jobs, image, credential_file, api_base, state, caller, clock
+        self,
+        *,
+        repository,
+        clone,
+        jobs,
+        image,
+        credential_file,
+        api_base,
+        state,
+        caller,
+        clock,
+        app_key=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
         self.jobs = list(jobs)
         self.image = image
         self.credential_file = credential_file
+        self.app_key = app_key
         self.api_base = api_base
         self.state_dir = Path(state)
         self.caller = caller
@@ -298,6 +312,10 @@ class Pass:
     def run(self):
         if not self.jobs:
             raise PollError("INVALID_PARAMS", "poll requires at least one workflow job")
+        if self.app_key and self.credential_file:
+            raise PollError("INVALID_PARAMS", "one post accepts one credential")
+        if not self.app_key and not self.credential_file:
+            raise PollError("INVALID_PARAMS", "one post needs one credential")
         self._lock()
         try:
             described = self.caller("worker.describe", {})
@@ -501,7 +519,7 @@ class Pass:
             )
             if existing is not None:
                 if not existing["pending"]:
-                    if not self._post(existing, "pending"):
+                    if not self._post_pending(existing):
                         return False
                     existing["pending"] = True
                     self._checkpoint()
@@ -547,7 +565,7 @@ class Pass:
             }
             self.state["submissions"].append(entry)
             self._checkpoint()
-            if not self._post(entry, "pending"):
+            if not self._post_pending(entry):
                 return False
             entry["pending"] = True
             self._checkpoint()
@@ -570,15 +588,15 @@ class Pass:
             mapped = github_state(record["state"], record["exit_code"])
             if mapped == "pending":
                 continue
-            decision = self.caller(
-                "run.status",
-                {
-                    "run_id": entry["run_id"],
-                    "tested_commit": entry["tested_commit"],
-                    "status_sha": entry["status_sha"],
-                    "context": entry["context"],
-                },
-            )
+            params = {
+                "run_id": entry["run_id"],
+                "tested_commit": entry["tested_commit"],
+                "status_sha": entry["status_sha"],
+                "context": entry["context"],
+            }
+            if self.app_key:
+                params["checks"] = True
+            decision = self.caller("run.status", params)
             if decision["action"] == "skip":
                 self.result["statuses"].append(
                     {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
@@ -586,14 +604,34 @@ class Pass:
                 continue
             if decision["action"] != "post":
                 raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
-            if self._post(entry, decision["state"]):
+            if self._post(entry, decision["state"], decision if self.app_key else None):
                 self.result["statuses"].append(
                     {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
                 )
 
-    def _post(self, entry, state):
+    def _status_params(self, entry):
+        return {
+            "run_id": entry["run_id"],
+            "tested_commit": entry["tested_commit"],
+            "status_sha": entry["status_sha"],
+            "context": entry["context"],
+        }
+
+    def _post_pending(self, entry):
+        if not self.app_key:
+            return self._post(entry, "pending")
+        decision = self.caller("run.status", {**self._status_params(entry), "checks": True})
+        if decision["action"] == "skip":
+            return True
+        if decision["action"] != "post":
+            raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
+        return self._post(entry, decision["state"], decision)
+
+    def _post(self, entry, state, decision=None):
         if self.budget.stopped:
             return False
+        if self.app_key:
+            return self._post_app(entry, state, decision)
         described = self.caller("worker.describe", {})
         try:
             token = read_credential(self.credential_file, self.state_dir, described["repository"])
@@ -625,6 +663,59 @@ class Pass:
         )
         self.budget.observe(remaining)
         return True
+
+    def _post_app(self, entry, state, decision):
+        if not isinstance(decision, dict):
+            raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
+        described = self.caller("worker.describe", {})
+        try:
+            posted = post_check_flow(
+                api_base=self.api_base,
+                repository=self.repository,
+                sha=entry["status_sha"],
+                context=entry["context"],
+                run_id=entry["run_id"],
+                check_status=decision["check_status"],
+                check_conclusion=decision.get("check_conclusion"),
+                check_summary_text=decision["check_summary"],
+                check_run_id=decision.get("check_run_id"),
+                status_state=state,
+                post_status_request=decision.get("status_recorded") is not True,
+                app_key=self.app_key,
+                state_dir=self.state_dir,
+                repository_root=described["repository"],
+            )
+        except StatusError as error:
+            if error.kind == "RATE_LIMITED" and error.retryable:
+                self.budget.stopped = True
+                return False
+            raise
+        self._record_app(entry, state, decision, posted)
+        if (
+            posted.error is not None
+            and posted.error.kind == "RATE_LIMITED"
+            and posted.error.retryable
+        ):
+            self.budget.stopped = True
+            return False
+        if posted.error is not None:
+            raise posted.error
+        if posted.status_posted:
+            self.budget.observe(posted.status_remaining)
+        return True
+
+    def _record_app(self, entry, state, decision, posted):
+        if posted.check_id is None and not posted.status_posted:
+            return
+        params = self._status_params(entry)
+        if posted.status_posted:
+            params["record"] = state
+        if posted.check_id is not None:
+            params["check_run_id"] = posted.check_id
+            params["check_status"] = decision["check_status"]
+            if decision.get("check_conclusion") is not None:
+                params["check_conclusion"] = decision["check_conclusion"]
+        self.caller("run.status", params)
 
 
 def _empty_state(repository):
@@ -697,6 +788,7 @@ def poll_once(
     state,
     caller,
     clock=None,
+    app_key=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -712,4 +804,5 @@ def poll_once(
         state=state,
         caller=caller,
         clock=clock,
+        app_key=app_key,
     ).run()

@@ -2000,6 +2000,33 @@
             "failure",
             "error"
           ]
+        },
+        "check_status": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed"
+          ]
+        },
+        "check_conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "cancelled"
+          ]
+        },
+        "check_run_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "check_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "status_recorded": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -2049,6 +2076,28 @@
                 "success",
                 "failure",
                 "error"
+              ]
+            },
+            "checks": {
+              "const": true
+            },
+            "check_run_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            },
+            "check_status": {
+              "enum": [
+                "queued",
+                "in_progress",
+                "completed"
+              ]
+            },
+            "check_conclusion": {
+              "enum": [
+                "success",
+                "failure",
+                "cancelled"
               ]
             }
           },
