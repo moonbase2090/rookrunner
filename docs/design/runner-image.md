@@ -143,15 +143,31 @@ The implementation does the following. This slice does none of it.
 
 5. **Caller uid and sudo.** Steps stay `--user` of the caller uid and
    gid. The container stays unprivileged. When the resolved digest is
-   the flag's digest, `run_job` first runs one short root container,
-   `--user 0:0`, `--rm`, entrypoint `sh`, the same shape as the
-   socket-volume chown. That command adds a passwd entry for the
-   caller uid when it is missing, and writes passwordless sudo for
-   that uid only. The sudoers scope is an open decision below. The
-   root container does not mount the workspace, the Docker socket, or
-   host credentials. If `sudo` is missing or the write fails, setup
-   fails and no step runs. A different caller image does not get that
-   command. Existing images keep today's behavior.
+   the flag's digest, the passwd and sudoers entries live as two host
+   files in a new attempt directory, `runner-account`, mode 0700,
+   beside `home`, `runner-temp`, and `tool-cache`. That directory is
+   outside the workspace, so it is not in the artifact manifest.
+   `run_job` first runs one short root container, `--user 0:0`,
+   `--rm`, entrypoint `sh`, the same shape as the socket-volume chown.
+   The container bind-mounts `runner-account` read-write at
+   `/runner-account` and mounts nothing else: not the workspace, not
+   the Docker socket, and not host credentials. It copies the image's
+   `/etc/passwd` to `/runner-account/passwd`, mode 0644, owned by uid
+   0. When the caller uid is missing from that copy, it appends one
+   line. The line's name is `runner-` plus the decimal uid, its uid
+   and gid are the caller's, its home is `/github/home`, and its
+   shell is `/bin/sh`. A name that is already present fails setup. It
+   writes `/runner-account/sudoers` as uid 0, mode 0440, for that uid
+   only. The sudoers scope is an open decision below. If `sudo` is
+   missing or either write fails, setup fails and no step runs.
+   `--rm` deletes that container and not the host files. The job
+   container bind-mounts `runner-account/passwd` read-only at
+   `/etc/passwd` and `runner-account/sudoers` read-only at
+   `/etc/sudoers.d/rookrunner`. Those mounts are how the job sees the
+   entries. The worker does not write the files. sudo ignores a
+   sudoers file that is not owned by uid 0, and the worker is not
+   root. A different caller image does not get that command or those
+   mounts. Existing images keep today's behavior.
 
 6. **What stays put.** The capability version stays 12. A version 11
    plan is not migrated. No plan field, protocol field, or schema
@@ -175,7 +191,10 @@ recommendation. This slice does not build the image either way.
    instead.
 2. **sudoers scope.** Recommend `NOPASSWD` for every command, for the
    caller uid only. That matches the hosted `runner` user. The owner
-   can limit the command list to `apt` and `apt-get`.
+   can limit the command list to `apt` and `apt-get`. All-command
+   `NOPASSWD` plus the Docker client in this image composes with
+   `--docker-socket` into control of the host engine. The credential
+   choice in P5 inherits that warning.
 3. **Docker client.** Recommend installing it. Socket jobs already
    require the client, and the unit tests in `check.yml` use it. The
    owner can omit it and keep a second image for socket jobs.
@@ -199,7 +218,9 @@ recommendation. This slice does not build the image either way.
    does not pull it.
 6. On the runner image, the step uid is the caller uid, `sudo -n true`
    exits 0, and `sudo apt-get --version` exits 0. The step is not uid
-   0. The container is not privileged.
+   0. The container is not privileged. The passwd and sudoers the step
+   uses are the host files under `runner-account`, bind-mounted
+   read-only. Removing the root container does not remove them.
 7. A different caller image does not gain a sudoers entry.
 8. The capability version stays 12. `.github/workflows/check.yml` is
    unchanged. `security-events: write` and `actions: write` still fail

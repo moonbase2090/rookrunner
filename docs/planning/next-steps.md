@@ -2223,10 +2223,12 @@ Settled there, so the implementation does not reopen them:
    submit or poll omits `image` and every selected job has
    `runs-on: ubuntu-latest`. An explicit `image` still wins. Any other
    label stays `CAPABILITY_UNSUPPORTED` and names `runs-on`.
-3. **sudo.** Steps stay the caller uid. One short root command adds
-   that uid and passwordless sudo only for the operator image. A
-   different caller image is unchanged. The container stays
-   unprivileged.
+3. **sudo.** Steps stay the caller uid. The root container writes
+   `passwd` and `sudoers` as uid 0 under the attempt directory
+   `runner-account`. The job bind-mounts those files read-only at
+   `/etc/passwd` and `/etc/sudoers.d/rookrunner`. `--rm` deletes the
+   container and not the files. A different caller image is
+   unchanged. The container stays unprivileged.
 4. **Open choices.** The Ubuntu release, the sudoers command list,
    the Docker client, and whether `image` may be omitted are the
    owner decisions in that document. The recommendation there is the
@@ -2261,7 +2263,10 @@ unstarted until the owner picks an App credential. P7 stays unstarted.
    need `actions/setup-node` or a `write` permission stay blocked.
 5. **P5.** Check runs through a GitHub App, if the owner picks an App
    credential. NS-39 leaves that choice open. Unstarted. This slice
-   does not choose the credential.
+   does not choose the credential. All-command `NOPASSWD` on the P6
+   image, together with its Docker client and `--docker-socket`, is
+   host control, and this credential choice inherits that warning
+   ([runner image](../design/runner-image.md)).
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
    apt. Designed. The implementation follows
    [runner image](../design/runner-image.md) and is not this slice.
