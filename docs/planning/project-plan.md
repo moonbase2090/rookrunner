@@ -42,8 +42,8 @@ The owner's 2026-10-03 priorities change the horizons:
   ended `succeeded` with exit code 0 for
   `21a3f5ad5058027fda62b2b9af6bbba9e336bf83`. NS-38's run of
   `bb634af7a211540ab54070179b7c6c873cf9c7d4` stays `failed` with exit
-  code 137. NS-39 designs owner CI. The credential stays an owner
-  decision. NS-40 posts one commit status. NS-41 evaluates `on` for
+  code 137. NS-39 designs owner CI. The credential is the dedicated Rookrunner GitHub App
+  ([check runs](../design/check-runs.md)). The engine is unchanged. NS-40 posts one commit status. NS-41 evaluates `on` for
   push and pull request. A tag push skips the path filters. Tags under
   `pull_request` are ignored. NS-42 polls one owner repository. NS-43
   recorded those statuses. NS-44 evaluates expressions in `run`,
@@ -65,7 +65,7 @@ The owner's 2026-10-03 priorities change the horizons:
   ([runner image](../design/runner-image.md)). An explicit `image`
   still wins. Any other image stays a caller pin. `run_job` still
   requires a digest and still does not select a default. P5
-  stays unstarted until the owner picks an App credential.
+  designs check runs through a dedicated Rookrunner GitHub App and does not change the engine ([check runs](../design/check-runs.md)).
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -92,7 +92,7 @@ The owner's 2026-10-03 priorities change the horizons:
   ([runner image](../design/runner-image.md)). An explicit `image`
   still wins. Any other image stays a caller pin. `run_job` still
   requires a digest and still does not select a default. P5
-  stays unstarted until the owner picks an App credential. The rest
+  designs check runs through a dedicated Rookrunner GitHub App and does not change the engine ([check runs](../design/check-runs.md)). The rest
   of the provisional list in [next steps](next-steps.md) is not numbered
   yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
