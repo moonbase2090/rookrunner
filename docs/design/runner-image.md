@@ -63,7 +63,7 @@ exists. Its name is Rookrunner-App and its App ID is 5201333. The
 installation and the private key are still pending. This document
 does not install it. P7 designs secrets, `GITHUB_TOKEN`, and
 `write` permissions and does not change this image
-([secrets](secrets.md)). Open questions remain for MB2090.
+([secrets](secrets.md)). MB2090 accepted the amended answers on 2026-10-05.
 
 ## Options
 
@@ -192,8 +192,8 @@ The implementation does the following.
    unchanged. The dogfood caller still passes `--image`. `GITHUB_TOKEN`
    stays unset. `security-events: write`
    and `actions: write` stay rejected. The secrets design does not
-   change this image ([secrets](secrets.md)). Open questions remain
-   for MB2090. macOS stays deferred.
+   change this image ([secrets](secrets.md)). MB2090 accepted the
+   amended answers on 2026-10-05. macOS stays deferred.
 
 ## Open owner decisions
 

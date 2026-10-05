@@ -108,7 +108,8 @@ through NS-43 in [next steps](planning/next-steps.md).
    P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for
    owner-repository push and pull-request runs on this one local
    worker and does not change the engine
-   ([secrets](design/secrets.md)). Open questions remain for MB2090.
+   ([secrets](design/secrets.md)). MB2090 accepted the amended
+   answers on 2026-10-05.
    The rest of the provisional list is not numbered
    yet.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses

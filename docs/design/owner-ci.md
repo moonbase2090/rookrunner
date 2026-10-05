@@ -251,8 +251,8 @@ NS-40 token file ([check runs](check-runs.md)). The plan schema is
 unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions for owner-repository push and pull-request runs on this
 one local worker and does not change the engine
-([secrets](secrets.md)). Open questions remain for MB2090. The rank table
-above stays the 2026-10-04 reading.
+([secrets](secrets.md)). MB2090 accepted the amended answers on
+2026-10-05. The rank table above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website
@@ -345,8 +345,8 @@ this inventory. Reordered by the counts above:
 5. Check runs, if the owner chooses a GitHub App.
 6. A runner image for `ubuntu-latest` jobs that use `sudo` and apt.
 7. `write` permissions and `GITHUB_TOKEN`. Designed in
-   [secrets](secrets.md). The engine is unchanged. Open questions
-   remain for MB2090. macOS jobs stay deferred.
+   [secrets](secrets.md). The engine is unchanged. MB2090 accepted
+   the amended answers on 2026-10-05. macOS jobs stay deferred.
 
 ## What this slice does not do
 
