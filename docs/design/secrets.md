@@ -104,7 +104,7 @@ Open question 1. The recommended store is an operator directory
 passed by a flag. The flag names the directory. The directory is
 outside the repository, the state directory, and every attempt
 workspace. It is a different directory from
-`~/Secrets/github-app/rookrunner/`, so the key reader and the secret
+`~/Secrets/github-app/rookrunner-app/`, so the key reader and the secret
 reader are not the same directory. The implementation resolves `~`
 for the user running the process and refuses any other location,
 the same way `--app-key` refuses a key path outside the key
@@ -263,7 +263,7 @@ These stay out of this design. They are not open questions.
 
 - A fork pull request, any other untrusted code, and
   `pull_request_target`.
-- Mounting `~/Secrets/github-app/rookrunner/` into the job, and
+- Mounting `~/Secrets/github-app/rookrunner-app/` into the job, and
   putting the post token or the private key in the job.
 - A new App permission, a Secrets API permission, and any use of
   the GitHub secrets API.
@@ -280,8 +280,9 @@ These stay out of this design. They are not open questions.
 - A capability-version bump and a plan-schema change.
 - Scanning artifact bytes for a secret value.
 - Creating the secret directory, minting a token, installing the
-  App, starting a sign-in, or reading a key. The installation and
-  the private key are still pending, so an implementation cannot
+  App, starting a sign-in, or reading a key. The App ID is 5201333.
+  The installation and the private key are still pending, so an
+  implementation cannot
   mint against the live App until the operator finishes those steps.
 
 ## Open questions for MB2090
@@ -292,7 +293,7 @@ document does not accept it.
 1. **Where secret values live.** Recommend an operator directory
    passed by flag, outside the repository, the state directory, and
    attempt workspaces, and separate from
-   `~/Secrets/github-app/rookrunner/`. One file per secret. Mode
+   `~/Secrets/github-app/rookrunner-app/`. One file per secret. Mode
    `0700` on the directory and `0600` on each file. No symlinks.
    Owned by the caller. Names are uppercase letters, digits, and
    underscores, and do not start with a digit or `GITHUB_`. A value
@@ -352,7 +353,7 @@ document does not accept it.
 This design proves none of these. An implementation that follows the
 owner's answers would prove them. Tests would point `HOME` at a
 temporary directory and use a fixture key and a local HTTP stub.
-No test would read `~/Secrets/github-app/rookrunner/` and no test
+No test would read `~/Secrets/github-app/rookrunner-app/` and no test
 would contact `api.github.com`.
 
 1. A workflow that references no secret and needs no token runs as
@@ -378,7 +379,7 @@ would contact `api.github.com`.
 
 No engine change. No secret directory is created. No token is
 minted. No sign-in is started. No file under
-`~/Secrets/github-app/rookrunner/` is read. The App is not
-installed by this document. No App permission is added. The
-installation and the private key remain pending. `write` stays
-rejected. `GITHUB_TOKEN` stays unset.
+`~/Secrets/github-app/rookrunner-app/` is read. The App is not
+installed by this document. Its App ID is 5201333. No App
+permission is added. The installation and the private key remain
+pending. `write` stays rejected. `GITHUB_TOKEN` stays unset.

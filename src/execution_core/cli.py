@@ -471,7 +471,7 @@ def main():
         "--app-key",
         help=(
             "private key path for the Rookrunner GitHub App. "
-            "The file must be ~/Secrets/github-app/rookrunner/private-key.pem. "
+            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
             "Omit this flag to post a commit status from --credential-file. "
             "Passing both refuses before any HTTP request."
         ),
@@ -506,6 +506,7 @@ def main():
         "--app-key",
         help=(
             "private key path for the Rookrunner GitHub App. "
+            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
             "Omit this flag to post a commit status from --credential-file. "
             "Passing both refuses before any HTTP request."
         ),
