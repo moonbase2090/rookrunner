@@ -31,10 +31,13 @@ including mixed text. NS-45 evaluates `concurrency` and
 A version 11 plan is not migrated. NS-46 names selected workspace files
 in the artifact manifest and records one local CodeQL SARIF file
 ([upload artifact](../design/upload-artifact.md)). The capability
-version stays 12. P4 designs an owned checkout for major tags and for
-`fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
-engine is unchanged. The implementation follows that design. The rest
-of the provisional list is not numbered yet.
+version stays 12. P4 accepts `actions/checkout@v` plus digits as an
+owned checkout and copies ancestor history when that plan sets
+`fetch-depth` to the YAML integer `0`
+([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
+keeps one parentless synthesized commit and still excludes the original
+commit. `.github/workflows/check.yml` is unchanged. The rest of the
+provisional list is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -2174,12 +2177,12 @@ step stays on this worker.
 
 **P4. Checkout by major tag and fetch-depth 0.**
 
-Status: designed. The design is
-[checkout tag](../design/checkout-tag.md). This slice does not change
-the engine. The capability version stays 12. A version 11 plan is not
-migrated. `.github/workflows/check.yml` is unchanged.
+Status: implemented. It follows
+[checkout tag](../design/checkout-tag.md). The capability version stays
+12. A version 11 plan is not migrated. `.github/workflows/check.yml`
+is unchanged. The default capture still excludes the original commit.
 
-Settled there, so the implementation does not reopen them:
+Settled there, so a later slice does not reopen them:
 
 1. **Uses.** `actions/checkout@v` plus one or more digits is the owned
    checkout, including `v5`. The tag is stored and is not resolved or
@@ -2201,8 +2204,8 @@ Settled there, so the implementation does not reopen them:
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
-NS-46 implements item 3. P4 designs item 4. The implementation follows
-that design. The remaining items are not numbered yet.
+NS-46 implements item 3. P4 implements item 4. The remaining items are
+not numbered yet.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2217,10 +2220,11 @@ that design. The remaining items are not numbered yet.
    ([upload artifact](../design/upload-artifact.md)). The capability
    version stays 12.
 4. **P4.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
-   Designed. The implementation follows
-   [checkout tag](../design/checkout-tag.md) and is not this slice.
-   The tag form is on deploy workflows. `fetch-depth` is one Scorecard
-   workflow and needs history in the snapshot.
+   Implemented
+   ([checkout tag](../design/checkout-tag.md)). The capability version
+   stays 12. `.github/workflows/check.yml` is unchanged. The default
+   capture still excludes the original commit. Deploy workflows that
+   need `actions/setup-node` or a `write` permission stay blocked.
 5. **P5.** Check runs through a GitHub App, if the owner picks an App
    credential. NS-39 leaves that choice open.
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and

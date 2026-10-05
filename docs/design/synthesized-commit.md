@@ -1,9 +1,13 @@
 # Synthesized commit for the captured tree
 
 Status: accepted, 2026-10-03. When the object store is present, capture
-writes one new commit whose tree is the captured base tree. It does not
-copy the original commit. Remotes, credentials, and the `.git`
-directory stay excluded. This is not a GitHub-equivalence claim.
+writes one new commit whose tree is the captured base tree. The default
+payload has no parent and does not copy the original commit. Remotes,
+credentials, and the `.git` directory stay excluded. When an accepted
+plan sets `fetch-depth` to the YAML integer `0`, that payload names
+`base_commit` as its parent
+([checkout tag](checkout-tag.md)). Omitting the key keeps this
+payload. This is not a GitHub-equivalence claim.
 
 Decision 0002 still holds: the snapshot is plain working files and a
 canonical manifest, and `.git` is not copied. This design does not
@@ -84,7 +88,12 @@ change remains the existing `SOURCE_UNSTABLE` result.
 
 ## What stays excluded
 
-These stay excluded:
+The default capture excludes these. The history path copies the
+original commit and its ancestors and is specified in
+[checkout tag](checkout-tag.md). The original `.git` directory stays
+excluded on both paths.
+
+These stay excluded on the default path:
 
 - the original commit object, its parents, its author, its committer,
   its timestamp, and its message

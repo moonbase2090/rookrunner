@@ -81,11 +81,16 @@ The current capture rules deliberately reject some legitimate inputs and do not
 provide atomic filesystem snapshots, arbitrary secret detection, or a sandbox.
 The allow-list is copied to a sibling `git.json`
 ([design](../design/git-metadata.md)). An owned checkout accepts
-`uses: actions/checkout@v4` and does not replace those files
-([design](../design/checkout.md)). Other checkout actions stay rejected.
-The trees and blobs of the captured base commit are stored beside the
-manifest ([design](../design/git-objects.md)). The original commit
-object stays excluded. One synthesized commit for that tree is stored
+`uses: actions/checkout@v4` and `actions/checkout@v` plus digits, and
+does not replace those files
+([design](../design/checkout.md)). Dotted tags and other actions stay
+rejected. The trees and blobs of the captured base commit are stored
+beside the manifest ([design](../design/git-objects.md)). The default
+capture excludes the original commit object. When the accepted plan
+sets `fetch-depth` to the YAML integer `0`, that commit and its
+ancestors are stored
+([design](../design/checkout-tag.md)). One parentless synthesized
+commit for that tree is stored on the default path
 ([design](../design/synthesized-commit.md)). When the object store is present, the attempt workspace receives an
 owned `.git` directory ([design](../design/git-directory.md)). An absent
 store still has no `.git`.

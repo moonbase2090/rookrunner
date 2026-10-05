@@ -373,7 +373,7 @@ jobs:
 jobs:
   test:
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4.2.2
 """,
             "jobs.test.uses": """\
 jobs:
@@ -2147,7 +2147,6 @@ jobs:
             "repository",
             "ref",
             "path",
-            "fetch-depth",
             "fetch-tags",
             "submodules",
             "lfs",
@@ -2197,9 +2196,10 @@ jobs:
     def test_other_checkout_uses_stay_rejected(self):
         for uses in (
             "actions/checkout",
-            "actions/checkout@v3",
-            "actions/checkout@v5",
-            "actions/checkout@v7",
+            "actions/checkout@v4.2.2",
+            "actions/checkout@v5.0.0",
+            "actions/checkout@v",
+            "actions/checkout@V5",
             "actions/setup-node@v4",
         ):
             workflow = f"""\
@@ -2269,7 +2269,6 @@ jobs:
         for uses in (
             f"actions/checkout@{real[:39]}",
             "actions/checkout@main",
-            "actions/checkout@v5",
             f"actions/checkout@{real.upper()}",
             f"actions/checkout@{'c' * 41}",
         ):

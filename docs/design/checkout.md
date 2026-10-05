@@ -7,9 +7,11 @@ lowercase hexadecimal characters. That SHA is stored and is not
 verified. The step does not read an action file, fetch a ref, or run the
 JavaScript action. This is not a GitHub-equivalence claim.
 
-Major tags other than the accepted `v4` literal, and `fetch-depth`,
-stay rejected here. P4 designs both in [checkout tag](checkout-tag.md).
-That design does not change this engine.
+`actions/checkout@v` plus one or more digits is the same owned checkout.
+`fetch-depth` accepts only the YAML integer `0`. Both are implemented in
+[checkout tag](checkout-tag.md). The capability version stays 12.
+`.github/workflows/check.yml` is unchanged. Dotted tags, a bare
+`actions/checkout`, and every other `fetch-depth` value stay rejected.
 
 The workspace already holds the captured working files before the first
 step. Those bytes include dirty files and explicitly included untracked
@@ -20,15 +22,17 @@ captured dirty bytes. This engine does not do that.
 
 ## What is accepted
 
-The accepted `uses` strings are `actions/checkout@v4` and
+The accepted `uses` strings are `actions/checkout@v4`,
+`actions/checkout@v` plus one or more digits, and
 `actions/checkout@` followed by 40 lowercase hexadecimal characters.
 The planner records that string as an owned checkout of the captured
 files and sets `checkout` to `captured`. It does not read an action
 file, does not fetch a ref, and does not run the JavaScript action.
 The SHA is not verified against a remote.
 
-Short SHAs, branches, and other tags stay rejected, including a
-39-character SHA, `@main`, and `@v5`.
+Short SHAs, branches, and dotted tags stay rejected, including a
+39-character SHA, `@main`, and `@v4.2.2`. A major tag such as `@v5`
+is the owned checkout ([checkout tag](checkout-tag.md)).
 
 `with` may be omitted. The only accepted keys are:
 
@@ -36,25 +40,35 @@ Short SHAs, branches, and other tags stay rejected, including a
 | --- | --- |
 | `clean` | boolean `false` |
 | `persist-credentials` | boolean `false` |
+| `fetch-depth` | YAML integer `0` |
 
 An omitted `clean` does not mean the upstream default `true`. An
 omitted `persist-credentials` does not mean the upstream default
 `true`. Both omissions mean the step does not change captured files and
-does not write a credential. That is an intentional difference.
+does not write a credential. That is an intentional difference. An
+omitted `fetch-depth` does not mean the upstream default `1`. It leaves
+the parentless synthesized commit and still excludes the original
+commit.
 
 `clean: true` and `persist-credentials: true` are
-`CAPABILITY_UNSUPPORTED` and name the field. A value that is not a
-boolean is `WORKFLOW_INVALID`. Any other `with` key is
+`CAPABILITY_UNSUPPORTED` and name the field. A `clean` or
+`persist-credentials` value that is not a boolean is
+`WORKFLOW_INVALID`. A `fetch-depth` that is not an integer is
+`WORKFLOW_INVALID` and names the field. The value is not evaluated. A
+written integer other than `0` is `CAPABILITY_UNSUPPORTED` and names
+`with.fetch-depth`. Any other `with` key is
 `CAPABILITY_UNSUPPORTED` and names the field. These stay rejected:
 `token`, `ssh-key`, `ssh-known-hosts`, `ssh-strict`, `ssh-user`,
-`repository`, `ref`, `path`, `fetch-depth`, `fetch-tags`, `submodules`,
+`repository`, `ref`, `path`, `fetch-tags`, `submodules`,
 `lfs`, `sparse-checkout`, `sparse-checkout-cone-mode`, `filter`,
 `set-safe-directory`, `github-server-url`, and `show-progress`.
 
 Every other `uses` string stays rejected. That includes
-`actions/checkout` without `@`, `actions/checkout@v3`,
-`actions/checkout@v5`, `actions/checkout@v7`, and any other
-`actions/...` reference. JavaScript and Docker actions stay rejected.
+`actions/checkout` without `@`, a dotted tag, an uppercase `V`, and any
+other `actions/...` reference. `actions/checkout@v3`,
+`actions/checkout@v5`, and `actions/checkout@v7` are the owned checkout
+([checkout tag](checkout-tag.md)). JavaScript and Docker actions stay
+rejected.
 Local composite `./` and `$/` uses are unchanged.
 
 The step may still carry the existing step keys: `id`, `name`, `if`,
@@ -93,10 +107,13 @@ unset. `github.ref`, `github.actor`, `github.repository`, and
    snapshot digest is unchanged.
 2. The same holds for `clean: false` and `persist-credentials: false`.
 3. `clean: true`, `persist-credentials: true`, `token`, `repository`,
-   `ref`, `fetch-depth`, `ssh-key`, and `submodules` each fail planning
-   with `CAPABILITY_UNSUPPORTED` and create no run.
-4. `actions/checkout@v7` and `actions/checkout` without `@` stay
-   rejected.
+   `ref`, `ssh-key`, and `submodules` each fail planning
+   with `CAPABILITY_UNSUPPORTED` and create no run. `fetch-depth`
+   other than the YAML integer `0` fails the same way and names the
+   field. The integer `0` is specified in
+   [checkout tag](checkout-tag.md).
+4. `actions/checkout` without `@` stays rejected. A major tag such as
+   `actions/checkout@v7` is the owned checkout.
 5. After the step, the workspace has no `git.json` and no `objects`.
    When the store is present, `.git` is already there and the step
    leaves it. When the store is absent, `.git` is absent.

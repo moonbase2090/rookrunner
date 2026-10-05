@@ -6,9 +6,12 @@ file under the name `codeql-sarif`. The capability version stays 12.
 A version 11 plan is not migrated. `.github/workflows/check.yml` is
 unchanged. This is not a GitHub-equivalence claim.
 
-The implementation follows this document. P4 designs checkout by major
-tag and `fetch-depth: 0` ([checkout tag](checkout-tag.md)). The engine
-is unchanged.
+The implementation follows this document. P4 accepts `actions/checkout@v`
+plus digits as an owned checkout and copies ancestor history when that
+plan sets `fetch-depth` to the YAML integer `0`
+([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one
+parentless synthesized commit and still excludes the original commit.
+`.github/workflows/check.yml` is unchanged.
 
 ## Why this slice is a design
 

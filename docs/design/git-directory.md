@@ -2,8 +2,12 @@
 
 Status: accepted, 2026-10-03. When the snapshot has an object store,
 `materialize_attempt` writes one `.git` directory in the attempt
-workspace. It does not copy the original `.git`. Remotes, credentials,
-and the original commit stay excluded. This is not a
+workspace. It does not copy the original `.git`. Remotes and
+credentials stay excluded. The default store has one parentless
+synthesized commit, so the original commit stays out of that store.
+A history store holds that synthesized commit plus the ancestor
+closure of `base_commit`, and `HEAD` is still the synthesized id
+([checkout tag](checkout-tag.md)). This is not a
 GitHub-equivalence claim.
 
 Decision 0002 still holds: the snapshot is plain working files and a
@@ -32,13 +36,17 @@ a null `base_commit` while the store is present is the existing
 is the same kind. That includes an empty segment and a segment of `.`
 or `..`. No workspace is created.
 
-The store must contain exactly one commit, and every loose object must
-hash to its path in the repository's recorded format. The commit
-payload must be the fixed payload from
+The default store must contain exactly one commit, and every loose
+object must hash to its path in the repository's recorded format. The
+commit payload must be the fixed parentless payload from
 [synthesized commit](synthesized-commit.md), and its tree must be a
-tree object in the same store. Any other store is the existing
-`ATTEMPT_FAILED`. No workspace is created. The original commit is not
-accepted in place of that payload. Materialize does not fetch a replacement object.
+tree object in the same store. A history store is the exception in
+[checkout tag](checkout-tag.md): it holds that synthesized commit,
+with `base_commit` as its parent, and the ancestor closure of
+`base_commit`. `HEAD` is still the synthesized id. Any other store is
+the existing `ATTEMPT_FAILED`. No workspace is created. The original
+commit is not accepted in place of the synthesized payload.
+Materialize does not fetch a replacement object.
 
 `.git` is a real directory, mode 0700. It is not a gitfile and it is
 not a symlink. Materialize copies each loose object byte for byte
@@ -127,6 +135,11 @@ The capability version stays 9. No new error kind, capability string,
 or protocol field is added.
 
 ## What stays excluded
+
+The default store excludes the original commit. The history path
+copies that commit and its ancestors
+([checkout tag](checkout-tag.md)). The original `.git` directory
+stays excluded on both paths.
 
 These stay excluded:
 
