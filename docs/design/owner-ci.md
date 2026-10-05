@@ -5,7 +5,9 @@ change the engine. The capability version stays 12. A version 11 plan
 is not migrated. NS-40 through NS-43 implement the path. NS-43 recorded one push and
 one pull request for moonbase2090/rookrunner
 ([validation](../validation/owner-ci-rookrunner.md)). The credential
-type stays an owner decision. This is not a GitHub-equivalence claim.
+is the Rookrunner GitHub App recorded below. Check runs are designed
+in [check runs](check-runs.md) and are not implemented. The engine is
+unchanged. This is not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
 only. There is no listener, no runner registration, no Terraform, and
@@ -113,8 +115,9 @@ and are not evaluated.
 ## Reporting
 
 Commit statuses first. Any credential that can write a commit status
-can create one. Creating a check run is limited to GitHub Apps, so
-check runs wait until the credential decision below is a GitHub App.
+can create one. Creating a check run is limited to GitHub Apps. The
+credential below is that App. The posting contract is
+[check runs](check-runs.md). This slice does not post a check run.
 The context is `rookrunner/` plus the workflow file name plus `/` plus
 the job id. The state mapping is NS-40: `queued` and `running` post
 `pending`, `succeeded` with exit code 0 posts `success`, `failed`
@@ -130,17 +133,25 @@ https://docs.github.com/en/rest/checks/runs
 
 ## Credential
 
-Open owner decision. The two candidates are a GitHub App installation
-token and a fine-grained personal access token. This design does not
-choose. Either candidate can create a commit status if it has that
-write. A check run still requires a GitHub App.
+Recorded on 2026-10-05. The credential is a new GitHub App named
+Rookrunner. It is not the moonbase2090-agents App. The App is not
+created yet. This slice does not create it, sign in, or read a key.
 
-The credential is read at call time from an operator file outside the
-repository. It never enters the state directory, a job container, a
-snapshot, or a log. Job secrets stay disabled. `GITHUB_TOKEN` stays
-unset. A `write` permissions value stays rejected.
+Repository permissions are Checks write, Commit statuses write, and
+Contents read. The private key lives only in
+`~/Secrets/github-app/rookrunner/` on the operator's Mac. The operator
+passes that key's path. An installation token is minted at post time.
+The key never enters this repository, a CI job, a log, or a run record.
+The posting contract is [check runs](check-runs.md).
+
+NS-40 still reads one token line from an operator file outside the
+repository. This slice does not change that command. The token still
+never enters the state directory, a job container, a snapshot, or a
+log. Job secrets stay disabled. `GITHUB_TOKEN` stays unset. A `write`
+permissions value stays rejected.
 
 https://docs.github.com/en/rest/commits/statuses
+https://docs.github.com/en/rest/checks/runs
 
 ## Limits
 
@@ -156,7 +167,7 @@ No number is added here. The limits already cited for this track:
 | REST primary limit, GitHub App installation | 5,000 per hour minimum, 12,500 maximum outside Enterprise Cloud | same | NS-42 |
 | Content-generating requests | 80 per minute and 500 per hour | same | NS-40, NS-42 |
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
-| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | Stays deferred |
+| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | P5, designed |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
 | Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
 
@@ -225,8 +236,9 @@ operator-built image when `worker --runner-image` is set and `image`
 is omitted and every selected job is literal `runs-on: ubuntu-latest`
 ([runner image](runner-image.md)). An explicit `image` still wins. Any
 other image stays a caller pin. `run_job` still requires a digest and
-still does not select a default. P5 stays unstarted until the owner
-picks an App credential. The rank table
+still does not select a default. P5 designs check runs through a
+dedicated Rookrunner GitHub App and does not change the engine
+([check runs](check-runs.md)). The rank table
 above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.

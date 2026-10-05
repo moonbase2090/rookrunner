@@ -18,8 +18,10 @@ exit code 137. The gap that record names is closed. A later run of
 exit code 0. A disposable ruff violation ended `failed` with exit
 code 1 at the Ruff step. The record is
 [dogfood check](../validation/dogfood-check.md). NS-39 designs owner
-CI in [owner CI](../design/owner-ci.md). The credential stays an
-owner decision. NS-40 posts one commit status. NS-41 evaluates `on`
+CI in [owner CI](../design/owner-ci.md). The credential is the
+dedicated Rookrunner GitHub App recorded in
+[check runs](../design/check-runs.md). The engine is unchanged.
+NS-40 posts one commit status. NS-41 evaluates `on`
 for push and pull request. A tag push skips the path filters. Tags
 under `pull_request` are ignored. NS-42 polls one owner repository.
 NS-43 recorded statuses for one push and one pull request. The record
@@ -41,8 +43,9 @@ operator-built image when `worker --runner-image` is set and `image`
 is omitted and every selected job is literal `runs-on: ubuntu-latest`
 ([runner image](../design/runner-image.md)). An explicit `image` still
 wins. Any other image stays a caller pin. `run_job` still requires a
-digest and still does not select a default. P5 stays unstarted until
-the owner picks an App credential. The rest of the provisional list
+digest and still does not select a default. P5 designs check runs
+through a dedicated Rookrunner GitHub App and does not change the
+engine ([check runs](../design/check-runs.md)). The rest of the provisional list
 is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
@@ -1370,7 +1373,7 @@ No slice below adds a numeric limit without a GitHub source. Read
 | REST primary limit, GitHub App installation | 5,000 per hour minimum, 12,500 maximum outside Enterprise Cloud | same | NS-42 |
 | Content-generating requests | 80 per minute and 500 per hour | same | NS-40, NS-42 |
 | Commit statuses | 1,000 per SHA and context | https://docs.github.com/en/rest/commits/statuses | NS-40 |
-| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | NS-39 |
+| Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | P5, designed |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
 | Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
 | Named artifacts in one job | 500 | https://github.com/actions/upload-artifact/blob/043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/README.md | NS-46 |
@@ -1395,8 +1398,9 @@ assume a fixed rate.
   entries, `node20` actions, tag or branch action refs, and private
   action repositories.
 - macOS and Windows jobs, such as Scorecard's `check-macos`.
-- Check runs, until NS-39 settles the credential. Commit statuses come
-  first.
+- Check runs are designed in [check runs](../design/check-runs.md).
+  The implementation is not this list. Commit statuses stay the NS-40
+  path until that implementation.
 - MCP, the dashboard, and packaging (M3 and M4). They come after CI-1.
 - Remote workers and hosted service discovery (RR-42 and RR-45). Their
   scope is unchanged.
@@ -1823,10 +1827,13 @@ Settled there, so later slices do not reopen them:
    base. Nothing else.
 5. **Reporting.** Commit statuses, context
    `rookrunner/<workflow file>/<job>`. The state mapping is NS-40.
-   Check runs stay deferred.
-6. **Credential.** Open. A GitHub App installation token or a
-   fine-grained token. Read at call time from an operator file. It
-   never enters state, a job, a snapshot, or a log.
+   Check runs are designed by P5 and are not implemented.
+6. **Credential.** Recorded by P5 on 2026-10-05. A new GitHub App
+   named Rookrunner, not moonbase2090-agents. Checks write, Commit
+   statuses write, and Contents read. The private key lives only in
+   `~/Secrets/github-app/rookrunner/`. The posting contract is
+   [check runs](../design/check-runs.md). This slice does not change
+   the engine.
 7. **Limits.** The table already in this file. Nothing else.
 8. **Coexistence.** GitHub-hosted checks keep running. Required
    contexts stay an owner decision.
@@ -1855,9 +1862,10 @@ The questions answered in that document:
    create a commit status. Only GitHub Apps can create check runs.
    Recommended: commit statuses first, with a context such as
    `rookrunner/<workflow>/<job>`. The state mapping follows NS-40.
-6. **Credential.** This is an owner decision: a GitHub App installation
-   token or a fine-grained token. The credential is read at call time
-   from an operator file. It never enters the state directory, a job
+6. **Credential.** At NS-39 this was open: a GitHub App installation
+   token or a fine-grained token, read at call time from an operator
+   file. P5 records the choice. It is a new GitHub App named
+   Rookrunner. The key never enters the state directory, a job
    container, a snapshot, or a log. Job secrets stay disabled.
 7. **Limits.** Use the table in this section. Nothing else.
 8. **Coexistence.** GitHub-hosted checks keep running. Choosing required
@@ -1885,8 +1893,11 @@ Acceptance criteria:
 **NS-40. Report a run to GitHub as a commit status.**
 
 Status: implemented. The CLI command is `status`. The capability version
-stays 12. A version 11 plan is not migrated. The credential type stays
-the open owner decision. It follows NS-39.
+stays 12. A version 11 plan is not migrated. The command still reads
+one token line from an operator file. The credential chosen for check
+runs is the Rookrunner GitHub App in
+[check runs](../design/check-runs.md). That path is not implemented
+here. It follows NS-39.
 
 A CLI command posts one commit status for one run. The command takes
 the run, the repository, the status SHA, and the context. The status
@@ -1911,7 +1922,7 @@ The state mapping:
 
 Nothing else maps to `success`.
 
-The credential is read at call time from the source NS-39 left open. It is
+The credential is read at call time from the operator file. It is
 not stored, logged, or echoed in errors. The worker records each
 posted state, so posting the same terminal state again sends nothing.
 That keeps the run far below the 1,000 statuses allowed per SHA and
@@ -2040,7 +2051,8 @@ statuses for one push and one same-repository pull request of
 moonbase2090/rookrunner. The record is
 [owner CI validation](../validation/owner-ci-rookrunner.md). The
 capability version stays 12. `.github/workflows/check.yml` is
-unchanged. The credential type stays an owner decision. NS-44
+unchanged. The credential recorded later by P5 is the Rookrunner
+GitHub App. NS-44
 evaluates the expression item from the list below. NS-45 evaluates
 the concurrency item. NS-46 implements the upload item. The next item
 is P4. The rest is not numbered yet.
@@ -2218,8 +2230,9 @@ plan schema is unchanged. `worker.describe` reports optional
 `runner_image` when `--runner-image` is set. Version 1 `image` is
 optional. `.github/workflows/check.yml` is unchanged. `run_job` still
 requires a digest and still does not select a default. The worker
-does, from `--runner-image`. P5 stays unstarted until the owner picks
-an App credential.
+does, from `--runner-image`. P5 designs check runs through a
+dedicated Rookrunner GitHub App and does not change the engine
+([check runs](../design/check-runs.md)).
 
 Settled there, so the implementation does not reopen them:
 
@@ -2241,14 +2254,40 @@ Settled there, so the implementation does not reopen them:
    `image` when `--runner-image` is set and every selected job is
    literal `runs-on: ubuntu-latest`.
 
+**P5. Check runs through the Rookrunner GitHub App.**
+
+Status: designed. The design is [check runs](../design/check-runs.md).
+This slice does not change the engine. The capability version stays
+12. A version 11 plan is not migrated. No plan field is added. The
+plan schema is unchanged. `.github/workflows/check.yml` is unchanged.
+NS-40 still posts one commit status from a token file. P7 stays
+unstarted.
+
+The owner chose the credential on 2026-10-05:
+
+1. **App.** A new GitHub App named Rookrunner. It is not the
+   moonbase2090-agents App. The App is not created yet. This slice
+   does not create it, sign in, or read a key.
+2. **Permissions.** Checks write, Commit statuses write, and Contents
+   read. The installation token minted for a post requests Checks
+   write and Commit statuses write only.
+3. **Key.** The private key lives only in
+   `~/Secrets/github-app/rookrunner/`. The operator passes that path.
+   The key never enters the repository, a CI job, a log, or a run
+   record. An installation token is minted at post time and discarded
+   when the post returns.
+4. **Host control.** All-command `NOPASSWD` on the P6 image, together
+   with its Docker client and `--docker-socket`, is host control.
+   The check-run post does not mount the key. That warning stays
+   ([runner image](../design/runner-image.md)).
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
 NS-46 implements item 3. P4 implements item 4. P6 implements item 6.
-P5 stays
-unstarted until the owner picks an App credential. P7 stays unstarted.
+P5 designs item 5 and does not change the engine. P7 stays unstarted.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2268,11 +2307,16 @@ unstarted until the owner picks an App credential. P7 stays unstarted.
    stays 12. `.github/workflows/check.yml` is unchanged. The default
    capture still excludes the original commit. Deploy workflows that
    need `actions/setup-node` or a `write` permission stay blocked.
-5. **P5.** Check runs through a GitHub App, if the owner picks an App
-   credential. NS-39 leaves that choice open. Unstarted. This slice
-   does not choose the credential. All-command `NOPASSWD` on the P6
-   image, together with its Docker client and `--docker-socket`, is
-   host control, and this credential choice inherits that warning
+5. **P5.** Check runs through a dedicated Rookrunner GitHub App.
+   Designed
+   ([check runs](../design/check-runs.md)). The owner chose that App
+   on 2026-10-05. It is not moonbase2090-agents. Permissions are
+   Checks write, Commit statuses write, and Contents read. The private
+   key lives only in `~/Secrets/github-app/rookrunner/` and is passed
+   by path. The implementation is not this slice. The engine is
+   unchanged. All-command `NOPASSWD` on the P6 image, together with
+   its Docker client and `--docker-socket`, is host control, and this
+   credential inherits that warning
    ([runner image](../design/runner-image.md)).
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
    apt. Implemented

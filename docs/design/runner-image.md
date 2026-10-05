@@ -7,8 +7,9 @@ The image contract is [images/ubuntu-runner/Dockerfile](../../images/ubuntu-runn
 The capability version stays 12. A version 11 plan is not migrated.
 No plan field is added. `.github/workflows/check.yml` is unchanged.
 `run_job` still requires a digest and still does not select a default.
-This is not a GitHub-equivalence claim. P5 stays unstarted. The
-credential type stays an owner decision.
+This is not a GitHub-equivalence claim. P5's credential is the
+dedicated Rookrunner GitHub App recorded in
+[check runs](check-runs.md). This document does not create that App.
 
 The implementation follows this document.
 
@@ -54,9 +55,9 @@ uses `ubuntu-latest` and does not run `sudo` or `apt`. Its identified
 Rookrunner run already succeeded with a caller-pinned image. This
 design does not change that workflow.
 
-P5, check runs through a GitHub App, stays unstarted. It waits on the
-owner's credential choice. This document does not choose that
-credential.
+P5 designs check runs through the Rookrunner GitHub App and does not
+change the engine ([check runs](check-runs.md)). The App is not
+created yet. This document does not create it.
 
 ## Options
 
@@ -184,7 +185,8 @@ The implementation does the following.
    already stores the image digest. `.github/workflows/check.yml` stays
    unchanged. The dogfood caller still passes `--image`. `GITHUB_TOKEN`
    stays unset. `security-events: write`
-   and `actions: write` stay rejected. P5 and P7 stay unstarted.
+   and `actions: write` stay rejected. The P5 implementation and P7
+   stay unstarted.
    macOS stays deferred.
 
 ## Open owner decisions
@@ -240,6 +242,6 @@ The engine does not build, pull, or publish the image. The operator
 builds the Dockerfile. No root job. No privileged container. No host
 credential mount. No change to `runs-on` for a caller who passes
 `image`. No macOS image. No `actions/runner` agent. No `GITHUB_TOKEN`.
-P5 and P7 stay unstarted. The default capture still excludes the
-original commit. Decision 0002 still holds for every image that is
+The P5 implementation and P7 stay unstarted. The default capture
+still excludes the original commit. Decision 0002 still holds for every image that is
 not this operator digest: the caller passes the pin.
