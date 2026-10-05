@@ -42,9 +42,11 @@ https://github.com/actions/checkout/blob/11d5960a326750d5838078e36cf38b85af67726
 https://github.com/astral-sh/setup-uv/blob/c18668ad3cf93ea998bef934396af7bb5c839dc7/action.yml
 
 `runs-on: ubuntu-latest` stays a label on this workflow. The caller
-pins the image by digest. P6 designs an operator-built image for jobs
-that use `sudo` and apt ([runner image](runner-image.md)). This
-workflow does not use `sudo` or `apt`. The engine is unchanged.
+can still pin the image by digest. When the worker is started with
+`--runner-image` and the submit omits `image`, that digest is used
+because the job is literal `runs-on: ubuntu-latest`
+([runner image](runner-image.md)). This workflow does not use `sudo`
+or `apt`. An explicit `image` still wins. `check.yml` is unchanged.
 
 ## `github.sha`
 

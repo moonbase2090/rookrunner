@@ -55,10 +55,10 @@ def _trigger_flags(args):
 
 
 def submit_params(parser, args):
-    workflow = (args.workflow, args.job_id, args.event, args.image)
-    if any(value is not None for value in workflow):
+    workflow = (args.workflow, args.job_id, args.event)
+    if any(value is not None for value in (*workflow, args.image)):
         if any(value is None for value in workflow):
-            parser.error("workflow submit requires --workflow, --job-id, --event, and --image")
+            parser.error("workflow submit requires --workflow, --job-id, and --event")
         if args.exit_code is not None or args.delay_ms is not None or args.output is not None:
             parser.error("fixture options cannot be combined with a workflow submit")
         try:
@@ -82,8 +82,9 @@ def submit_params(parser, args):
             "workflow": args.workflow,
             "job_id": args.job_id,
             "event": event,
-            "image": args.image,
         }
+        if args.image is not None:
+            params["image"] = args.image
         if event_name is not None:
             params["event_name"] = event_name
         if args.activity_type is not None:
@@ -312,6 +313,14 @@ def main():
             "The worker does not download Node."
         ),
     )
+    worker.add_argument(
+        "--runner-image",
+        help=(
+            "digest-pinned image used when a submit or poll omits --image "
+            "and every selected job has runs-on ubuntu-latest. "
+            "The worker does not pull, build, or publish it."
+        ),
+    )
     commands.add_parser("describe")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
@@ -408,7 +417,13 @@ def main():
         metavar=("WORKFLOW", "JOB_ID"),
         help="workflow path inside the clone and the job to run; repeat for each job",
     )
-    poll.add_argument("--image", required=True, help="digest-pinned image id or name@sha256 pin")
+    poll.add_argument(
+        "--image",
+        help=(
+            "digest-pinned image id or name@sha256 pin. "
+            "Omit it to use the worker --runner-image digest"
+        ),
+    )
     poll.add_argument(
         "--credential-file",
         required=True,
@@ -441,6 +456,7 @@ def main():
                 args.network,
                 args.docker_socket,
                 node24=args.node24,
+                runner_image=args.runner_image,
             )
             return
         if args.command == "describe":

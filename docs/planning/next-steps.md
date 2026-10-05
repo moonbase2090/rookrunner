@@ -36,10 +36,12 @@ owned checkout and copies ancestor history when that plan sets
 `fetch-depth` to the YAML integer `0`
 ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
 keeps one parentless synthesized commit and still excludes the original
-commit. `.github/workflows/check.yml` is unchanged. P6 designs an
-operator-built image for `ubuntu-latest` jobs that use `sudo` and apt
-([runner image](../design/runner-image.md)). The engine is unchanged.
-The caller still pins the image by digest. P5 stays unstarted until
+commit. `.github/workflows/check.yml` is unchanged. P6 runs the
+operator-built image when `worker --runner-image` is set and `image`
+is omitted and every selected job is literal `runs-on: ubuntu-latest`
+([runner image](../design/runner-image.md)). An explicit `image` still
+wins. Any other image stays a caller pin. `run_job` still requires a
+digest and still does not select a default. P5 stays unstarted until
 the owner picks an App credential. The rest of the provisional list
 is not numbered yet.
 
@@ -224,10 +226,12 @@ Acceptance criteria:
 Status: implemented.
 
 This is the library used by later worker code. It is not a protocol method.
-The caller passes an image already pinned by digest. No project default
-image is selected. P6 designs that choice in
-[runner image](../design/runner-image.md) and does not change the
-engine. The caller still pins the image by digest.
+The caller passes an image already pinned by digest. `run_job` does
+not select a default. When the worker was started with
+`--runner-image`, an omitted `image` uses that digest for a plan whose
+jobs are all literal `runs-on: ubuntu-latest`
+([runner image](../design/runner-image.md)). An explicit `image` still
+wins. Any other image stays a caller pin.
 
 Omitted shell, `bash`, and `sh` follow the Linux runner commands reviewed
 2026-10-02. Explicit `bash` enables pipefail. An omitted shell does not.
@@ -2207,12 +2211,15 @@ Settled there, so a later slice does not reopen them:
 
 **P6. Runner image for ubuntu-latest.**
 
-Status: designed. The design is
-[runner image](../design/runner-image.md). This slice does not change
-the engine. The capability version stays 12. A version 11 plan is not
-migrated. `.github/workflows/check.yml` is unchanged. `run_job` still
-requires a digest and still does not select a default. P5 stays
-unstarted until the owner picks an App credential.
+Status: implemented. It follows
+[runner image](../design/runner-image.md). The capability version stays
+12. A version 11 plan is not migrated. No plan field is added. The
+plan schema is unchanged. `worker.describe` reports optional
+`runner_image` when `--runner-image` is set. Version 1 `image` is
+optional. `.github/workflows/check.yml` is unchanged. `run_job` still
+requires a digest and still does not select a default. The worker
+does, from `--runner-image`. P5 stays unstarted until the owner picks
+an App credential.
 
 Settled there, so the implementation does not reopen them:
 
@@ -2229,18 +2236,18 @@ Settled there, so the implementation does not reopen them:
    `/etc/passwd` and `/etc/sudoers.d/rookrunner`. `--rm` deletes the
    container and not the files. A different caller image is
    unchanged. The container stays unprivileged.
-4. **Open choices.** The Ubuntu release, the sudoers command list,
-   the Docker client, and whether `image` may be omitted are the
-   owner decisions in that document. The recommendation there is the
-   choice unless a review names another.
+4. **Choices taken.** Ubuntu 24.04 pinned by digest, `NOPASSWD` for
+   every command for the caller uid, the Docker client, and an omitted
+   `image` when `--runner-image` is set and every selected job is
+   literal `runs-on: ubuntu-latest`.
 
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
-NS-46 implements item 3. P4 implements item 4. P6 designs item 6. The
-implementation follows that design and is not this slice. P5 stays
+NS-46 implements item 3. P4 implements item 4. P6 implements item 6.
+P5 stays
 unstarted until the owner picks an App credential. P7 stays unstarted.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
@@ -2268,10 +2275,15 @@ unstarted until the owner picks an App credential. P7 stays unstarted.
    host control, and this credential choice inherits that warning
    ([runner image](../design/runner-image.md)).
 6. **P6.** A runner image for `ubuntu-latest` jobs that use `sudo` and
-   apt. Designed. The implementation follows
-   [runner image](../design/runner-image.md) and is not this slice.
-   The engine is unchanged. The caller still pins the image by digest.
-   This is the PRD's runner image question.
+   apt. Implemented
+   ([runner image](../design/runner-image.md)). `worker --runner-image`
+   supplies the digest when `image` is omitted and every selected job
+   is literal `runs-on: ubuntu-latest`. An explicit `image` still wins.
+   Any other image stays a caller pin. The plan schema is unchanged.
+   `worker.describe` reports optional `runner_image` when the flag is
+   set. Version 1 `image` is optional. The capability version stays 12.
+   `.github/workflows/check.yml` is unchanged. This is the PRD's runner
+   image question for the local worker.
 7. **P7.** Steps that require a token, such as `write` permissions and
    `GITHUB_TOKEN`. These wait for a reviewed secrets design. macOS
    jobs stay deferred.

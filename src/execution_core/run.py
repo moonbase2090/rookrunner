@@ -2,7 +2,10 @@
 
 This is the library later worker code can call. It is not a protocol method.
 The caller supplies the image digest. This module does not select a default
-image.
+image. When `runner_image` is that same digest, this module does not pull
+it. It writes the caller uid and passwordless sudo into the attempt
+directory `runner-account` and bind-mounts those files read-only. A
+different digest keeps today's image.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -390,14 +393,15 @@ def _soft_defaults():
 def _runner_dirs(workspace):
     """Create the attempt directories beside the workspace, mode 0700.
 
-    They are `home`, `runner-temp`, and `tool-cache`. They sit outside the
-    workspace, so they are not in the artifact manifest. `usage` counts them
-    because they live under the state directory with the attempt.
+    They are `home`, `runner-temp`, `tool-cache`, and `runner-account`. They
+    sit outside the workspace, so they are not in the artifact manifest.
+    `usage` counts them because they live under the state directory with
+    the attempt.
     """
 
     root = Path(workspace).parent
     made = {}
-    for name in ("home", "runner-temp", "tool-cache"):
+    for name in ("home", "runner-temp", "tool-cache", "runner-account"):
         path = root / name
         if path.is_symlink():
             _setup("attempt directory is not accepted")
@@ -495,9 +499,9 @@ def _invoke_within(docker, args, cap, deadline):
         raise
 
 
-def _resolve_image(docker, reference, digest, deadline):
+def _resolve_image(docker, reference, digest, deadline, pull=True):
     code, stdout = _inspect(docker, reference, deadline)
-    if code != 0 and reference != digest:
+    if code != 0 and reference != digest and pull:
         pull_code, _stdout, _stderr = _invoke_within(docker, ["pull", reference], 300, deadline)
         if pull_code != 0:
             _setup("image digest will not resolve")
@@ -1275,6 +1279,68 @@ def _accept_actions(actions, needed):
     return root
 
 
+def _account_script(uid, gid):
+    """Write passwd and sudoers for one caller uid. Both numbers are integers."""
+
+    return (
+        "set -eu\n"
+        "command -v sudo >/dev/null || exit 2\n"
+        "cp /etc/passwd /runner-account/passwd\n"
+        "chown 0:0 /runner-account/passwd\n"
+        "chmod 0644 /runner-account/passwd\n"
+        f"uid={uid}\n"
+        f"gid={gid}\n"
+        'line=$(grep -E "^[^:]*:[^:]*:$uid:" /runner-account/passwd | head -n 1 || true)\n'
+        'if [ -n "$line" ]; then\n'
+        "  name=${line%%:*}\n"
+        "else\n"
+        "  name=runner-$uid\n"
+        '  if grep -E -q "^$name:" /runner-account/passwd; then\n'
+        "    exit 3\n"
+        "  fi\n"
+        "  printf '%s::%s:%s::/github/home:/bin/sh\\n' "
+        '"$name" "$uid" "$gid" >> /runner-account/passwd\n'
+        "fi\n"
+        'case "$name" in\n'
+        "  *[!A-Za-z0-9_-]*) exit 4 ;;\n"
+        "esac\n"
+        "printf '%s ALL=(ALL) NOPASSWD: ALL\\n' "
+        '"$name" > /runner-account/sudoers\n'
+        "chown 0:0 /runner-account/sudoers\n"
+        "chmod 0440 /runner-account/sudoers\n"
+    )
+
+
+def _prepare_runner_account(docker, reference, account, deadline):
+    """Create the host identity files. `--rm` deletes the container, not the files."""
+
+    code, _stdout, _stderr = _invoke_within(
+        docker,
+        [
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--entrypoint",
+            "sh",
+            "--mount",
+            f"type=bind,source={account},destination=/runner-account",
+            reference,
+            "-c",
+            _account_script(os.getuid(), os.getgid()),
+        ],
+        60,
+        deadline,
+    )
+    if code == 0:
+        return
+    if code == 2:
+        _setup("sudo is missing")
+    if code == 3:
+        _setup("runner account name is already present")
+    _setup("runner account setup failed")
+
+
 def _create_args(
     name,
     workspace,
@@ -1289,6 +1355,7 @@ def _create_args(
     actions_root,
     socket_temp=None,
     socket_volume=None,
+    account=None,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1354,6 +1421,18 @@ def _create_args(
             [
                 "--mount",
                 f"type=volume,source={socket_volume},destination={socket_temp}",
+            ]
+        )
+    if account is not None:
+        args.extend(
+            [
+                "--mount",
+                f"type=bind,source={account / 'passwd'},destination=/etc/passwd,readonly",
+                "--mount",
+                (
+                    f"type=bind,source={account / 'sudoers'},"
+                    "destination=/etc/sudoers.d/rookrunner,readonly"
+                ),
             ]
         )
     args.extend(
@@ -2132,6 +2211,7 @@ def run_job(
     event_name=None,
     node24=None,
     actions=None,
+    runner_image=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -2161,7 +2241,10 @@ def run_job(
     `actions` is the attempt copy of node24 action files, mounted
     read-write at `/actions`. The content store is not mounted. A plan
     that runs node24 main without the Node directory fails setup before
-    the container starts.
+    the container starts. `runner_image` is omitted, or one `sha256:`
+    digest. When it is the job image, that digest is not pulled. One
+    root container writes `runner-account` and the job bind-mounts
+    those files read-only. A different image does not.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
     or that volume.
@@ -2169,6 +2252,11 @@ def run_job(
 
     if network not in _NETWORKS:
         _setup("container network is not accepted")
+    runner_digest = None
+    if runner_image is not None:
+        if not isinstance(runner_image, str) or not _DIGEST.fullmatch(runner_image):
+            _setup("runner image is not pinned by digest")
+        runner_digest = runner_image
     node_mount = _accept_node24(node24)
     if event_name is not None and (
         not isinstance(event_name, str)
@@ -2207,8 +2295,18 @@ def run_job(
     socket_temp = None
     socket_volume = None
     try:
-        resolved, arch = _resolve_image(docker_bin, reference, digest, deadline)
+        resolved, arch = _resolve_image(
+            docker_bin,
+            reference,
+            digest,
+            deadline,
+            pull=runner_digest is None or digest != runner_digest,
+        )
         runner_dirs = _runner_dirs(workspace)
+        account = None
+        if runner_digest is not None and digest == runner_digest:
+            account = runner_dirs["runner-account"]
+            _prepare_runner_account(docker_bin, reference, account, deadline)
         if socket_path is not None:
             socket_volume, socket_temp = _socket_share(docker_bin, reference, deadline)
         attempt_token = _ATTEMPT.set(
@@ -2247,6 +2345,7 @@ def run_job(
                 actions_root,
                 socket_temp,
                 socket_volume,
+                account,
             ),
             60,
             deadline,

@@ -1,23 +1,27 @@
 # Runner image for ubuntu-latest
 
-Status: design. This slice writes this document and does not change the
-engine. The capability version stays 12. A version 11 plan is not
-migrated. `.github/workflows/check.yml` is unchanged. `run_job` still
-requires a digest and still does not select a default. This is not a
-GitHub-equivalence claim. P5 stays unstarted. The credential type stays
-an owner decision.
+Status: implemented. `worker --runner-image` supplies one operator-built
+digest when a submit or poll omits `image` and every selected job has
+the literal `runs-on: ubuntu-latest`. An explicit `image` still wins.
+The image contract is [images/ubuntu-runner/Dockerfile](../../images/ubuntu-runner/Dockerfile).
+The capability version stays 12. A version 11 plan is not migrated.
+No plan field is added. `.github/workflows/check.yml` is unchanged.
+`run_job` still requires a digest and still does not select a default.
+This is not a GitHub-equivalence claim. P5 stays unstarted. The
+credential type stays an owner decision.
 
-The implementation follows this document. It is the next slice.
+The implementation follows this document.
 
 ## Why this slice is a design
 
-The PRD runner-image question is still open. Workflow execution needs
-an image pinned by digest. `run_job` requires the caller to pass one
-and does not select a default. Selection and provenance of a project
-image are the open part
-([PRD](../prd.md)). Decision 0002 says the same thing and marks
-provenance pending
-([decision 0002](../decisions/0002-m2-capture-and-backend.md)).
+The local-worker answer is the implemented behavior above. Workflow
+execution needs an image pinned by digest. `run_job` requires the
+caller to pass one and does not select a default. The worker supplies
+the operator digest from `--runner-image` when `image` is omitted.
+Publishing stays rejected. Decision 0002 still marks provenance
+pending for every other image
+([PRD](../prd.md),
+[decision 0002](../decisions/0002-m2-capture-and-backend.md)).
 
 NS-4 accepts that caller digest. `runs-on` does not select an image.
 `runs-on: ubuntu-latest` is an accepted label. The job container is
@@ -106,7 +110,7 @@ host engine. This option is not the recommendation.
 Option B. The image contract is option A. Options C, D, and E are
 recorded so a later slice does not reopen them.
 
-The implementation does the following. This slice does none of it.
+The implementation does the following.
 
 1. **Image contract.** One Dockerfile, built by the operator, not by
    this engine and not by `.github/workflows/check.yml`. The base is
@@ -156,9 +160,11 @@ The implementation does the following. This slice does none of it.
    0. When the caller uid is missing from that copy, it appends one
    line. The line's name is `runner-` plus the decimal uid, its uid
    and gid are the caller's, its home is `/github/home`, and its
-   shell is `/bin/sh`. A name that is already present fails setup. It
+   shell is `/bin/sh`. The password field is empty, so `sudo` does
+   not treat the account as locked. A name that is already present
+   fails setup. It
    writes `/runner-account/sudoers` as uid 0, mode 0440, for that uid
-   only. The sudoers scope is an open decision below. If `sudo` is
+   only: `<name> ALL=(ALL) NOPASSWD: ALL`, which is decision 2. If `sudo` is
    missing or either write fails, setup fails and no step runs.
    `--rm` deletes that container and not the host files. The job
    container bind-mounts `runner-account/passwd` read-only at
@@ -170,18 +176,20 @@ The implementation does the following. This slice does none of it.
    mounts. Existing images keep today's behavior.
 
 6. **What stays put.** The capability version stays 12. A version 11
-   plan is not migrated. No plan field, protocol field, or schema
-   entry is added. The run record already stores the image digest.
-   `.github/workflows/check.yml` stays unchanged and keeps passing
-   `--image`. `GITHUB_TOKEN` stays unset. `security-events: write`
+   plan is not migrated. No plan field and no protocol version are
+   added. The plan schema is unchanged. `worker.describe` gained an
+   optional `runner_image`, reported only when the flag is set, because
+   that result rejects unknown properties. Version 1 submit `image`
+   stays in the schema and is no longer required. The run record
+   already stores the image digest. `.github/workflows/check.yml` stays
+   unchanged. The dogfood caller still passes `--image`. `GITHUB_TOKEN`
+   stays unset. `security-events: write`
    and `actions: write` stay rejected. P5 and P7 stay unstarted.
    macOS stays deferred.
 
 ## Open owner decisions
 
-Each item has a recommendation. A review comment that names another
-choice replaces that recommendation. Silence leaves the
-recommendation. This slice does not build the image either way.
+The implementation takes each recommendation below.
 
 1. **Base release.** Recommend Ubuntu 24.04, pinned by digest in the
    Dockerfile. On 2026-10-05 that is the release behind GitHub's
@@ -226,10 +234,10 @@ recommendation. This slice does not build the image either way.
    unchanged. `security-events: write` and `actions: write` still fail
    planning.
 
-## What this slice does not do
+## What this implementation does not do
 
-No engine change. No Dockerfile, no image build, and no registry. No
-fetch and no pull. No root job. No privileged container. No host
+The engine does not build, pull, or publish the image. The operator
+builds the Dockerfile. No root job. No privileged container. No host
 credential mount. No change to `runs-on` for a caller who passes
 `image`. No macOS image. No `actions/runner` agent. No `GITHUB_TOKEN`.
 P5 and P7 stay unstarted. The default capture still excludes the

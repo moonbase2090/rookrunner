@@ -75,7 +75,7 @@ python3 -m execution_core --state "$PWD/.execution-state" follow RUN_ID
 
 Replace `RUN_ID` with the submission's `result.run_id`. Reuse a submission key to
 retry; use a new key for a new run. Commands return JSON. A version 1 submit
-needs `--workflow`, `--job-id`, `--event`, and `--image`. `--event-name` is
+needs `--workflow`, `--job-id`, and `--event`. `--image` is optional when the worker was started with `--runner-image`. `--event-name` is
 optional. When it is set, that name is part of the submission, and a retry
 with a different name conflicts. `--backend development`
 may be included on that command and is not sent. `follow` prints one JSON

@@ -516,8 +516,9 @@ class Pass:
                 "job_id": job_id,
                 "event": event,
                 "event_name": event_name,
-                "image": self.image,
             }
+            if self.image is not None:
+                params["image"] = self.image
             if activity is not None:
                 params["activity_type"] = activity
             if first or changed is None:
