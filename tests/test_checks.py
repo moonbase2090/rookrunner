@@ -1,6 +1,6 @@
 """Check runs through a local HTTP stub and a fixture key under a temporary HOME.
 
-No test reads ~/Secrets/github-app/rookrunner/ and no test contacts api.github.com.
+No test reads ~/Secrets/github-app/rookrunner-app/ and no test contacts api.github.com.
 """
 
 import base64
@@ -237,7 +237,7 @@ class CliCheckTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _install(self, pem=None, mode=0o600, directory_mode=0o700):
-        directory = self.home / "Secrets" / "github-app" / "rookrunner"
+        directory = self.home / "Secrets" / "github-app" / "rookrunner-app"
         directory.mkdir(parents=True)
         os.chmod(directory, directory_mode)
         key = directory / "private-key.pem"
@@ -319,7 +319,7 @@ class CliCheckTests(unittest.TestCase):
         ]
         app_key = key
         if app_key is None and (both or credential is None):
-            app_key = "~/Secrets/github-app/rookrunner/private-key.pem"
+            app_key = "~/Secrets/github-app/rookrunner-app/private-key.pem"
         if app_key is not None:
             command.extend(["--app-key", str(app_key)])
         if credential is not None or both:
@@ -445,7 +445,7 @@ class CliCheckTests(unittest.TestCase):
                 check_run_id=None,
                 status_state="pending",
                 post_status_request=True,
-                app_key="~/Secrets/github-app/rookrunner/private-key.pem",
+                app_key="~/Secrets/github-app/rookrunner-app/private-key.pem",
                 state_dir=self.state,
                 repository_root=self.repo,
                 clock=moment,
@@ -543,7 +543,7 @@ class CliCheckTests(unittest.TestCase):
         outside = self.root / "private-key.pem"
         outside.write_bytes(self.pem_bytes)
         os.chmod(outside, 0o600)
-        link = self.home / "Secrets" / "github-app" / "rookrunner" / "linked.pem"
+        link = self.home / "Secrets" / "github-app" / "rookrunner-app" / "linked.pem"
         link.symlink_to(self.key)
         renamed = self.key.with_name("moved.pem")
         self.key.rename(renamed)

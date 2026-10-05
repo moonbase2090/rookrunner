@@ -147,7 +147,7 @@ a key.
 
 Repository permissions are Checks write, Commit statuses write, and
 Contents read. The private key lives only in
-`~/Secrets/github-app/rookrunner/` on the operator's Mac. The operator
+`~/Secrets/github-app/rookrunner-app/` on the operator's Mac. The operator
 passes that key's path. An installation token is minted at post time.
 The key never enters this repository, a CI job, a log, or a run record.
 The posting contract is [check runs](check-runs.md).

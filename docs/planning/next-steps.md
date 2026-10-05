@@ -1838,7 +1838,7 @@ Settled there, so later slices do not reopen them:
    Rookrunner-App, App ID 5201333, not moonbase2090-agents. The
    installation and the private key are still pending. Checks write,
    Commit statuses write, and Contents read. The private key lives
-   only in `~/Secrets/github-app/rookrunner/`. The posting contract
+   only in `~/Secrets/github-app/rookrunner-app/`. The posting contract
    is [check runs](../design/check-runs.md). This slice does not
    change the engine.
 7. **Limits.** The table already in this file. Nothing else.
@@ -2287,7 +2287,7 @@ The owner chose the credential on 2026-10-05:
    read. The installation token minted for a post requests Checks
    write and Commit statuses write only.
 3. **Key.** The private key lives only in
-   `~/Secrets/github-app/rookrunner/`. The operator passes that path.
+   `~/Secrets/github-app/rookrunner-app/`. The operator passes that path.
    The key never enters the repository, a CI job, a log, or a run
    record. An installation token is minted at post time and discarded
    when the post returns.
@@ -2345,7 +2345,7 @@ MB2090.
    ([check runs](../design/check-runs.md)). The owner chose that App
    on 2026-10-05. It is not moonbase2090-agents. Permissions are
    Checks write, Commit statuses write, and Contents read. The private
-   key lives only in `~/Secrets/github-app/rookrunner/` and is passed
+   key lives only in `~/Secrets/github-app/rookrunner-app/` and is passed
    by path. `--app-key` posts one check run and then the commit status
    with the installation token. Omitting the flag keeps the NS-40
    token file. The plan schema is unchanged. The capability version

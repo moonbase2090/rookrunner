@@ -452,7 +452,7 @@ def load_app_key(path, state_dir, repository):
     """Read the key, client id, and installation id. Refuse before any HTTP."""
 
     candidate = Path(path).expanduser()
-    allowed = Path.home() / "Secrets" / "github-app" / "rookrunner"
+    allowed = Path.home() / "Secrets" / "github-app" / "rookrunner-app"
     if not candidate.is_absolute() or candidate.name != "private-key.pem":
         _refuse()
     if _symlink_component(candidate) or _symlink_component(allowed):
