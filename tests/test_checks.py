@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from execution_core.checks import check_mapping, check_summary, post_check_flow
+from execution_core.commands import MaskList, mask_text, register_mask
 from execution_core.plan import CAPABILITY_VERSION, PlanError, plan_workflow
 from execution_core.poll import PollError, poll_once
 from execution_core.protocol import canonical
@@ -467,6 +468,49 @@ class CliCheckTests(unittest.TestCase):
         payload = json.loads(_b64decode(self.server.requests[0]["authorization"].split(".", 2)[1]))
         self.assertEqual(payload["iat"], int(moment.timestamp()) - 60)
         self.assertEqual(payload["exp"], payload["iat"] + 600)
+
+    def test_the_check_body_masks_a_fixture_and_a_token_prefix(self):
+        fixture = 'p7"secret'
+        masks = MaskList()
+        register_mask(masks, fixture)
+        stored = mask_text(f"saw {fixture}", masks)
+        summary = stored + " github_pat_FixtureValue"
+        self.assertNotIn(fixture, stored)
+        self.assertIn("github_pat_FixtureValue", summary)
+        previous = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.home)
+        try:
+            posted = post_check_flow(
+                api_base=f"http://127.0.0.1:{self.server.server_address[1]}",
+                repository="moonbase2090/rookrunner",
+                sha=HEAD,
+                context=CONTEXT,
+                run_id="run-mask",
+                check_status="completed",
+                check_conclusion="success",
+                check_summary_text=summary,
+                check_run_id=None,
+                status_state="success",
+                post_status_request=False,
+                app_key="~/Secrets/github-app/rookrunner-app/private-key.pem",
+                state_dir=self.state,
+                repository_root=self.repo,
+                clock=datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc),
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous
+        self.assertEqual(posted.check_id, CHECK_ID)
+        raw = self.server.requests[1]["body"].decode("ascii")
+        self.assertNotIn(fixture, raw)
+        self.assertNotIn(json.dumps(fixture)[1:-1], raw)
+        self.assertNotIn("github_pat_FixtureValue", raw)
+        self.assertNotIn("github_pat_", raw)
+        body = json.loads(raw)
+        self.assertIn("***", body["output"]["summary"])
+        self.assertNotIn(fixture, body["output"]["summary"])
 
     def test_a_later_post_patches_the_stored_id(self):
         # A queued row is claimed by the worker scheduler. `running` is not.

@@ -214,10 +214,15 @@ The writing step does not see its own env or PATH update. `GITHUB_*` and
 `RUNNER_*` are ignored, and `GITHUB_ENV` cannot set `NODE_OPTIONS`
 (https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
 `set-env` and `add-path` are not applied. `add-mask` masks later logs in
-that job. The commands page says a masked value cannot be set as an output,
-and its example writes the value to `GITHUB_OUTPUT` and reads it back. This
-subset follows the example: the output is kept and the log is masked. A
-later job does not inherit the mask. Workflow `run` and YAML `env` text are
+that job, including each whitespace-separated word, the base64, JSON, and
+percent-encoded forms, and the `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, and
+`github_pat_` token prefixes. A partial line is held until the next read.
+The commands page says a masked value cannot be set as an output, and its
+example writes the value to `GITHUB_OUTPUT` and reads it back. This subset
+follows the example: the step output is kept and the log is masked. A job
+output that contains an injected secret or a token prefix is omitted, and
+the omission is recorded without the value. An `add-mask` value in a job
+output is stored as masked text. A later job does not inherit the mask. Workflow `run` and YAML `env` text are
 evaluated, including mixed text. A local composite action reads inputs from `with` and the `inputs`
 context. Composite actions do not receive `INPUT_*`. `github.action_path`
 and `GITHUB_ACTION_PATH` are set only for steps inside that action. A

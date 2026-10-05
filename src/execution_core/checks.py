@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+from .commands import mask_prefixes
 from .protocol import canonical, is_integer, strict_json
 from .status import (
     STATUS_TIMEOUT_SECONDS,
@@ -95,7 +96,7 @@ def check_summary(run_state, exit_code):
         text = run_state
     else:
         text = f"{run_state} exit_code {exit_code}"
-    return text[:256]
+    return mask_prefixes(text)[:256]
 
 
 def _refuse(message=_KEY_MESSAGE):
@@ -414,6 +415,9 @@ def _post_check(
     origin = api_origin(api_base)
     require_repository(repository)
     require_sha(sha)
+    if not isinstance(summary, str):
+        summary = ""
+    summary = mask_prefixes(summary)
     payload = {
         "name": context,
         "external_id": run_id,
@@ -432,7 +436,8 @@ def _post_check(
     if check_conclusion is not None:
         payload["conclusion"] = check_conclusion
         payload["completed_at"] = _github_time(moment)
-    code, raw = _call(url, method, canonical(payload).encode("ascii"), token, "check")
+    body = mask_prefixes(canonical(payload)).encode("ascii")
+    code, raw = _call(url, method, body, token, "check")
     try:
         parsed = strict_json(raw)
         identifier = parsed.get("id") if isinstance(parsed, dict) else None
