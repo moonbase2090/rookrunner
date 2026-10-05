@@ -36,8 +36,10 @@ workflow commands can mask later log text in that job. `set-env` and
 step stderr is masked with every mask registered while reading that step's
 stdout. The workflow commands page says a masked value cannot be set as an
 output, and its example writes that value to `GITHUB_OUTPUT` and reads it
-back. This subset follows the example: the output is kept, and logs of that
-value in the same job are masked. A later job does not inherit the mask.
+back. This subset follows the example: the step output is kept, and logs of
+that value in the same job are masked. A job output that contains an
+injected secret or a token prefix is omitted. An `add-mask` value in a job
+output is stored as masked text. A later job does not inherit the mask.
 
 The container is created on Docker network `bridge` by default, so the job
 can reach the public internet. GitHub-hosted runners have that access by
@@ -186,7 +188,15 @@ import time
 from .commands import ENV_NAME as _ENV_NAME
 from .node24 import BINARY as _NODE24_BINARY
 from .node24 import inspect_node24, node_version
-from .commands import mask_text, parse_env, parse_output, parse_path, process_stdout
+from .commands import (
+    MaskList,
+    job_output_value,
+    mask_stored_copy,
+    parse_env,
+    parse_output,
+    parse_path,
+    process_stdout,
+)
 from .expr import (
     JOB_ENV_CONTEXTS,
     JOB_NAME_CONTEXTS,
@@ -273,7 +283,7 @@ class _JobRuntime:
         self.env = {}
         self.paths = []
         self.outputs = {}
-        self.masks = []
+        self.masks = MaskList()
         self.base_path = None
         # GITHUB_STATE for one action instance. Later steps do not receive it.
         # The post entry of that same action receives it as STATE_<name>.
@@ -2532,6 +2542,7 @@ def run_job(
                             {"outputs": job["call"]["outputs"]},
                             output_values,
                             output_bytes,
+                            MaskList(),
                         )
                         call_failed = any(
                             item["result"] == "failure" for item in inner_results.values()
@@ -2749,6 +2760,7 @@ def run_job(
                                         strategy=strategy_context,
                                     ),
                                     output_bytes,
+                                    runtime.masks,
                                 )
                             if job_failed and fail_fast:
                                 break
@@ -3027,20 +3039,22 @@ def _output_text(value):
     return None
 
 
-def _job_outputs(job, values, used):
+def _job_outputs(job, values, used, masks=None):
     """Copy job outputs. An expression that reads `secrets` is not copied.
 
-    GitHub skips an output whose value contains a registered secret. This
-    subset has no secret store, so an output expression that names `secrets`
-    is omitted instead of evaluated. A value past the documented 1 MB job
-    total or 50 MB run total is also omitted. Those sizes are 1024-based
-    UTF-16-LE bytes. The syntax page says 1 MB and 50 MB and does not define
-    MB.
+    An output whose value contains an injected secret or a token prefix
+    is omitted, and the omission is recorded without the value. An
+    `add-mask` value is stored as masked text. A value past the documented
+    1 MB job total or 50 MB run total is also omitted. Those sizes are
+    1024-based UTF-16-LE bytes. The syntax page says 1 MB and 50 MB and
+    does not define MB.
     """
 
+    if masks is None:
+        masks = []
     produced = {}
     job_used = 0
-    for _name, source in job.get("outputs", {}).items():
+    for name, source in job.get("outputs", {}).items():
         if mentions_context(source, "secrets"):
             continue
         try:
@@ -3049,10 +3063,13 @@ def _job_outputs(job, values, used):
             continue
         if text is None or "\0" in text:
             continue
-        size = len(text.encode("utf-16-le"))
+        stored = job_output_value(text, masks, name)
+        if stored is None:
+            continue
+        size = len(stored.encode("utf-16-le"))
         if job_used + size > _OUTPUT_JOB_BYTES or used + size > _OUTPUT_RUN_BYTES:
             continue
-        produced[_name] = text
+        produced[name] = stored
         job_used += size
         used += size
     return produced, used
@@ -3468,7 +3485,7 @@ def _run_composite(
     failed = None
     if deprecations:
         stdout_parts.append(
-            mask_text("".join(f"{message}\n" for message in deprecations), runtime.masks)
+            mask_stored_copy("".join(f"{message}\n" for message in deprecations), runtime.masks)
         )
     for inner, script_name in zip(step["steps"], script_names):
         if deadline - time.monotonic() <= 0:
@@ -4002,8 +4019,12 @@ def _run_step(
         raise _StepTimedOut(record) from None
     stdout_text = _text(stdout)
     stderr_text = _text(stderr)
+    warning_at = _warning_count(runtime.masks)
     logged = process_stdout(stdout_text, runtime.masks)
-    logged_err = mask_text(stderr_text, runtime.masks)
+    logged_err = mask_stored_copy(stderr_text, runtime.masks)
+    fresh = _fresh_warnings(runtime.masks, warning_at)
+    if fresh:
+        logged_err = fresh + logged_err
     _apply_command_files(runtime, step, files, output_map)
     if runtime is not None and "state" in files:
         state_text = _read_utf8(files["state"])
@@ -4015,8 +4036,39 @@ def _run_step(
         summary = _read_utf8(files["summary"])
         if summary:
             # Same character cap as step stdout in the v0 contract.
-            result["summary"] = summary[:65536]
+            result["summary"] = mask_stored_copy(summary[:65536], runtime.masks)
+    copies = _masked_command_copies(files, runtime.masks)
+    if copies:
+        result["command_copies"] = copies
     return result
+
+
+def _warning_count(masks):
+    warnings = getattr(masks, "warnings", None)
+    if isinstance(warnings, list):
+        return len(warnings)
+    return 0
+
+
+def _fresh_warnings(masks, start):
+    warnings = getattr(masks, "warnings", None)
+    if not isinstance(warnings, list) or len(warnings) <= start:
+        return ""
+    return "\n".join(warnings[start:]) + "\n"
+
+
+def _masked_command_copies(files, masks):
+    """Masked copies of env, output, and state. The files themselves stay raw."""
+
+    copies = {}
+    for label in ("env", "output", "state"):
+        path = files.get(label)
+        if path is None:
+            continue
+        text = _read_utf8(path)
+        if text:
+            copies[label] = mask_stored_copy(text, masks)
+    return copies
 
 
 def _command_files(commands, script_name, extra=()):

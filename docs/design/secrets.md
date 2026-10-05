@@ -1,13 +1,14 @@
 # Secrets, GITHUB_TOKEN, and write permissions
 
-Status: designed. MB2090 accepted the amended answers for all seven
-questions on 2026-10-05. The source of those answers is the review
-comment on pull request 63:
+Status: designed. p7-mask is implemented. The other five pull
+requests in the plan are not. MB2090 accepted the amended answers
+for all seven questions on 2026-10-05. The source of those answers
+is the review comment on pull request 63:
 
 https://github.com/moonbase2090/rookrunner/pull/63#issuecomment-6001650970
 
-This slice records the accepted answers and the implementation plan.
-It does not change the engine. The capability version stays 12. A
+This document records the accepted answers and the implementation
+plan. p7-mask changes the job mask. The capability version stays 12. A
 version 11 plan is not migrated. No plan field and no capability
 entry are added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
@@ -15,9 +16,10 @@ stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. The
 `secrets` context stays withheld. No job token is minted. This is
 not a GitHub-equivalence claim.
 
-The seven answers below are accepted direction. The engine does not
-implement them yet. Deploy workflows and macOS jobs stay deferred
-until the implementation plan below has landed.
+The seven answers below are accepted direction. Masking from answer
+3 is implemented. The other answers are not. Deploy workflows and
+macOS jobs stay deferred until the implementation plan below has
+landed.
 
 The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
 App ID is 5201333. It is not the moonbase2090-agents App. The
@@ -69,11 +71,26 @@ job and it is not `GITHUB_TOKEN`. The key path rules in
 mount.
 
 Stdout `add-mask` registers a value for later log text in the same
-job. The mask replaces that value, and each of its
-whitespace-separated words, with `***`. An empty or whitespace-only
-value is not a mask. The mask list is not copied into the next job.
-An output that contains a masked value is still stored. stderr is
-masked with the masks registered while that step's stdout was read.
+job. The mask replaces that value, each of its whitespace-separated
+words, and the base64, JSON, and percent-encoded forms of the value,
+with `***`. A form shorter than 4 characters is not registered.
+`ghp_`, `gho_`, `ghu_`, `ghs_`, and `ghr_` followed by ASCII letters
+or digits, and `github_pat_` followed by ASCII letters, digits, or
+underscores, are masked together with that prefix. A partial line is
+held until the next read or the end of the stream. A value split
+across two lines is not joined. Annotation text is masked. A stored
+step summary and a stored copy of an env, output, or state file are
+masked. The live files the next step reads are not. A step output
+keeps the raw value. A job output that contains an injected secret
+or one of those prefixes is omitted, and the omission is recorded
+without the value. An `add-mask` value in a job output is stored as
+masked text. A registered value or word shorter than 4 characters
+logs a warning that does not include the value. The check-run post
+applies the prefix rules to its request body. An empty or
+whitespace-only value is not a mask. The mask list is not copied
+into the next job. stderr is masked with the masks registered while
+that step's stdout was read. This does not open the secret directory
+and does not mint a token.
 
 The poll treats a pull request as a fork when the head repository
 full name differs from the configured repository. It records that
