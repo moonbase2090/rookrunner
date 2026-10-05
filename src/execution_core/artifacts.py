@@ -11,8 +11,9 @@ GitHub's artifact storage quota depends on the plan: 500 MB on GitHub Free,
 Team, and 50 GB on GitHub Enterprise Cloud. That page states no single
 per-file or per-job count. This worker does not apply a second quota and does
 not evict. The bytes stay in the attempt workspace, which is already covered
-by the configured disk budget. This is not the upload-artifact API and it
-does not build a zip.
+by the configured disk budget. An owned upload step names selected files
+in this manifest, including files that match the snapshot. It still does
+not build a zip.
 https://docs.github.com/en/actions/reference/limits
 """
 
@@ -134,3 +135,43 @@ def written_files(workspace, snapshot_dir):
             found.append({"path": relative, "size": size, "digest": digest})
     found.sort(key=lambda item: item["path"])
     return found
+
+
+def named_manifest(workspace, snapshot_dir, selections=None):
+    """NS-12 entries plus selected files, each selected path named once.
+
+    An empty selection returns the NS-12 list and no missing paths. A
+    selected path that is missing or not a regular file is reported and
+    is not given a second row. Unselected unchanged files stay omitted.
+    """
+
+    entries = written_files(workspace, snapshot_dir)
+    if not selections:
+        return entries, []
+    by_path = {item["path"]: dict(item) for item in entries}
+    missing = []
+    for item in selections:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        paths = item.get("paths")
+        if not isinstance(name, str) or not isinstance(paths, list):
+            continue
+        for relative in paths:
+            if not isinstance(relative, str) or _parts(relative) is None:
+                if isinstance(relative, str) and relative:
+                    missing.append(relative)
+                continue
+            current = by_path.get(relative)
+            if current is not None:
+                current["name"] = name
+                continue
+            try:
+                size, digest = file_identity(workspace, relative)
+            except ArtifactError:
+                missing.append(relative)
+                continue
+            by_path[relative] = {"path": relative, "size": size, "digest": digest, "name": name}
+    found = list(by_path.values())
+    found.sort(key=lambda item: item["path"])
+    return found, sorted(set(missing))

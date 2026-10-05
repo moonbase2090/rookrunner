@@ -25,7 +25,9 @@ Restart records the container beside the attempt, removes only that
 container, and does not launch the interrupted attempt again. A submission
 that would exceed the configured disk budget is refused. Active runs and
 their evidence stay. A finished workflow attempt publishes a manifest of
-the regular files it wrote under its workspace. Development fixtures do not.
+the regular files it wrote under its workspace. Selected upload files are
+named there, including unchanged files. A missing selected file fails a
+job that would otherwise succeed. Development fixtures do not.
 """
 
 import base64
@@ -53,7 +55,8 @@ from .actions import (
     ActionUnavailable,
     stage_node24_actions,
 )
-from .artifacts import ArtifactError, file_identity, read_bytes, written_files
+from .artifacts import ArtifactError, file_identity, named_manifest, read_bytes
+from .upload import load_uploads
 from .attempt import AttemptError, materialize_attempt
 from .concurrency import decide, eligible, resolve_groups
 from .disk import DEFAULT_DISK_BUDGET, usage
@@ -343,6 +346,7 @@ class Worker:
                     path TEXT NOT NULL,
                     size INTEGER NOT NULL,
                     digest TEXT NOT NULL,
+                    name TEXT,
                     UNIQUE(run_id, path)
                 );
                 CREATE TABLE IF NOT EXISTS status_posts (
@@ -353,6 +357,9 @@ class Worker:
                     PRIMARY KEY (run_id, context, sha, state)
                 );
             """)
+            columns = {row[1] for row in self.db.execute("PRAGMA table_info(artifacts)")}
+            if "name" not in columns:
+                self.db.execute("ALTER TABLE artifacts ADD COLUMN name TEXT")
             with self.db:
                 root = self.db.execute(
                     "SELECT value FROM metadata WHERE key='repository'"
@@ -930,7 +937,7 @@ class Worker:
                 return
 
     def _save_workflow_outcome(self, run_id, current, outcome):
-        self._publish_artifacts(current)
+        missing = self._publish_artifacts(current, outcome.get("uploads"))
         steps = _public_steps(outcome["steps"])
         exit_code = outcome["exit_code"]
         image_ok = outcome["image_digest"] == current["input"]["image_digest"]
@@ -940,6 +947,16 @@ class Worker:
                 exit_code=None,
                 error=None,
                 cancel_requested=False,
+                steps=steps,
+            )
+        elif missing and outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
+            current.update(
+                state="failed",
+                exit_code=None,
+                error={
+                    "kind": "STEP_FAILED",
+                    "message": f"selected artifact file is missing: {missing[0]}"[:512],
+                },
                 steps=steps,
             )
         elif outcome["status"] == "succeeded" and exit_code == 0 and image_ok:
@@ -1316,23 +1333,30 @@ class Worker:
             return True
         return used + incoming > self.disk_budget
 
-    def _publish_artifacts(self, record):
-        """Record files this attempt wrote. The workspace itself is not deleted."""
+    def _publish_artifacts(self, record, selections=None):
+        """Record files this attempt wrote. The workspace itself is not deleted.
+
+        `selections` None reads `uploads.json` beside the workspace. A missing
+        or unusable file means no names. Paths that are no longer regular
+        files are returned and are not inserted.
+        """
 
         if (record.get("input") or {}).get("kind") != "workflow_job":
-            return
+            return []
         attempt_id = record.get("attempt_id")
         if not attempt_id or not _ATTEMPT_ID.fullmatch(attempt_id):
-            return
+            return []
         if self.db.execute(
             "SELECT 1 FROM artifacts WHERE run_id=? LIMIT 1", (record["run_id"],)
         ).fetchone():
-            return
+            return []
         workspace = self.state / "attempts" / attempt_id / "workspace"
         snapshot_id = record["input"].get("snapshot_id")
         if not isinstance(snapshot_id, str) or not _ATTEMPT_ID.fullmatch(snapshot_id):
-            return
+            return []
         snapshot = self.state / "snapshots" / snapshot_id
+        if selections is None:
+            selections = load_uploads(workspace.parent / "uploads.json")
         try:
             if (
                 workspace.is_symlink()
@@ -1340,21 +1364,23 @@ class Worker:
                 or snapshot.is_symlink()
                 or not snapshot.is_dir()
             ):
-                return
-            entries = written_files(workspace, snapshot)
+                return []
+            entries, missing = named_manifest(workspace, snapshot, selections)
         except OSError:
-            return
+            return []
         for entry in entries:
             self.db.execute(
-                "INSERT INTO artifacts(id, run_id, path, size, digest) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO artifacts(id, run_id, path, size, digest, name) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid.uuid4()),
                     record["run_id"],
                     entry["path"],
                     entry["size"],
                     entry["digest"],
+                    entry.get("name"),
                 ),
             )
+        return missing
 
     def _drop_snapshot(self, snapshot_id):
         target = Path(self.state) / "snapshots" / snapshot_id
@@ -1547,14 +1573,18 @@ class Worker:
             if offset > total:
                 raise Fault("CURSOR_EXPIRED", "cursor exceeds available artifacts")
             rows = self.db.execute(
-                "SELECT id, path, size, digest FROM artifacts WHERE run_id=? ORDER BY path LIMIT ? OFFSET ?",
+                "SELECT id, path, size, digest, name FROM artifacts WHERE run_id=? ORDER BY path LIMIT ? OFFSET ?",
                 (record["run_id"], limit + 1, offset),
             ).fetchall()
             page = rows[:limit]
+            artifacts = []
+            for row in page:
+                item = {"id": row[0], "path": row[1], "size": row[2], "digest": row[3]}
+                if row[4] is not None:
+                    item["name"] = row[4]
+                artifacts.append(item)
             return {
-                "artifacts": [
-                    {"id": row[0], "path": row[1], "size": row[2], "digest": row[3]} for row in page
-                ],
+                "artifacts": artifacts,
                 "next_cursor": cursor("artifacts", record["run_id"], offset + len(page))
                 if len(rows) > limit
                 else None,

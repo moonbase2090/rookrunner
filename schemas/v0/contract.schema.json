@@ -1450,6 +1450,11 @@
         },
         "digest": {
           "$ref": "#/$defs/Digest"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\ud800-\\udfff]*$"
         }
       },
       "required": [
