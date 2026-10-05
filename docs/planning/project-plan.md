@@ -59,9 +59,12 @@ The owner's 2026-10-03 priorities change the horizons:
   ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
   keeps one parentless synthesized commit and still excludes the
   original commit. `.github/workflows/check.yml` is unchanged. P6
-  designs an operator-built image for `ubuntu-latest` jobs that use
-  `sudo` and apt ([runner image](../design/runner-image.md)). The
-  engine is unchanged. The caller still pins the image by digest. P5
+  runs the operator-built image when `worker --runner-image` is set
+  and `image` is omitted and every selected job is literal
+  `runs-on: ubuntu-latest`
+  ([runner image](../design/runner-image.md)). An explicit `image`
+  still wins. Any other image stays a caller pin. `run_job` still
+  requires a digest and still does not select a default. P5
   stays unstarted until the owner picks an App credential.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
@@ -83,9 +86,12 @@ The owner's 2026-10-03 priorities change the horizons:
   ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
   keeps one parentless synthesized commit and still excludes the
   original commit. `.github/workflows/check.yml` is unchanged. P6
-  designs an operator-built image for `ubuntu-latest` jobs that use
-  `sudo` and apt ([runner image](../design/runner-image.md)). The
-  engine is unchanged. The caller still pins the image by digest. P5
+  runs the operator-built image when `worker --runner-image` is set
+  and `image` is omitted and every selected job is literal
+  `runs-on: ubuntu-latest`
+  ([runner image](../design/runner-image.md)). An explicit `image`
+  still wins. Any other image stays a caller pin. `run_job` still
+  requires a digest and still does not select a default. P5
   stays unstarted until the owner picks an App credential. The rest
   of the provisional list in [next steps](next-steps.md) is not numbered
   yet.

@@ -60,8 +60,11 @@ The same terminal state for that run, context, and status SHA is `skip`.
 Unknown methods return `METHOD_NOT_FOUND`. On version 0, workflow, command,
 secret, and source selection parameters are unsupported and rejected.
 
-Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, `event`,
-and an image pinned by digest. It captures and plans one sequential `run` job,
+Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, and
+`event`. `image`, when present, is a digest pin. When it is omitted, the
+worker uses `--runner-image` only if every selected job is literal
+`runs-on: ubuntu-latest`. Without that flag, the omission is rejected and
+no run is stored. It captures and plans one sequential `run` job,
 then stores a queued run. When `event_name` is `push` or `pull_request`,
 `on` is checked before that run is stored. Optional parameters for that
 check are `activity_type`, `changed_files`, `commit_count`, and
@@ -71,7 +74,7 @@ submission key. `workflow_dispatch` and `schedule` are not evaluated.
 Without `event_name`, `on` is not evaluated. The caller supplies the
 changed-file list. A push with `commit_count` above 1,000, or
 `diff_unavailable`, skips path filters. Only the first 3,000 changed
-files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. NS-45 evaluates `concurrency` and `cancel-in-progress` on this one worker. With `queue: max`, at most 100 runs can be pending in a group. NS-46 names selected workspace files in the artifact manifest and records one local CodeQL SARIF file ([upload artifact](upload-artifact.md)). The capability version stays 12. P4 accepts `actions/checkout@v` plus digits as an owned checkout and copies ancestor history when that plan sets `fetch-depth` to the YAML integer `0` ([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one parentless synthesized commit and still excludes the original commit. `.github/workflows/check.yml` is unchanged. P6 designs an operator-built image for `ubuntu-latest` jobs that use `sudo` and apt ([runner image](runner-image.md)). The engine is unchanged. The caller still pins the image by digest. P5 stays unstarted until the owner picks an App credential. The rest of the provisional list is not numbered yet. The stored image digest keeps the `sha256:` prefix.
+files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. NS-45 evaluates `concurrency` and `cancel-in-progress` on this one worker. With `queue: max`, at most 100 runs can be pending in a group. NS-46 names selected workspace files in the artifact manifest and records one local CodeQL SARIF file ([upload artifact](upload-artifact.md)). The capability version stays 12. P4 accepts `actions/checkout@v` plus digits as an owned checkout and copies ancestor history when that plan sets `fetch-depth` to the YAML integer `0` ([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one parentless synthesized commit and still excludes the original commit. `.github/workflows/check.yml` is unchanged. P6 runs the operator-built image when `worker --runner-image` is set and `image` is omitted and every selected job is literal `runs-on: ubuntu-latest` ([runner image](runner-image.md)). An explicit `image` still wins. Any other image stays a caller pin. `run_job` still requires a digest and still does not select a default. P5 stays unstarted until the owner picks an App credential. The rest of the provisional list is not numbered yet. The stored image digest keeps the `sha256:` prefix.
 The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
@@ -87,7 +90,7 @@ already uses into the job at `/var/run/docker.sock`. The job keeps the
 caller uid. It is added to the socket's group and to group 0, because the
 mounted socket is often mode `0660` and some engines present it as owned
 by root. The job image must already contain the Docker client. Rookrunner
-does not install one and does not select a default image. GitHub requires Docker to be
+does not install one into a caller image. `worker --runner-image` selects the operator image, which includes the client, when `image` is omitted and every selected job is literal `runs-on: ubuntu-latest`. GitHub requires Docker to be
 installed and the service running for container-dependent work on a
 self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
@@ -356,9 +359,10 @@ exit 1 and print JSON to stderr.
 requires `--backend development` and `--key`. Omitted `--exit-code`,
 `--delay-ms`, and `--output` use the fixture defaults above.
 
-`submit` sends version 1 when `--workflow`, `--job-id`, `--event`, and
-`--image` are all present. `--event` is one JSON value. `--image` is the
-caller's digest pin and is not rewritten by the CLI. `--backend development`
+`submit` sends version 1 when `--workflow`, `--job-id`, and `--event` are
+present. `--event` is one JSON value. `--image` is optional. When it is
+present it is the caller's digest pin and is not rewritten by the CLI.
+`--backend development`
 may be present on that command and is not sent; version 1 has no backend
 field. The source is the repository the worker was started with. Fixture
 options cannot be combined with a workflow submit. A partial set of those

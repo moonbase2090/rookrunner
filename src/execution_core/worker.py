@@ -11,6 +11,10 @@ socket only when this worker was started with the docker socket flag. The
 job then keeps the caller uid and is added to the groups that can open
 that socket. `worker --node24 DIR` mounts that directory read-only at
 `/opt/node24`. It is not added to `PATH`. The worker does not download Node.
+`worker --runner-image DIGEST` is the image for a submit or poll that
+omits `image` when every selected job has `runs-on: ubuntu-latest`.
+The worker does not pull, build, or publish it. An explicit `image`
+still wins.
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.
@@ -271,6 +275,7 @@ class Worker:
         docker_socket=False,
         action_remote=None,
         node24=None,
+        runner_image=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
@@ -288,6 +293,12 @@ class Worker:
         self.network = network
         self.docker_socket = docker_socket
         self.node24 = None if node24 is None else inspect_node24(node24)
+        self.runner_image = _accept_runner_image(runner_image)
+        self.runner_image_digest = (
+            None
+            if self.runner_image is None
+            else "sha256:" + self.runner_image.rsplit("sha256:", 1)[1]
+        )
         self.action_remote = action_remote
         self._action_store = None
         if disk_budget is None:
@@ -893,6 +904,7 @@ class Worker:
             event_name=event_name,
             node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
             actions=actions_root,
+            runner_image=self.runner_image_digest,
         )
 
     def _abandoned(self, run_id):
@@ -1080,8 +1092,15 @@ class Worker:
     def submit_workflow(self, p):
         fields(
             p,
-            ("version", "submission_key", "workflow", "job_id", "event", "image"),
-            ("event_name", "activity_type", "changed_files", "commit_count", "diff_unavailable"),
+            ("version", "submission_key", "workflow", "job_id", "event"),
+            (
+                "image",
+                "event_name",
+                "activity_type",
+                "changed_files",
+                "commit_count",
+                "diff_unavailable",
+            ),
         )
         key = p["submission_key"]
         if not utf8_string(key, 1, 128):
@@ -1119,9 +1138,12 @@ class Worker:
             integer(p["commit_count"], 0, 1_000_000_000, "commit_count")
         if "diff_unavailable" in p and type(p["diff_unavailable"]) is not bool:
             invalid("diff_unavailable must be a boolean")
-        if not isinstance(p["image"], str) or not (
-            _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
-        ):
+        if "image" in p:
+            if not isinstance(p["image"], str) or not (
+                _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
+            ):
+                invalid("image is not pinned by digest")
+        elif self.runner_image is None:
             invalid("image is not pinned by digest")
         try:
             event_text = canonical(p["event"])
@@ -1132,8 +1154,9 @@ class Worker:
             "workflow": p["workflow"],
             "job_id": p["job_id"],
             "event": p["event"],
-            "image": p["image"],
         }
+        if "image" in p:
+            submitted["image"] = p["image"]
         if "event_name" in p:
             submitted["event_name"] = p["event_name"]
         normalized = canonical(submitted)
@@ -1248,7 +1271,12 @@ class Worker:
                 raise self._plan_fault(exc) from exc
             except (OSError, UnicodeError, ValueError) as exc:
                 raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
-            image_digest = "sha256:" + p["image"].rsplit("sha256:", 1)[1]
+            if "image" in p:
+                image = p["image"]
+            else:
+                _require_ubuntu_latest(planned["plan"])
+                image = self.runner_image
+            image_digest = "sha256:" + image.rsplit("sha256:", 1)[1]
             record = {
                 "run_id": str(uuid.uuid4()),
                 "worker_id": self.worker_id,
@@ -1265,7 +1293,7 @@ class Worker:
                     "job_id": p["job_id"],
                     "event_digest": hashlib.sha256(event_text.encode("ascii")).hexdigest(),
                     "image_digest": image_digest,
-                    "image_reference": p["image"],
+                    "image_reference": image,
                 },
                 "backend": {"name": "workflow", "version": __version__},
                 "compatibility_notes": [
@@ -1456,6 +1484,8 @@ class Worker:
                     "digest": self.node24["digest"],
                     "mount": _NODE24_MOUNT,
                 }
+            if self.runner_image_digest is not None:
+                described["runner_image"] = self.runner_image_digest
             return described
         if method == "run.submit":
             if isinstance(p, dict) and is_integer(p.get("version")) and int(p["version"]) == 1:
@@ -1816,6 +1846,37 @@ class Worker:
             self.close()
 
 
+def _accept_runner_image(value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not (
+        _IMAGE_ID.fullmatch(value) or _IMAGE_REF.fullmatch(value)
+    ):
+        raise ValueError("runner image is not pinned by digest")
+    return value
+
+
+def _require_ubuntu_latest(plan):
+    """Reject an omitted image unless every selected job is ubuntu-latest."""
+
+    def walk(jobs):
+        if not isinstance(jobs, list) or not jobs:
+            raise Fault("CAPABILITY_UNSUPPORTED", "runs-on is not ubuntu-latest")
+        for job in jobs:
+            if not isinstance(job, dict):
+                raise Fault("CAPABILITY_UNSUPPORTED", "runs-on is not ubuntu-latest")
+            call = job.get("call")
+            if isinstance(call, dict):
+                walk(call.get("jobs"))
+                continue
+            if job.get("runs_on") != "ubuntu-latest":
+                raise Fault("CAPABILITY_UNSUPPORTED", "runs-on is not ubuntu-latest")
+
+    if not isinstance(plan, dict):
+        raise Fault("CAPABILITY_UNSUPPORTED", "runs-on is not ubuntu-latest")
+    walk(plan.get("jobs"))
+
+
 def serve(
     repository,
     state,
@@ -1823,6 +1884,7 @@ def serve(
     network=DEFAULT_NETWORK,
     docker_socket=False,
     node24=None,
+    runner_image=None,
 ):
     worker = Worker(
         repository,
@@ -1831,6 +1893,7 @@ def serve(
         network=network,
         docker_socket=docker_socket,
         node24=node24,
+        runner_image=runner_image,
     )
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())

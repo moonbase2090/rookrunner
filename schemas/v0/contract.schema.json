@@ -313,8 +313,7 @@
                 "submission_key",
                 "workflow",
                 "job_id",
-                "event",
-                "image"
+                "event"
               ],
               "additionalProperties": false
             }
@@ -1366,6 +1365,9 @@
             "mount"
           ],
           "additionalProperties": false
+        },
+        "runner_image": {
+          "$ref": "#/$defs/ImageDigest"
         }
       },
       "required": [
