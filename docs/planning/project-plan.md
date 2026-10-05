@@ -50,7 +50,10 @@ The owner's 2026-10-03 priorities change the horizons:
   `env`, `with`, and step and job `name`, including mixed text.
   NS-45 evaluates `concurrency` and `cancel-in-progress` on this one
   worker. With `queue: max`, at most 100 runs can be pending in a
-  group. The capability version stays 12.
+  group. NS-46 designs an owned upload of workspace files and the
+  CodeQL SARIF upload
+  ([upload artifact](../design/upload-artifact.md)). The engine is
+  unchanged. The capability version stays 12.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -61,10 +64,13 @@ The owner's 2026-10-03 priorities change the horizons:
   the statuses. NS-44 evaluates expressions in `run`, `env`, `with`,
   and step and job `name`, including mixed text. NS-45 evaluates
   `concurrency` and `cancel-in-progress` on this one worker. With
-  `queue: max`, at most 100 runs can be pending in a group. The next
-  work is the rest of the provisional list in
-  [next steps](next-steps.md), which is not numbered yet. The next
-  item is an owned `actions/upload-artifact`.
+  `queue: max`, at most 100 runs can be pending in a group. NS-46
+  designs an owned `actions/upload-artifact` that names files in the
+  artifact manifest, and the CodeQL SARIF upload beside it
+  ([upload artifact](../design/upload-artifact.md)). The engine is
+  unchanged. The capability version stays 12. The implementation is
+  the next slice. The rest of the provisional list in
+  [next steps](next-steps.md) is not numbered yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.
 
 The `dogfood` and `ownerci` stories in the [backlog manifest](backlog.json)
