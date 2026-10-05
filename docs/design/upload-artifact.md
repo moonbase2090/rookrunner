@@ -6,7 +6,9 @@ file under the name `codeql-sarif`. The capability version stays 12.
 A version 11 plan is not migrated. `.github/workflows/check.yml` is
 unchanged. This is not a GitHub-equivalence claim.
 
-The implementation follows this document. The next item is P4.
+The implementation follows this document. P4 designs checkout by major
+tag and `fetch-depth: 0` ([checkout tag](checkout-tag.md)). The engine
+is unchanged.
 
 ## Why this slice is a design
 

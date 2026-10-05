@@ -215,8 +215,10 @@ when the run is accepted. The inventory rank below is the 2026-10-04
 reading, when that field failed planning. NS-46 names selected
 workspace files in the artifact manifest and records one local CodeQL
 SARIF file ([upload artifact](upload-artifact.md)). The capability
-version stays 12. The next item is P4. The rank table above stays the
-2026-10-04 reading.
+version stays 12. P4 designs an owned checkout for major tags and for
+`fetch-depth: 0` ([checkout tag](checkout-tag.md)). The engine is
+unchanged. The implementation follows that design. The rank table
+above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website

@@ -31,8 +31,10 @@ including mixed text. NS-45 evaluates `concurrency` and
 A version 11 plan is not migrated. NS-46 names selected workspace files
 in the artifact manifest and records one local CodeQL SARIF file
 ([upload artifact](../design/upload-artifact.md)). The capability
-version stays 12. The next item is P4. The rest of the provisional
-list is not numbered yet.
+version stays 12. P4 designs an owned checkout for major tags and for
+`fetch-depth: 0` ([checkout tag](../design/checkout-tag.md)). The
+engine is unchanged. The implementation follows that design. The rest
+of the provisional list is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -2170,13 +2172,37 @@ The questions answered in that document are the accepted inputs, when
 the paths are recorded, what the manifest stores, and that the SARIF
 step stays on this worker.
 
+**P4. Checkout by major tag and fetch-depth 0.**
+
+Status: designed. The design is
+[checkout tag](../design/checkout-tag.md). This slice does not change
+the engine. The capability version stays 12. A version 11 plan is not
+migrated. `.github/workflows/check.yml` is unchanged.
+
+Settled there, so the implementation does not reopen them:
+
+1. **Uses.** `actions/checkout@v` plus one or more digits is the owned
+   checkout, including `v5`. The tag is stored and is not resolved or
+   fetched. Dotted tags, a bare `actions/checkout`, and a checkout
+   inside a composite stay rejected.
+2. **fetch-depth.** Only the YAML integer `0` is accepted. Omission
+   keeps today's single parentless commit. Any other integer is
+   `CAPABILITY_UNSUPPORTED` and names the field.
+3. **History.** `fetch-depth: 0` copies the ancestor closure of
+   `base_commit` into the staging store before publish. The default
+   capture still excludes the original commit. Other branches and tags
+   are not copied. There is no fetch.
+4. **HEAD.** The synthesized commit gains that `base_commit` parent
+   only in history mode. `HEAD` stays the synthesized id.
+   `github.sha` is unchanged.
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
-NS-46 implements item 3. The next item is P4. The remaining items are
-not numbered yet.
+NS-46 implements item 3. P4 designs item 4. The implementation follows
+that design. The remaining items are not numbered yet.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2189,8 +2215,10 @@ not numbered yet.
    manifest, and the CodeQL SARIF upload that sits next to it.
    Implemented
    ([upload artifact](../design/upload-artifact.md)). The capability
-   version stays 12. The next item is P4.
+   version stays 12.
 4. **P4.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
+   Designed. The implementation follows
+   [checkout tag](../design/checkout-tag.md) and is not this slice.
    The tag form is on deploy workflows. `fetch-depth` is one Scorecard
    workflow and needs history in the snapshot.
 5. **P5.** Check runs through a GitHub App, if the owner picks an App
