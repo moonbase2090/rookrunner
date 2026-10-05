@@ -212,7 +212,11 @@ The planner stores that text. NS-44 evaluates expressions in `run`,
 `secrets` stays unavailable and `hashFiles` stays unsupported. NS-45
 accepts `concurrency` on a workflow or job and evaluates the group
 when the run is accepted. The inventory rank below is the 2026-10-04
-reading, when that field failed planning.
+reading, when that field failed planning. NS-46 designs an owned
+upload of workspace files and the CodeQL SARIF upload
+([upload artifact](upload-artifact.md)). That design does not
+implement the steps. The rank table above stays the 2026-10-04
+reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website

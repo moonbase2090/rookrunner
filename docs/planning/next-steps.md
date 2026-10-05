@@ -28,8 +28,11 @@ evaluates expressions in `run`, `env`, `with`, and step and job `name`,
 including mixed text. NS-45 evaluates `concurrency` and
 `cancel-in-progress` on this one worker. With `queue: max`, at most
 100 runs can be pending in a group. The capability version stays 12.
-A version 11 plan is not migrated. The next work is the rest of the
-provisional list, which is not numbered yet.
+A version 11 plan is not migrated. NS-46 designs an owned upload of
+workspace files and the CodeQL SARIF upload
+([upload artifact](../design/upload-artifact.md)). The engine is
+unchanged. The implementation follows that design. The rest of the
+provisional list is not numbered yet.
 
 Status: build order, 2026-10-03. Derived from the
 [PRD](../prd.md) and the [roadmap](../roadmap.md). The
@@ -480,6 +483,8 @@ GitHub Free, 1 GB on GitHub Pro, 500 MB on GitHub Free for organizations,
 states no per-file or per-job count
 (https://docs.github.com/en/actions/reference/limits). This worker does not
 add a second quota, does not evict, and does not build an upload-artifact zip.
+NS-46 designs naming selected files in that manifest and does not
+implement it.
 
 Acceptance criteria:
 
@@ -1353,6 +1358,7 @@ No slice below adds a numeric limit without a GitHub source. Read
 | Creating check runs | GitHub Apps only | https://docs.github.com/en/rest/checks/runs | NS-39 |
 | `paths` filter diff | 3,000 files. More than 1,000 commits, or a diff timeout, always runs | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | NS-41 |
 | Pending runs in a concurrency group | 100, with `queue: max` | same | NS-45 |
+| Named artifacts in one job | 500 | https://github.com/actions/upload-artifact/blob/043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/README.md | Implementation after NS-46 |
 
 The poll interval is the operator's schedule, not a number in code. A
 poll pass follows GitHub's rate-limit response headers. It does not
@@ -2021,7 +2027,8 @@ moonbase2090/rookrunner. The record is
 capability version stays 12. `.github/workflows/check.yml` is
 unchanged. The credential type stays an owner decision. NS-44
 evaluates the expression item from the list below. NS-45 evaluates
-the concurrency item. The rest is not numbered yet.
+the concurrency item. NS-46 designs the upload item. The rest is not
+numbered yet.
 
 This slice is a validation record. The poll pass runs against this
 repository for one push to a branch and one same-repository pull
@@ -2117,12 +2124,56 @@ The poll pass still does not cancel an older SHA on its own. NS-45
 cancels only inside a declared group. The 24-hour queue expiry is
 unchanged.
 
+**NS-46. Design an owned upload of workspace files.**
+
+Status: designed. The design is
+[upload artifact](../design/upload-artifact.md). This slice does not
+change the engine. The capability version stays 12. A version 11 plan
+is not migrated. `.github/workflows/check.yml` is unchanged.
+
+Settled there, so the implementation does not reopen them:
+
+1. **Uses.** `actions/upload-artifact@` and
+   `github/codeql-action/upload-sarif@`, each plus 40 lowercase
+   hexadecimal characters. The SHA is stored and is not verified. The
+   step does not read an action file, fetch a ref, or run the action
+   program. A workflow step and a local composite step are both
+   recognized. A remote composite's steps stay `run` steps. Tags,
+   short SHAs, other CodeQL paths, and `actions/download-artifact`
+   stay rejected.
+2. **No zip and no HTTP service.** Omitted `archive` records each
+   regular file under `name`. `retention-days`, `compression-level`,
+   and `overwrite: true` are `CAPABILITY_UNSUPPORTED` and name the
+   field.
+3. **Paths.** Newline-separated relative patterns. `*` and `**` are
+   whole segments. A leading `!` excludes. `..`, an absolute path,
+   `~`, `?`, and `[` fail the step. This is not `@actions/glob`.
+4. **Names.** An omitted name is `artifact`. Names are unique across
+   the attempt. One job may create 500 names, from the action README
+   at the inventory pin. That cap is names, not files.
+5. **Empty match.** Omitted `if-no-files-found` means `warn`: exit
+   code 0, one step-log line, and no entries.
+6. **Manifest.** The finish scan remains the source of bytes. The
+   implementation adds an optional `name` on the entry. This slice
+   does not edit the schema. Unselected differing files stay unnamed.
+7. **SARIF.** `sarif_file` is required in the workflow. One relative
+   regular file is labeled `codeql-sarif`. `token` and the other SARIF
+   inputs are `CAPABILITY_UNSUPPORTED` and name the field. The step
+   does not POST and does not read `github.token`.
+8. **Permissions.** `write`, `security-events: write`, and
+   `actions: write` stay rejected. `GITHUB_TOKEN` stays unset. Those
+   workflows stay blocked. The implementation does not unblock them.
+
+The questions answered in that document are the accepted inputs, when
+the paths are recorded, what the manifest stores, and that the SARIF
+step stays on this worker.
+
 ### Provisional after NS-43
 
 The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
-plan time. Expressions did not. NS-44 and NS-45 are implemented. The
-remaining items are not numbered yet.
+plan time. Expressions did not. NS-44 and NS-45 are implemented.
+NS-46 designs item 3. The remaining items are not numbered yet.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
    Implemented. With `queue: max`, at most 100 runs can be pending per
@@ -2131,8 +2182,11 @@ remaining items are not numbered yet.
    mixed text. Implemented. Sixteen of the eighteen inventoried
    workflows contain `${{ }}`. `secrets` stays unavailable and
    `hashFiles` stays unsupported.
-3. **P3.** An owned `actions/upload-artifact` that maps to the artifact
+3. **NS-46.** An owned `actions/upload-artifact` that maps to the artifact
    manifest, and the CodeQL SARIF upload that sits next to it.
+   Designed. The implementation follows
+   [upload artifact](../design/upload-artifact.md) and is not this
+   slice.
 4. **P4.** `actions/checkout` by major tag, plus `fetch-depth: 0`.
    The tag form is on deploy workflows. `fetch-depth` is one Scorecard
    workflow and needs history in the snapshot.
