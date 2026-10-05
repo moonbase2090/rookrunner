@@ -1,14 +1,16 @@
 # Secrets, GITHUB_TOKEN, and write permissions
 
-Status: designed. p7-mask is implemented. The other five pull
-requests in the plan are not. MB2090 accepted the amended answers
-for all seven questions on 2026-10-05. The source of those answers
-is the review comment on pull request 63:
+Status: designed. p7-mask and p7-trust-gate are implemented. The
+other four pull requests in the plan are not. MB2090 accepted the
+amended answers for all seven questions on 2026-10-05. The source of
+those answers is the review comment on pull request 63:
 
 https://github.com/moonbase2090/rookrunner/pull/63#issuecomment-6001650970
 
 This document records the accepted answers and the implementation
-plan. p7-mask changes the job mask. The capability version stays 12. A
+plan. p7-mask changes the job mask. p7-trust-gate compares
+pull-request repositories by numeric id and stores the allowlist
+fields on the event. The capability version stays 12. A
 version 11 plan is not migrated. No plan field and no capability
 entry are added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
@@ -17,7 +19,9 @@ stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. The
 not a GitHub-equivalence claim.
 
 The seven answers below are accepted direction. Masking from answer
-3 is implemented. The other answers are not. Deploy workflows and
+3 is implemented. The fork comparison and the allowlist match from
+answer 7 are implemented. The secret files, the worker flags, and
+the job token are not. Deploy workflows and
 macOS jobs stay deferred until the implementation plan below has
 landed.
 
@@ -92,11 +96,28 @@ into the next job. stderr is masked with the masks registered while
 that step's stdout was read. This does not open the secret directory
 and does not mint a token.
 
-The poll treats a pull request as a fork when the head repository
-full name differs from the configured repository. It records that
-pull request and runs nothing. Answer 7 replaces that comparison.
-Until that pull request lands, the full-name comparison remains the
-behavior.
+The poll compares a pull request's head and base repository ids.
+The ids are integers and match when they are equal. A bool is not
+an id. A missing head repository, including a null `head.repo`, is
+a fork. A fork is recorded and runs nothing. A same-repository
+pull request still runs. The comparison does not use the full name.
+
+The poll copies `repository.id` and `repository.default_branch`
+from the repository object into the event it already stores. The
+event's `repository.full_name` stays the configured repository.
+For a push, a non-empty commit `author.login` is stored as the tip
+commit's `author.login`. For a pull request, a non-empty
+`user.login` is stored on the pull request. `allowlist_matches` is
+a pure function of that event, the ref list, the pusher list, and
+the event name. With both lists empty, the only match is a push
+whose ref is `refs/heads/` plus `repository.default_branch`. A
+listed ref matches exactly. A listed login matches with ASCII case
+folding. The default push stays a match when a list is non-empty.
+A missing login does not match a pusher entry. A local submit that
+does not carry those fields does not match the default rule. No
+secret is read and no token is minted. `worker --secrets`,
+`worker --secret-ref`, and `worker --secret-pusher` are not added
+yet.
 
 ## Threat model
 
@@ -744,8 +765,9 @@ each item proves it.
 
 ## What this design does not do
 
-No engine change. No secret directory is created. No token is
-minted. No sign-in is started. No file under
+p7-mask and p7-trust-gate change the engine as the plan names.
+No secret directory is created. No token is minted. No sign-in is
+started. No file under
 `~/Secrets/github-app/rookrunner-app/` is read. The App is not
 installed by this document. Its App ID is 5201333. No App
 permission is added. The installation and the private key remain

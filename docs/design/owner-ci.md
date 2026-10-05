@@ -11,8 +11,10 @@ installation token ([check runs](check-runs.md)). Omitting `--app-key`
 keeps the NS-40 token file. The plan schema is unchanged. P7 designs
 secrets, `GITHUB_TOKEN`, and `write` permissions for
 owner-repository push and pull-request runs on this one local worker
-and does not change the engine ([secrets](secrets.md)). Open
-questions remain for MB2090. This is not a GitHub-equivalence claim.
+([secrets](secrets.md)). p7-mask changes the job mask. p7-trust-gate
+compares pull-request repository ids and stores the allowlist fields
+on the event. The other P7 pull requests are not implemented. This is
+not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
 only. There is no listener, no runner registration, no Terraform, and
@@ -21,9 +23,11 @@ no hosted service.
 ## Trust
 
 Only a repository the operator configured runs, and that repository is
-trusted code. A pull request whose head repository full name differs
-from the configured repository is a fork. The poll records it and runs
-nothing. `pull_request_target` is not evaluated.
+trusted code. A pull request whose head and base repository ids are
+not equal integers is a fork. A missing head repository, including a
+null head repository, is a fork. The poll records it and runs nothing.
+The comparison does not use the full name. `pull_request_target` is
+not evaluated.
 
 The PRD trust model is unchanged. The initial release supports trusted
 repositories owned by the local user, and a local Docker run is not a
@@ -83,8 +87,12 @@ is the merge commit and the status SHA is the head SHA. NS-41 evaluates `on` for
 ## Event payload
 
 The event is built from REST responses. The fields are `ref`,
-`before`, `after`, `repository.full_name`, and, for a pull request,
-the number, head, and base. No other field is added.
+`before`, `after`, `repository.full_name`, `repository.id`,
+`repository.default_branch`, and the actor login. A pull request
+also stores the number, head, and base. The head and base repository
+ids are integers. A pull request whose head repository is missing, or
+whose head id and base id are not equal integers, is a fork. The poll
+records it and runs nothing. The full name is not the comparison.
 
 Push:
 
@@ -94,6 +102,9 @@ Push:
 | `before` | The tip this poll stored for that ref. A ref with no stored tip uses forty `0` characters. That first observation is a local poll rule. The push payload's `before` is the SHA of the most recent commit on the ref before the push |
 | `after` | The tip after the poll's fetch. This is the tested commit |
 | `repository.full_name` | The configured repository |
+| `repository.id` | The integer id from the repository object |
+| `repository.default_branch` | The `default_branch` string on that object. It is not the local clone's `HEAD` |
+| `commits[-1].author.login` | The tip commit's `author.login` when that field is a non-empty string. Other commit fields are not copied |
 
 Pull request:
 
@@ -103,12 +114,17 @@ Pull request:
 | `before` | `base.sha`. The pull request object has no push-style `before`. Using `base.sha` is a local mapping |
 | `after` | The merge commit this poll fetched. This is the tested commit |
 | `repository.full_name` | The configured repository |
+| `repository.id` | The integer id from the repository object |
+| `repository.default_branch` | The `default_branch` string on that object |
 | `number` | The pull request number |
+| `pull_request.user.login` | `user.login` when that field is a non-empty string |
 | `pull_request.head.sha` | The head SHA. This is the status SHA |
 | `pull_request.head.ref` | The head ref name |
-| `pull_request.head.repo.full_name` | The head repository. A difference from the configured repository marks a fork |
+| `pull_request.head.repo.id` | The head repository id. Compared with the base id |
+| `pull_request.head.repo.full_name` | The head repository name when the response includes one. It does not decide the fork |
 | `pull_request.base.sha` | The base SHA |
 | `pull_request.base.ref` | The base ref name |
+| `pull_request.base.repo.id` | The base repository id |
 
 https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
 https://docs.github.com/en/rest/pulls/pulls
@@ -250,9 +266,11 @@ status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](check-runs.md)). The plan schema is
 unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions for owner-repository push and pull-request runs on this
-one local worker and does not change the engine
-([secrets](secrets.md)). MB2090 accepted the amended answers on
-2026-10-05. The rank table above stays the 2026-10-04 reading.
+one local worker ([secrets](secrets.md)). p7-mask changes the job
+mask. p7-trust-gate compares pull-request repository ids and stores
+the allowlist fields on the event. The other P7 pull requests are
+not implemented. MB2090 accepted the amended answers on 2026-10-05.
+The rank table above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
 They stay out of scope: Scorecard `release.yml`, and every website
@@ -345,8 +363,9 @@ this inventory. Reordered by the counts above:
 5. Check runs, if the owner chooses a GitHub App.
 6. A runner image for `ubuntu-latest` jobs that use `sudo` and apt.
 7. `write` permissions and `GITHUB_TOKEN`. Designed in
-   [secrets](secrets.md). The engine is unchanged. MB2090 accepted
-   the amended answers on 2026-10-05. macOS jobs stay deferred.
+   [secrets](secrets.md). p7-mask and p7-trust-gate are implemented.
+   MB2090 accepted the amended answers on 2026-10-05. macOS jobs stay
+   deferred.
 
 ## What this slice does not do
 
