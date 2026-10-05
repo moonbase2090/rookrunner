@@ -368,7 +368,58 @@ def main():
             "(https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners). "
             "Off by default. When set, a private Docker volume is mounted at "
             "that volume's mountpoint and TMPDIR, TEMP, and TMP default to "
-            "it. Host credential directories stay unmounted."
+            "it. Host credential directories stay unmounted. "
+            "Startup warns that the exposure includes "
+            "~/Secrets/github-app/rookrunner-app/ and "
+            "~/Secrets/rookrunner-secrets/. Combined with --app-key or "
+            "--secrets, startup refuses unless --runner-image is set and "
+            "the ~/Secrets probe exits 0."
+        ),
+    )
+    worker.add_argument(
+        "--secrets",
+        action="store_true",
+        help=(
+            "Takes no path. Requires --github-repository owner/name. "
+            "Does not open the secret directory and does not inject a value. "
+            "Combined with --docker-socket, startup refuses unless "
+            "--runner-image is set and the ~/Secrets probe exits 0."
+        ),
+    )
+    worker.add_argument(
+        "--github-repository",
+        help=(
+            "GitHub repository as owner/name. Required with --secrets. "
+            "Not a filesystem path. The secret directory is not opened."
+        ),
+    )
+    worker.add_argument(
+        "--app-key",
+        help=(
+            "private key path for the Rookrunner GitHub App. "
+            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
+            "The worker does not open the file and does not mint a token. "
+            "Combined with --docker-socket, startup refuses unless "
+            "--runner-image is set and the ~/Secrets probe exits 0."
+        ),
+    )
+    worker.add_argument(
+        "--secret-ref",
+        action="append",
+        default=[],
+        help=(
+            "one full ref, such as refs/heads/main. Repeat for each ref. "
+            "Stored for the allowlist. No secret is read."
+        ),
+    )
+    worker.add_argument(
+        "--secret-pusher",
+        action="append",
+        default=[],
+        help=(
+            "one GitHub login. Repeat for each login. "
+            "Stored for the allowlist and compared with ASCII case folding. "
+            "No secret is read."
         ),
     )
     worker.add_argument(
@@ -539,6 +590,11 @@ def main():
                 args.docker_socket,
                 node24=args.node24,
                 runner_image=args.runner_image,
+                secrets=args.secrets,
+                github_repository=args.github_repository,
+                app_key=args.app_key,
+                secret_refs=args.secret_ref,
+                secret_pushers=args.secret_pusher,
             )
             return
         if args.command == "describe":

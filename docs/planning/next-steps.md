@@ -49,9 +49,9 @@ the commit status with that installation token. Omitting `--app-key`
 keeps the NS-40 token file ([check runs](../design/check-runs.md)).
 The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and
 `write` permissions for owner-repository push and pull-request runs
-on this one local worker ([secrets](../design/secrets.md)). p7-mask
-and p7-trust-gate are implemented. The other P7 pull requests are
-not. MB2090 accepted the amended
+on this one local worker ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate, and
+p7-socket-lock are implemented. The other P7 pull requests are not.
+MB2090 accepted the amended
 answers on 2026-10-05.
 The rest of the
 provisional list is not numbered yet.
@@ -2244,8 +2244,8 @@ Rookrunner GitHub App when `--app-key` is set, then posts the commit
 status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](../design/check-runs.md)). The plan
 schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
-permissions ([secrets](../design/secrets.md)). p7-mask and
-p7-trust-gate are implemented. The other P7 pull requests are not.
+permissions ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
+and p7-socket-lock are implemented. The other P7 pull requests are not.
 MB2090 accepted the amended answers on 2026-10-05.
 
 Settled there, so the implementation does not reopen them:
@@ -2277,8 +2277,8 @@ entry are added. The plan schema is unchanged. `run.status` accepts
 optional check fields because that schema rejects unknown properties.
 `.github/workflows/check.yml` is unchanged. Omitting `--app-key` keeps
 the NS-40 token file. P7 designs secrets, `GITHUB_TOKEN`, and `write`
-permissions ([secrets](../design/secrets.md)). p7-mask and
-p7-trust-gate are implemented. The other P7 pull requests are not.
+permissions ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
+and p7-socket-lock are implemented. The other P7 pull requests are not.
 MB2090 accepted the amended answers on 2026-10-05.
 
 The owner chose the credential on 2026-10-05:
@@ -2302,8 +2302,8 @@ The owner chose the credential on 2026-10-05:
 
 **P7. Secrets, GITHUB_TOKEN, and write permissions.**
 
-Status: designed. p7-mask and p7-trust-gate are implemented. The
-design is [secrets](../design/secrets.md). The capability version
+Status: designed. p7-mask, p7-trust-gate, and p7-socket-lock are
+implemented. The design is [secrets](../design/secrets.md). The capability version
 stays 12. A version 11 plan is not migrated. No plan field is added.
 The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
@@ -2325,10 +2325,12 @@ The seven decisions and the proof for each pull request are in
 2. **p7-trust-gate.** Implemented. Forks compare numeric repository
    ids. A null head repository is a fork. The secret allowlist
    defaults to a push to the default branch. The match is a pure
-   function. The worker flags are not added yet.
-3. **p7-socket-lock.** `--docker-socket` is mutually exclusive with
-   `worker --app-key` and `worker --secrets` unless the `~/Secrets`
-   probe shows that directory is not shared.
+   function.
+3. **p7-socket-lock.** Implemented. `worker --secrets` takes no path.
+   `--docker-socket` combined with `worker --app-key` or
+   `worker --secrets` refuses unless the `~/Secrets` probe exits 0.
+   The host-control warning names the key directory and the secret
+   root. No secret is injected and no job token is minted.
 4. **p7-secret-env.** Step `env` and `with` read the fixed root
    `~/Secrets/rookrunner-secrets/<owner>/<repo>/`. A missing name
    is an empty string.
@@ -2400,8 +2402,9 @@ amended answers on 2026-10-05.
 7. **P7.** Secrets, `GITHUB_TOKEN`, and `write` permissions for
    owner-repository push and pull-request runs on this one local
    worker. Designed
-   ([secrets](../design/secrets.md)). p7-mask and p7-trust-gate are
-   implemented. MB2090 accepted the amended answers on 2026-10-05.
+   ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate, and
+   p7-socket-lock are implemented. MB2090 accepted the amended answers
+   on 2026-10-05.
    The implementation order is p7-mask, p7-trust-gate,
    p7-socket-lock, p7-secret-env, p7-secret-run, and
    p7-job-token. macOS jobs stay deferred.
