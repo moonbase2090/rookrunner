@@ -1243,6 +1243,90 @@ runs:
             self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
             self.assertIn("not a regular file", str(raised.exception))
 
+    def test_concurrency_keeps_source_and_rejects_the_invalid_combination(self):
+        workflow = """\
+name: demo
+on: push
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    concurrency:
+      group: job-${{ matrix.os }}
+      queue: max
+      cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+"""
+        plan = plan_workflow(workflow.encode(), "build")["plan"]
+        self.assertEqual(plan["capability_version"], CAPABILITY_VERSION)
+        self.assertEqual(
+            plan["workflow"]["concurrency"],
+            {
+                "group": "ci-${{ github.ref }}",
+                "cancel_in_progress": True,
+                "queue": "single",
+            },
+        )
+        self.assertEqual(
+            plan["job"]["concurrency"],
+            {
+                "group": "job-${{ matrix.os }}",
+                "cancel_in_progress": "${{ github.ref == 'refs/heads/main' }}",
+                "queue": "max",
+            },
+        )
+        string_form = plan_workflow(
+            "concurrency: plain\njobs:\n  build:\n    steps:\n      - run: echo hi\n".encode(),
+            "build",
+        )["plan"]
+        self.assertEqual(
+            string_form["workflow"]["concurrency"],
+            {"group": "plain", "cancel_in_progress": False, "queue": "single"},
+        )
+        rejected = {
+            "queue max": """\
+concurrency:
+  group: deploy
+  queue: max
+  cancel-in-progress: true
+jobs:
+  build:
+    steps:
+      - run: echo hi
+""",
+            "secrets": """\
+concurrency:
+  group: ${{ secrets.TOKEN }}
+jobs:
+  build:
+    steps:
+      - run: echo hi
+""",
+            "needs": """\
+concurrency:
+  group: ${{ needs.build.result }}
+jobs:
+  build:
+    steps:
+      - run: echo hi
+""",
+        }
+        for name, text in rejected.items():
+            with self.subTest(name=name):
+                with self.assertRaises(PlanError) as raised:
+                    plan_workflow(text.encode(), "build")
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(
+                "concurrency:\n  group: ${{ hashFiles('x') }}\njobs:\n  build:\n    steps:\n      - run: echo hi\n".encode(),
+                "build",
+            )
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertIn("hashFiles", str(raised.exception))
+
 
 class MatrixTests(unittest.TestCase):
     def plan(self, workflow, job_id="build"):

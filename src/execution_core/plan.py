@@ -13,8 +13,11 @@ those files, or persist a credential. The SHA is stored and is not verified. It 
 parsed and does not evaluate them. `run`, `env`, `with`, and step and
 job `name` are checked, including mixed text. The plan stores the
 source. Workflow `name`, service `env`, and action output `value`
-that is not one whole expression stay unchecked. `secrets` is not
-available in the checked text positions. `hashFiles` is unsupported.
+that is not one whole expression stay unchecked. `concurrency` on a
+workflow or job is stored, including mixed text in the group. `secrets`
+is not available in the checked text positions, including a concurrency
+group. `queue: max` with `cancel-in-progress: true` is rejected.
+`hashFiles` is unsupported.
 Status functions are not accepted there. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
 snapshot. A remote workflow reference is rejected. Secrets are not passed
@@ -53,7 +56,9 @@ from .expr import (
     check_job_name,
     check_job_output,
     check_step_if,
+    check_job_concurrency,
     check_step_text,
+    check_workflow_concurrency,
     check_workflow_env,
 )
 from .protocol import canonical
@@ -122,7 +127,7 @@ FORBIDDEN = {
     "privileged",
     "container",
 }
-WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env", "permissions"}
+WORKFLOW_KEYS = {"name", "on", "jobs", "defaults", "env", "permissions", "concurrency"}
 JOB_KEYS = {
     "name",
     "runs-on",
@@ -136,6 +141,7 @@ JOB_KEYS = {
     "strategy",
     "services",
     "permissions",
+    "concurrency",
 }
 # jobs.<job_id>.services.<service_id>. `credentials` would carry a registry
 # login. `volumes` can bind a host path. `options` is passed to
@@ -156,10 +162,10 @@ _SERVICE_IMAGE = re.compile(
 )
 STRATEGY_KEYS = {"fail-fast", "max-parallel", "matrix"}
 # A job that calls a reusable workflow. GitHub also allows secrets, strategy,
-# concurrency, permissions, and cache-mode. Those stay unsupported. Secrets
-# are not passed, including `secrets: inherit`.
+# permissions, and cache-mode. Those stay unsupported. `concurrency` is
+# stored. Secrets are not passed, including `secrets: inherit`.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#supported-keywords-for-jobs-that-call-a-reusable-workflow
-CALL_JOB_KEYS = {"name", "uses", "with", "needs", "if"}
+CALL_JOB_KEYS = {"name", "uses", "with", "needs", "if", "concurrency"}
 CALL_TRIGGER_KEYS = {"inputs", "outputs"}
 CALL_INPUT_KEYS = {"description", "required", "default", "type"}
 CALL_OUTPUT_KEYS = {"description", "value"}
@@ -447,6 +453,9 @@ class _Planner:
         permissions = self._permissions(body, "")
         if permissions is not None:
             workflow_plan["permissions"] = permissions
+        concurrency = self._concurrency(body, "", check_workflow_concurrency)
+        if concurrency is not None:
+            workflow_plan["concurrency"] = concurrency
         if "jobs" not in body:
             _invalid("no selected job", "jobs")
         jobs = self._mapping(body["jobs"][1], "jobs")
@@ -807,6 +816,9 @@ class _Planner:
         permissions = self._permissions(job_body, job_field)
         if permissions is not None:
             recorded["permissions"] = permissions
+        concurrency = self._concurrency(job_body, job_field, check_job_concurrency)
+        if concurrency is not None:
+            recorded["concurrency"] = concurrency
         condition = self._if_text(job_body, job_field, check_job_if)
         if condition is not None:
             recorded["if"] = condition
@@ -892,6 +904,9 @@ class _Planner:
                 "jobs": loaded["jobs"],
             },
         }
+        concurrency = self._concurrency(items, field, check_job_concurrency)
+        if concurrency is not None:
+            recorded["concurrency"] = concurrency
         condition = self._if_text(items, field, check_job_if)
         if condition is not None:
             recorded["if"] = condition
@@ -994,6 +1009,9 @@ class _Planner:
         permissions = self._permissions(body, "")
         if permissions is not None:
             recorded["permissions"] = permissions
+        concurrency = self._concurrency(body, "", check_workflow_concurrency)
+        if concurrency is not None:
+            recorded["concurrency"] = concurrency
         return recorded
 
     def _called_trigger(self, node, field):
@@ -1170,6 +1188,66 @@ class _Planner:
             order.append(ready[0])
             pending.remove(ready[0])
         return order
+
+    def _concurrency(self, items, field, check):
+        """Store a concurrency group. The source is evaluated when the run is accepted."""
+
+        if "concurrency" not in items:
+            return None
+        path = _join(field, "concurrency")
+        node = items["concurrency"][1]
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG:
+            self._enter(node, path)
+            if node.value == "" or "\0" in node.value:
+                _invalid(f"{path}: group is not accepted", path)
+            self._check_expression(node.value, path, check)
+            return {"group": node.value, "cancel_in_progress": False, "queue": "single"}
+        if not isinstance(node, MappingNode):
+            self._enter(node, path)
+            _invalid(f"{path} must be a string or a mapping", path)
+        body = self._mapping(node, path, forbid=False)
+        self._allow(body, path, {"group", "cancel-in-progress", "queue"})
+        if "group" not in body:
+            _invalid(f"{path}: group is required", path)
+        group_field = _join(path, "group")
+        group = self._string_scalar(body["group"][1], group_field)
+        if group == "" or "\0" in group:
+            _invalid(f"{group_field}: group is not accepted", group_field)
+        self._check_expression(group, group_field, check)
+        cancel = False
+        if "cancel-in-progress" in body:
+            cancel = self._cancel_in_progress(
+                body["cancel-in-progress"][1], _join(path, "cancel-in-progress"), check
+            )
+        queue = "single"
+        if "queue" in body:
+            queue_field = _join(path, "queue")
+            queue = self._string_scalar(body["queue"][1], queue_field)
+            if queue not in {"single", "max"}:
+                _invalid(f"{queue_field}: queue is not accepted", queue_field)
+        if queue == "max" and cancel is True:
+            _invalid(
+                f"{path}: queue max cannot be combined with cancel-in-progress",
+                path,
+            )
+        return {"group": group, "cancel_in_progress": cancel, "queue": queue}
+
+    def _cancel_in_progress(self, node, path, check):
+        self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == BOOL_TAG:
+            try:
+                value = self.constructor.construct_object(node, deep=False)
+            except yaml.YAMLError:
+                _invalid(f"{path} must be a boolean", path)
+            if type(value) is not bool:
+                _invalid(f"{path} must be a boolean", path)
+            return value
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG and _whole_expression(node.value):
+            if node.value.strip() == "" or "\0" in node.value:
+                _invalid(f"{path}: expression is not accepted", path)
+            self._check_expression(node.value, path, check)
+            return node.value
+        _invalid(f"{path} must be a boolean", path)
 
     def _strategy(self, items, field):
         if "strategy" not in items:

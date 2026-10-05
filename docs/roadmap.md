@@ -84,7 +84,9 @@ through NS-43 in [next steps](planning/next-steps.md).
    owner repository. NS-43 recorded those statuses
    ([validation](validation/owner-ci-rookrunner.md)). NS-44 evaluates
    expressions in `run`, `env`, `with`, and step and job `name`,
-   including mixed text. The capability version stays 12.
+   including mixed text. NS-45 evaluates `concurrency` and
+   `cancel-in-progress` on this one worker. With `queue: max`, at most
+   100 runs can be pending in a group. The capability version stays 12.
 6. Design owner CI (NS-39, designed). Report runs as commit statuses
    (NS-40, implemented). Evaluate `on` for push and pull request
    (NS-41, implemented). Poll owner repositories from an OS-scheduled

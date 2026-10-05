@@ -123,6 +123,11 @@ JOB_TEXT_FUNCTIONS = OUTPUT_FUNCTIONS
 # Workflow env — github, secrets, inputs, vars. secrets is withheld.
 # No needs, strategy, matrix, or env context.
 WORKFLOW_ENV_CONTEXTS = frozenset({"github", "inputs", "vars"})
+# Workflow concurrency — github, inputs, vars. secrets is withheld.
+# Job concurrency also allows needs, strategy, and matrix.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
+CONCURRENCY_WORKFLOW_CONTEXTS = WORKFLOW_ENV_CONTEXTS
+CONCURRENCY_JOB_CONTEXTS = JOB_NAME_CONTEXTS
 
 
 class ExprError(Exception):
@@ -202,6 +207,18 @@ def check_workflow_env(source):
     """Reject an expression in a workflow `env` value."""
 
     check_text(source, WORKFLOW_ENV_CONTEXTS, JOB_TEXT_FUNCTIONS)
+
+
+def check_workflow_concurrency(source):
+    """Reject an expression in a workflow `concurrency` group or flag."""
+
+    check_text(source, CONCURRENCY_WORKFLOW_CONTEXTS, JOB_TEXT_FUNCTIONS)
+
+
+def check_job_concurrency(source):
+    """Reject an expression in a job `concurrency` group or flag."""
+
+    check_text(source, CONCURRENCY_JOB_CONTEXTS, JOB_TEXT_FUNCTIONS)
 
 
 def check_text(source, contexts, functions):
