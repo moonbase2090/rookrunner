@@ -401,7 +401,18 @@ class CheckoutTagTests(unittest.TestCase):
         _git(repo, "add", "side.txt")
         _commit(repo, "topic")
         _git(repo, "checkout", "main")
-        _git(repo, "merge", "--no-ff", "-m", "merge", "side")
+        _git(
+            repo,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            "-m",
+            "merge",
+            "side",
+        )
         left = _git(repo, "rev-parse", "HEAD^1").stdout.decode().strip()
         right = _git(repo, "rev-parse", "HEAD^2").stdout.decode().strip()
         tip = _git(repo, "rev-parse", "HEAD").stdout.decode().strip()
