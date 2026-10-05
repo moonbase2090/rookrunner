@@ -58,7 +58,11 @@ The owner's 2026-10-03 priorities change the horizons:
   `fetch-depth` to the YAML integer `0`
   ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
   keeps one parentless synthesized commit and still excludes the
-  original commit. `.github/workflows/check.yml` is unchanged.
+  original commit. `.github/workflows/check.yml` is unchanged. P6
+  designs an operator-built image for `ubuntu-latest` jobs that use
+  `sudo` and apt ([runner image](../design/runner-image.md)). The
+  engine is unchanged. The caller still pins the image by digest. P5
+  stays unstarted until the owner picks an App credential.
   A version 11 plan is not migrated. The `dogfood` epic, together with
   the `check.yml` subset of RR-16, RR-17, and RR-18, has a `succeeded`
   result with exit code 0.
@@ -78,7 +82,11 @@ The owner's 2026-10-03 priorities change the horizons:
   `fetch-depth` to the YAML integer `0`
   ([checkout tag](../design/checkout-tag.md)). Omitting `fetch-depth`
   keeps one parentless synthesized commit and still excludes the
-  original commit. `.github/workflows/check.yml` is unchanged. The rest
+  original commit. `.github/workflows/check.yml` is unchanged. P6
+  designs an operator-built image for `ubuntu-latest` jobs that use
+  `sudo` and apt ([runner image](../design/runner-image.md)). The
+  engine is unchanged. The caller still pins the image by digest. P5
+  stays unstarted until the owner picks an App credential. The rest
   of the provisional list in [next steps](next-steps.md) is not numbered
   yet.
 - **Later:** RR-29 (MCP) moves from Next to Later, with RR-33 and RR-37.

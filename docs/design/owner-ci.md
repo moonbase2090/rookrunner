@@ -220,7 +220,11 @@ owned checkout and copies ancestor history when that plan sets
 `fetch-depth` to the YAML integer `0`
 ([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one
 parentless synthesized commit and still excludes the original commit.
-`.github/workflows/check.yml` is unchanged. The rank table
+`.github/workflows/check.yml` is unchanged. P6 designs an
+operator-built image for `ubuntu-latest` jobs that use `sudo` and apt
+([runner image](runner-image.md)). The engine is unchanged. The caller
+still pins the image by digest. P5 stays unstarted until the owner
+picks an App credential. The rank table
 above stays the 2026-10-04 reading.
 
 Deploy and publish workflows need secrets or a `write` permission.
