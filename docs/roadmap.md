@@ -107,8 +107,10 @@ through NS-43 in [next steps](planning/next-steps.md).
    ([check runs](design/check-runs.md)). The plan schema is unchanged.
    P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for
    owner-repository push and pull-request runs on this one local
-   worker and does not change the engine
-   ([secrets](design/secrets.md)). MB2090 accepted the amended
+   worker ([secrets](design/secrets.md)). p7-mask changes the job
+   mask. p7-trust-gate compares pull-request repository ids and
+   stores the allowlist fields on the event. The other P7 pull
+   requests are not implemented. MB2090 accepted the amended
    answers on 2026-10-05.
    The rest of the provisional list is not numbered
    yet.

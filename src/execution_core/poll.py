@@ -20,7 +20,9 @@ Local rules, not GitHub-equivalence claims:
 - A pull request's activity is ``opened`` the first time it is seen
   and ``synchronize`` when its head or merge SHA changes.
 - A missing ``refs/pull/<number>/merge`` is recorded and runs nothing.
-- A fork is recorded and runs nothing.
+- A fork is recorded and runs nothing. The head and base repository
+  ids match only when both are integers and equal. A null head
+  repository is a fork. The full name is not the comparison.
 - The submission key is ``poll-`` plus the SHA-256 of the repository,
   event, tested SHA, workflow, and job.
 - A queued run is cancelled 24 hours after acceptance and reported as
@@ -44,7 +46,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from .checks import post_check_flow
-from .protocol import canonical, strict_json
+from .protocol import canonical, is_integer, strict_json
 from .status import (
     StatusError,
     github_state,
@@ -105,6 +107,135 @@ def submission_key(repository, event, sha, workflow, job):
 
     material = "\0".join((repository, event, sha, workflow, job)).encode()
     return "poll-" + hashlib.sha256(material).hexdigest()
+
+
+def _integer_id(value):
+    """Return a JSON integer, or None. A bool is not an id."""
+
+    if not is_integer(value):
+        return None
+    return int(value)
+
+
+def _login(value):
+    """Return a non-empty login string, or None."""
+
+    if not isinstance(value, dict):
+        return None
+    login = value.get("login")
+    if not isinstance(login, str) or login == "":
+        return None
+    return login
+
+
+def _ascii_fold(value):
+    """Fold A-Z to a-z. Other characters, including non-ASCII letters, stay."""
+
+    return "".join(
+        chr(ord(character) + 32) if "A" <= character <= "Z" else character for character in value
+    )
+
+
+def _same_repository(head, base):
+    """Return whether the head and base repository ids are equal integers.
+
+    A missing head repository, including a null ``head.repo``, is not
+    the same repository. The full name is not compared.
+    """
+
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    if not isinstance(head_repo, dict) or not isinstance(base_repo, dict):
+        return False
+    head_id = _integer_id(head_repo.get("id"))
+    base_id = _integer_id(base_repo.get("id"))
+    if head_id is None or base_id is None:
+        return False
+    return head_id == base_id
+
+
+def _event_repository(configured, body):
+    """Copy the configured full name plus id and default branch from the body."""
+
+    copied = {"full_name": configured}
+    if not isinstance(body, dict):
+        return copied
+    ident = _integer_id(body.get("id"))
+    if ident is not None:
+        copied["id"] = ident
+    branch = body.get("default_branch")
+    if isinstance(branch, str) and branch != "":
+        copied["default_branch"] = branch
+    return copied
+
+
+def _event_repo(repo):
+    """Copy the integer id and, when present, the full name."""
+
+    copied = {"id": _integer_id(repo.get("id"))}
+    name = repo.get("full_name")
+    if isinstance(name, str) and name != "":
+        copied["full_name"] = name
+    return copied
+
+
+def _stored_login(event, event_name):
+    if not isinstance(event, dict):
+        return None
+    if event_name == "push":
+        commits = event.get("commits")
+        if not isinstance(commits, list) or not commits or not isinstance(commits[-1], dict):
+            return None
+        return _login(commits[-1].get("author"))
+    if event_name == "pull_request":
+        pull = event.get("pull_request")
+        if not isinstance(pull, dict):
+            return None
+        return _login(pull.get("user"))
+    return None
+
+
+def _default_push(event, event_name):
+    if event_name != "push" or not isinstance(event, dict):
+        return False
+    ref = event.get("ref")
+    repository = event.get("repository")
+    if not isinstance(ref, str) or not isinstance(repository, dict):
+        return False
+    branch = repository.get("default_branch")
+    if not isinstance(branch, str) or branch == "":
+        return False
+    return ref == "refs/heads/" + branch
+
+
+def allowlist_matches(event, refs, pushers, event_name):
+    """Return whether this stored event may receive file-backed secrets.
+
+    ``refs`` and ``pushers`` are the operator lists. With both empty, the
+    only match is a push whose ``ref`` is ``refs/heads/`` plus
+    ``repository.default_branch``. A listed ref matches that ``ref``
+    exactly. A listed login matches the actor login with ASCII case
+    folding. The default push stays a match when a list is non-empty.
+    For a push, the login is the last commit's ``author.login`` when that
+    field is a non-empty string. For a pull request, the login is
+    ``pull_request.user.login`` on the same condition. A missing login
+    does not match a pusher entry. An event that lacks these fields does
+    not match the default rule. This does not read a secret.
+    """
+
+    if _default_push(event, event_name):
+        return True
+    ref = event.get("ref") if isinstance(event, dict) else None
+    if isinstance(ref, str) and isinstance(refs, (list, tuple)):
+        if any(item == ref for item in refs):
+            return True
+    login = _stored_login(event, event_name)
+    if login is None or not isinstance(pushers, (list, tuple)):
+        return False
+    folded = _ascii_fold(login)
+    return any(
+        isinstance(item, str) and item != "" and _ascii_fold(item) == folded for item in pushers
+    )
 
 
 def _repository_name(value):
@@ -307,6 +438,7 @@ class Pass:
         self.budget = _Budget()
         self.state = None
         self.lock_fd = None
+        self.repository_body = None
         self.result = {"stopped": False, "submitted": [], "statuses": [], "skipped": []}
 
     def run(self):
@@ -352,6 +484,37 @@ class Pass:
 
     def _checkpoint(self):
         _save_state(self.state_dir / "poll.json", self.state)
+
+    def _object(self, path):
+        """GET one JSON object. No credential is sent.
+
+        A response whose rate-limit header reports nothing remaining is
+        not applied. The caller retries that event on the next pass.
+        """
+
+        if self.budget.stopped:
+            return None
+        got = _get_json(self.api_base, path, None)
+        self.budget.observe(got["remaining"])
+        if got.get("exhausted") or self.budget.stopped:
+            self.budget.stopped = True
+            return None
+        if not isinstance(got["body"], dict):
+            raise PollError("API_REJECTED", "GitHub response is not an object")
+        return got["body"]
+
+    def _repository_body(self):
+        if self.repository_body is not None:
+            return self.repository_body
+        body = self._object(f"/repos/{self.repository}")
+        if body is None:
+            return None
+        self.repository_body = body
+        return body
+
+    def _commit_body(self, sha):
+        quoted = urllib.parse.quote(sha, safe="")
+        return self._object(f"/repos/{self.repository}/commits/{quoted}")
 
     def _list(self, kind, path):
         """Return (body, etag) when a new list should be applied.
@@ -414,14 +577,23 @@ class Pass:
         if fetched != sha:
             raise PollError("GIT_FAILED", "fetched branch tip does not match the listed SHA")
         _checkout(self.clone, sha)
+        repo = self._repository_body()
+        if repo is None:
+            return False
+        commit = self._commit_body(sha)
+        if commit is None:
+            return False
         before = _ZERO if previous is None else previous
         changed = None if previous is None else _diff(self.clone, previous, sha)
         event = {
             "ref": ref,
             "before": before,
             "after": sha,
-            "repository": {"full_name": self.repository},
+            "repository": _event_repository(self.repository, repo),
         }
+        login = _login(commit.get("author"))
+        if login is not None:
+            event["commits"] = [{"author": {"login": login}}]
         if not self._submit_jobs(
             "push",
             ref,
@@ -456,9 +628,11 @@ class Pass:
             or base_ref == ""
         ):
             raise PollError("API_REJECTED", "GitHub pull request list is not usable")
-        repo = head.get("repo")
-        full_name = repo.get("full_name") if isinstance(repo, dict) else None
-        if full_name != self.repository:
+        head_repo = head.get("repo")
+        if not _same_repository(head, base):
+            full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+            if not isinstance(full_name, str):
+                full_name = None
             self._record_fork(number, head_sha, full_name)
             return True
         seen = self.state["pulls"].get(str(number))
@@ -470,22 +644,33 @@ class Pass:
             self._record_absent(number, head_sha)
             return True
         _checkout(self.clone, merge)
+        repo = self._repository_body()
+        if repo is None:
+            return False
         activity = "opened" if seen is None else "synchronize"
         changed = _diff(self.clone, base_sha, head_sha)
+        pull_request = {
+            "head": {
+                "sha": head_sha,
+                "ref": head_ref,
+                "repo": _event_repo(head_repo),
+            },
+            "base": {
+                "sha": base_sha,
+                "ref": base_ref,
+                "repo": _event_repo(base.get("repo")),
+            },
+        }
+        login = _login(item.get("user"))
+        if login is not None:
+            pull_request["user"] = {"login": login}
         event = {
             "ref": ref,
             "before": base_sha,
             "after": merge,
-            "repository": {"full_name": self.repository},
+            "repository": _event_repository(self.repository, repo),
             "number": number,
-            "pull_request": {
-                "head": {
-                    "sha": head_sha,
-                    "ref": head_ref,
-                    "repo": {"full_name": full_name},
-                },
-                "base": {"sha": base_sha, "ref": base_ref},
-            },
+            "pull_request": pull_request,
         }
         if not self._submit_jobs(
             "pull_request", ref, merge, head_sha, event, activity, changed, False

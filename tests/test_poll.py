@@ -16,7 +16,13 @@ import threading
 import time
 import unittest
 
-from execution_core.poll import PollError, poll_once, queue_expired, submission_key
+from execution_core.poll import (
+    PollError,
+    allowlist_matches,
+    poll_once,
+    queue_expired,
+    submission_key,
+)
 from execution_core.protocol import canonical
 from execution_core.status import StatusError
 from execution_core.worker import Worker
@@ -58,7 +64,17 @@ def _git(repo, *args, check=True):
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        kind = "branches" if "/branches" in self.path else "pulls"
+        path = self.path.split("?", 1)[0]
+        if path.endswith("/branches"):
+            kind = "branches"
+        elif path.endswith("/pulls"):
+            kind = "pulls"
+        elif "/commits/" in path:
+            kind = "commit"
+        elif path.startswith("/repos/") and path.count("/") == 3:
+            kind = "repository"
+        else:
+            kind = None
         self.server.requests.append(
             {
                 "method": "GET",
@@ -67,17 +83,35 @@ class _Handler(BaseHTTPRequestHandler):
                 "if_none_match": self.headers.get("If-None-Match"),
             }
         )
-        etag = self.server.etags[kind]
-        if self.headers.get("If-None-Match") == etag:
-            self.send_response(304)
-            self.send_header("ETag", etag)
-            self.send_header("x-ratelimit-remaining", str(self.server.remaining))
-            self.end_headers()
+        remaining = getattr(self.server, "remaining_by_kind", {}).get(kind, self.server.remaining)
+        if kind in ("branches", "pulls"):
+            etag = self.server.etags[kind]
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("x-ratelimit-remaining", str(remaining))
+                self.end_headers()
+                return
+            body = json.dumps(
+                self.server.branches if kind == "branches" else self.server.pulls
+            ).encode()
+            self._send(200, body, etag, remaining)
             return
-        body = json.dumps(
-            self.server.branches if kind == "branches" else self.server.pulls
-        ).encode()
-        self._send(200, body, etag)
+        if kind == "commit":
+            sha = path.rsplit("/", 1)[-1]
+            login = self.server.authors.get(sha)
+            author = None
+            if isinstance(login, str):
+                author = {"login": login, "id": 1, "email": "hidden@example.invalid"}
+            body = json.dumps(
+                {"sha": sha, "author": author, "commit": {"message": "hidden-message"}}
+            ).encode()
+            self._send(200, body, None, remaining)
+            return
+        if kind == "repository":
+            self._send(200, json.dumps(self.server.repository).encode(), None, remaining)
+            return
+        self._send(404, b"", None, remaining)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -92,11 +126,13 @@ class _Handler(BaseHTTPRequestHandler):
         )
         self._send(201, b"{}", None)
 
-    def _send(self, code, body, etag):
+    def _send(self, code, body, etag, remaining=None):
+        if remaining is None:
+            remaining = self.server.remaining
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("x-ratelimit-remaining", str(self.server.remaining))
+        self.send_header("x-ratelimit-remaining", str(remaining))
         if etag is not None:
             self.send_header("ETag", etag)
         self.end_headers()
@@ -159,6 +195,13 @@ class PollTests(unittest.TestCase):
         self.server.branches = []
         self.server.pulls = []
         self.server.remaining = 40
+        self.server.remaining_by_kind = {}
+        self.server.repository = {
+            "id": 5150,
+            "full_name": "ignored/name",
+            "default_branch": "main",
+        }
+        self.server.authors = {}
         self.server.etags = {"branches": "branches-1", "pulls": "pulls-1"}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -319,8 +362,12 @@ class PollTests(unittest.TestCase):
         self.server.pulls = [
             {
                 "number": 7,
-                "head": {"sha": head, "ref": "feature", "repo": {"full_name": "acme/demo"}},
-                "base": {"sha": tip, "ref": "main"},
+                "head": {
+                    "sha": head,
+                    "ref": "feature",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {"sha": tip, "ref": "main", "repo": {"id": 5150, "full_name": "acme/demo"}},
             }
         ]
         self.server.etags["pulls"] = "pulls-2"
@@ -396,18 +443,18 @@ class PollTests(unittest.TestCase):
                 "head": {
                     "sha": "ab" * 20,
                     "ref": "feature",
-                    "repo": {"full_name": "other/demo"},
+                    "repo": {"id": 9, "full_name": "other/demo"},
                 },
-                "base": {"sha": "cd" * 20, "ref": "main"},
+                "base": {"sha": "cd" * 20, "ref": "main", "repo": {"id": 5150}},
             },
             {
                 "number": 8,
                 "head": {
                     "sha": "ef" * 20,
                     "ref": "feature",
-                    "repo": {"full_name": "acme/demo"},
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
                 },
-                "base": {"sha": "12" * 20, "ref": "main"},
+                "base": {"sha": "12" * 20, "ref": "main", "repo": {"id": 5150}},
             },
         ]
         result = self.poll()
@@ -486,6 +533,271 @@ class PollTests(unittest.TestCase):
         self.assertEqual(json.loads(self.posts()[0]["body"])["state"], "pending")
         self.assertIn("run_id", resumed["submitted"][0])
 
+    def test_a_null_head_and_a_different_repository_id_run_nothing(self):
+        self.server.pulls = [
+            {
+                "number": 4,
+                "head": {"sha": "ab" * 20, "ref": "feature", "repo": None},
+                "base": {"sha": "cd" * 20, "ref": "main", "repo": {"id": 5150}},
+            },
+            {
+                "number": 5,
+                "head": {
+                    "sha": "ef" * 20,
+                    "ref": "feature",
+                    "repo": {"id": 9, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": "12" * 20,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            },
+            {
+                "number": 6,
+                "head": {
+                    "sha": "34" * 20,
+                    "ref": "feature",
+                    "repo": {"id": True, "full_name": "acme/demo"},
+                },
+                "base": {"sha": "56" * 20, "ref": "main", "repo": {"id": 5150}},
+            },
+            {
+                "number": 11,
+                "head": {
+                    "sha": "78" * 20,
+                    "ref": "feature",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {"sha": "90" * 20, "ref": "main"},
+            },
+        ]
+        result = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(
+            [item["reason"] for item in result["skipped"]],
+            ["fork", "fork", "fork", "fork"],
+        )
+        self.assertFalse(any("/commits/" in item["path"] for item in self.server.requests))
+        self.assertFalse(
+            any(
+                item["path"].split("?", 1)[0] == "/repos/acme/demo" for item in self.server.requests
+            )
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual([row["number"] for row in saved["forks"]], [4, 5, 6, 11])
+        self.assertIsNone(saved["forks"][0]["repository"])
+        self.assertEqual(saved["forks"][1]["repository"], "acme/demo")
+        self.server.requests.clear()
+        self.credential.unlink()
+        again = self.poll()
+        self.assertEqual(again["skipped"], [])
+        self.assertEqual(self.runs(), 0)
+        self.assertNotIn(TOKEN.encode(), self.state_bytes())
+
+    def test_equal_repository_ids_run_when_the_full_name_differs(self):
+        tip = self._tip()
+        feature = self.seed / "feature.txt"
+        feature.write_text("feature\n")
+        _git(self.seed, "checkout", "-b", "feature")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "feature",
+        )
+        _git(self.seed, "push", "origin", "feature")
+        head = _git(self.seed, "rev-parse", "feature").stdout.strip()
+        _git(self.seed, "checkout", "main")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            "feature",
+            "-m",
+            "merge",
+        )
+        _git(self.seed, "push", "origin", "HEAD:refs/pull/9/merge")
+        self.server.pulls = [
+            {
+                "number": 9,
+                "user": {"login": "Mona", "id": 3, "email": "hidden@example.invalid"},
+                "head": {
+                    "sha": head,
+                    "ref": "feature",
+                    "repo": {"id": 5150, "full_name": "other/demo", "private": True},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo", "private": True},
+                },
+            }
+        ]
+        self.server.etags["pulls"] = "pulls-2"
+        opened = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(opened["skipped"], [])
+        event = self.submits[0]["event"]
+        self.assertEqual(
+            event["repository"],
+            {"full_name": "acme/demo", "id": 5150, "default_branch": "main"},
+        )
+        self.assertIs(type(event["repository"]["id"]), int)
+        self.assertEqual(event["pull_request"]["user"], {"login": "Mona"})
+        self.assertEqual(
+            event["pull_request"]["head"]["repo"],
+            {"id": 5150, "full_name": "other/demo"},
+        )
+        self.assertIs(type(event["pull_request"]["head"]["repo"]["id"]), int)
+        self.assertEqual(
+            event["pull_request"]["base"]["repo"],
+            {"id": 5150, "full_name": "acme/demo"},
+        )
+        encoded = json.dumps(event)
+        self.assertNotIn("hidden@example.invalid", encoded)
+        self.assertNotIn("private", encoded)
+        self.assertFalse(allowlist_matches(event, [], [], "pull_request"))
+        self.assertTrue(allowlist_matches(event, [], ["mona"], "pull_request"))
+        self.assertTrue(allowlist_matches(event, ["refs/pull/9/merge"], [], "pull_request"))
+        self.assertTrue(
+            all(
+                item["authorization"] is None
+                for item in self.server.requests
+                if item["method"] == "GET"
+            )
+        )
+
+    def test_a_push_copies_the_repository_and_the_commit_login(self):
+        tip = self._tip()
+        self.server.authors[tip] = "octocat"
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.poll()
+        event = self.submits[0]["event"]
+        self.assertEqual(event["repository"]["full_name"], "acme/demo")
+        self.assertEqual(event["repository"]["id"], 5150)
+        self.assertIs(type(event["repository"]["id"]), int)
+        self.assertEqual(event["repository"]["default_branch"], "main")
+        self.assertEqual(event["commits"], [{"author": {"login": "octocat"}}])
+        encoded = json.dumps(event)
+        self.assertNotIn("hidden@example.invalid", encoded)
+        self.assertNotIn("hidden-message", encoded)
+        self.assertNotIn("ignored/name", encoded)
+        self.assertTrue(allowlist_matches(event, [], [], "push"))
+        self.assertTrue(allowlist_matches(event, ["refs/heads/other"], ["nobody"], "push"))
+
+        note = self.seed / "dev.txt"
+        note.write_text("dev\n")
+        _git(self.seed, "checkout", "-b", "dev")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "dev",
+        )
+        _git(self.seed, "push", "origin", "dev")
+        dev = self._tip("refs/heads/dev")
+        self.server.branches = [{"name": "dev", "commit": {"sha": dev}}]
+        self.server.etags["branches"] = "branches-2"
+        self.submits.clear()
+        self.poll()
+        dev_event = self.submits[0]["event"]
+        self.assertEqual(dev_event["ref"], "refs/heads/dev")
+        self.assertNotIn("commits", dev_event)
+        self.assertEqual(dev_event["repository"]["default_branch"], "main")
+        self.assertFalse(allowlist_matches(dev_event, [], [], "push"))
+        self.assertFalse(allowlist_matches(dev_event, [], ["octocat"], "push"))
+        self.assertTrue(allowlist_matches(dev_event, ["refs/heads/dev"], [], "push"))
+        self.assertFalse(allowlist_matches(dev_event, ["refs/heads/Dev"], [], "push"))
+
+    def test_an_exhausted_repository_response_submits_nothing(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.server.authors[tip] = "octocat"
+        self.server.remaining_by_kind = {"repository": 0}
+        stopped = self.poll()
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertFalse(any("/commits/" in item["path"] for item in self.server.requests))
+        self.server.remaining_by_kind = {}
+        self.server.requests.clear()
+        self.submits.clear()
+        resumed = self.poll()
+        self.assertFalse(resumed["stopped"])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(self.submits[0]["event"]["commits"], [{"author": {"login": "octocat"}}])
+
+
+class AllowlistTests(unittest.TestCase):
+    def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
+        default = {
+            "ref": "refs/heads/main",
+            "repository": {"id": 5150, "full_name": "acme/demo", "default_branch": "main"},
+            "commits": [{"author": {"login": "octocat"}}],
+        }
+        other = {
+            "ref": "refs/heads/dev",
+            "repository": {"id": 5150, "full_name": "acme/demo", "default_branch": "main"},
+            "commits": [{"author": {"login": "OctoCat"}}],
+        }
+        local = {"ref": "refs/heads/main", "repository": {"full_name": "acme/demo"}}
+        pull = {
+            "ref": "refs/pull/9/merge",
+            "repository": {"id": 5150, "default_branch": "main"},
+            "pull_request": {"user": {"login": "Mona"}},
+        }
+        bare_pull = {
+            "ref": "refs/pull/4/merge",
+            "repository": {"id": 5150, "default_branch": "main"},
+            "pull_request": {"head": {"repo": {"id": 5150}}},
+        }
+
+        self.assertTrue(allowlist_matches(default, [], [], "push"))
+        self.assertTrue(allowlist_matches(default, ["refs/heads/dev"], ["nobody"], "push"))
+        self.assertFalse(allowlist_matches(other, [], [], "push"))
+        self.assertFalse(allowlist_matches(local, [], [], "push"))
+        self.assertFalse(allowlist_matches(default, [], [], None))
+        self.assertFalse(allowlist_matches(default, [], [], "pull_request"))
+        self.assertTrue(allowlist_matches(other, ["refs/heads/dev"], [], "push"))
+        self.assertFalse(allowlist_matches(other, ["refs/heads/Dev"], [], "push"))
+        self.assertTrue(allowlist_matches(other, [], ["octocat"], "push"))
+        self.assertFalse(allowlist_matches(other, [], ["octocat "], "push"))
+        self.assertFalse(
+            allowlist_matches(
+                {
+                    "ref": "refs/heads/dev",
+                    "repository": {"default_branch": "main"},
+                    "commits": [{"author": {"login": "İ"}}],
+                },
+                [],
+                ["i"],
+                "push",
+            )
+        )
+        self.assertFalse(allowlist_matches(other, [], ["octocat"], "workflow_dispatch"))
+        self.assertFalse(allowlist_matches({"ref": "refs/heads/dev"}, [], ["octocat"], "push"))
+        self.assertFalse(allowlist_matches(pull, [], [], "pull_request"))
+        self.assertTrue(allowlist_matches(pull, [], ["mona"], "pull_request"))
+        self.assertTrue(allowlist_matches(pull, ["refs/pull/9/merge"], [], "pull_request"))
+        self.assertFalse(allowlist_matches(bare_pull, [], ["mona"], "pull_request"))
+        self.assertFalse(allowlist_matches(bare_pull, [], [""], "pull_request"))
+
 
 class CliPollTests(unittest.TestCase):
     def test_the_command_records_a_fork_and_does_not_read_the_credential(self):
@@ -504,9 +816,9 @@ class CliPollTests(unittest.TestCase):
                     "head": {
                         "sha": "ab" * 20,
                         "ref": "feature",
-                        "repo": {"full_name": "other/demo"},
+                        "repo": {"id": 9, "full_name": "other/demo"},
                     },
-                    "base": {"sha": "cd" * 20, "ref": "main"},
+                    "base": {"sha": "cd" * 20, "ref": "main", "repo": {"id": 5150}},
                 }
             ]
             server.remaining = 20
