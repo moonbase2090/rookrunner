@@ -2104,8 +2104,11 @@ running. `queue: single` cancels another queued run in that group.
 keeps at most 100 pending runs. The 101st run is cancelled and the
 pending runs stay. A run with no group is not part of this rule.
 Cancelling the running container happens after the new run is
-committed. If this process stops before that cancel, the running run
-may finish and the new run stays queued. The scheduler does not start
+committed. Those running ids are recorded only after the action-store
+commit returns. A failed commit leaves the list unchanged, so the next
+submission does not cancel them. If this process stops before that
+cancel, the running run may finish and the new run stays queued. The
+scheduler does not start
 a second run in a group that already has one running. This is one
 worker. It is not a distributed lock. This is not a GitHub-equivalence
 claim.

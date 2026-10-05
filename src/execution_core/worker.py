@@ -16,7 +16,8 @@ job's main steps when the main ran. `pre` stays rejected.
 A concurrency group is enforced on this one worker when the run is
 accepted. `queue: single` replaces another queued run in that group.
 `cancel-in-progress` also cancels the running run. `queue: max` keeps
-at most 100 pending runs in the group. Cancelling a running workflow
+at most 100 pending runs in the group. Those running ids are recorded
+only after the action-store commit returns. Cancelling a running workflow
 stops that container
 before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
@@ -1274,8 +1275,8 @@ class Worker:
                 raise Fault(
                     "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
                 ) from None
-            self._pending_concurrency_cancels.extend(running_ids)
             store.commit()
+            self._pending_concurrency_cancels.extend(running_ids)
             return record
         finally:
             if store.is_open:
