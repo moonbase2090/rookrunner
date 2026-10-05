@@ -1,9 +1,12 @@
+import json
 import subprocess
 import uuid
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from execution_core.actions import ActionStore
 from execution_core.concurrency import (
     MAX_PENDING,
     decide,
@@ -256,6 +259,68 @@ class ConcurrencySubmitTests(unittest.TestCase):
                     self.worker.save(current)
                 if "second" in locals():
                     self._cancel(second["run_id"])
+
+    def test_a_failed_store_commit_does_not_record_a_running_cancel(self):
+        self._write(
+            "name: demo\n"
+            "on: push\n"
+            "concurrency:\n"
+            "  group: ci-${{ github.ref }}\n"
+            "  cancel-in-progress: true\n"
+            "jobs:\n"
+            "  build:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo hi\n"
+        )
+        self._git("add", ".")
+        self._git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "commit-fails",
+        )
+        with self.worker.guard:
+            first = self.worker.dispatch("run.submit", self._params("commit-a", "refs/heads/main"))
+            current = self.worker.get(first["run_id"])
+            current.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+            with self.worker.db:
+                self.worker.save(current)
+            try:
+                with patch.object(ActionStore, "commit", side_effect=OSError("commit failed")):
+                    with self.assertRaises(OSError):
+                        self.worker.dispatch(
+                            "run.submit", self._params("commit-b", "refs/heads/main")
+                        )
+                self.assertEqual(self.worker._pending_concurrency_cancels, [])
+                self.assertEqual(self.worker.get(first["run_id"])["state"], "running")
+                queued = [
+                    json.loads(row[0])
+                    for row in self.worker.db.execute(
+                        "SELECT record FROM runs WHERE json_extract(record, '$.state')='queued'"
+                    )
+                ]
+                self.assertEqual(len(queued), 1)
+                self.assertTrue(queued[0]["concurrency"][0]["cancel_in_progress"])
+            finally:
+                self.worker._pending_concurrency_cancels.clear()
+                current = self.worker.get(first["run_id"])
+                current.update(
+                    state="cancelled",
+                    cancel_requested=True,
+                    finished_at=now(),
+                    cleanup="confirmed_no_external_resources",
+                )
+                with self.worker.db:
+                    self.worker.save(current)
+                rows = self.worker.db.execute(
+                    "SELECT id FROM runs WHERE json_extract(record, '$.state')='queued'"
+                ).fetchall()
+                for row in rows:
+                    self._cancel(row[0])
 
     def test_queue_max_keeps_both_queued_runs(self):
         self._write(
