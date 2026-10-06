@@ -1,0 +1,8 @@
+# Protected paths. The sign-off script reads this list.
+pyproject.toml @mb2090
+uv.lock @mb2090
+.github/ @mb2090
+docs/lints.md @mb2090
+docs/conventions.md @mb2090
+docs/design/static-analysis.md @mb2090
+docs/development-dependencies.md @mb2090
