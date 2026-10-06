@@ -1,7 +1,8 @@
 # Secrets, GITHUB_TOKEN, and write permissions
 
-Status: designed. p7-mask, p7-trust-gate, and p7-socket-lock are
-implemented. The other three pull requests in the plan are not.
+Status: designed. p7-mask, p7-trust-gate, p7-socket-lock, and
+p7-secret-env are implemented. p7-secret-run and p7-job-token are
+not.
 MB2090 accepted the amended answers for all seven questions on
 2026-10-05. The source of
 those answers is the review comment on pull request 63:
@@ -13,19 +14,24 @@ plan. p7-mask changes the job mask. p7-trust-gate compares
 pull-request repositories by numeric id and stores the allowlist
 fields on the event. p7-socket-lock adds the worker secret flags
 and refuses `--docker-socket` combined with `--app-key` or
-`--secrets` unless the `~/Secrets` probe exits 0. The capability
+`--secrets` unless the `~/Secrets` probe exits 0. p7-secret-env
+reads the file store into a step `env` or `with` expression that is
+exactly `secrets.NAME` when `--secrets` is set and the allowlist
+matches, and it passes those secret registrations into
+reusable-workflow call outputs. The capability
 version stays 12. A version 11 plan is not migrated. No plan field
 and no capability entry are added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
-stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. The
-`secrets` context stays withheld. No job token is minted. This is
+stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. A
+`run` script is not rewritten. No job token is minted. This is
 not a GitHub-equivalence claim.
 
 The seven answers below are accepted direction. Masking from answer
 3 is implemented. The fork comparison and the allowlist match from
 answer 7 are implemented. The worker flags and the socket lock from
-answer 6 are implemented. The secret files and the job token are
-not. Deploy workflows and
+answer 6 are implemented. File secrets in step `env` and `with` are
+implemented. The `run` rewrite and the job token are not. Deploy
+workflows and
 macOS jobs stay deferred until the implementation plan below has
 landed.
 
@@ -50,8 +56,8 @@ https://docs.github.com/en/organizations/managing-programmatic-access-to-your-or
 
 ## What the engine does today
 
-These are implemented facts. This design leaves them in place until
-the pull requests in the implementation plan change them.
+These are implemented facts. p7-secret-run and p7-job-token do not
+change them yet.
 
 The planner records `read`, `none`, and `read-all`. It rejects
 `write`, `write-all`, and an unknown scope. No token is created from
@@ -63,12 +69,24 @@ accepts `read` or `none` for every scope it recognizes and rejects
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
 
 The expression evaluator withholds `secrets` from step `run`, step
-`env`, step `with`, step `name`, job `name`, job `env`, workflow
-`env`, and concurrency. GitHub's contexts table lists `secrets` in
-several of those places. An output expression that reads `secrets`
-is omitted. Reusable-workflow `secrets` and `secrets: inherit` stay
-rejected. The snapshot excludes `.secrets`. Filename exclusions are
-not a secret system.
+`name`, job `name`, job `env`, workflow `env`, step `if`, job `if`,
+and concurrency. An expression in step `env` or step `with` that is
+exactly `secrets.NAME` is accepted and stored as that text. Any
+other `secrets` read in those fields is refused. GitHub's contexts
+table lists `secrets` in several of the withheld places. An output
+expression that reads `secrets` is omitted. Reusable-workflow
+`secrets` and `secrets: inherit` stay rejected. The snapshot
+excludes `.secrets`. Filename exclusions are not a secret system.
+
+When `worker --secrets` is set and the allowlist matches, that exact
+step `env` or `with` expression receives the file value on that step.
+A missing name is an empty string and the log names the secret. The
+value is registered on that job's mask list before the step writes a
+log line. `secrets.GITHUB_TOKEN` is recognized and stays empty. A
+`run` script is not rewritten. When `--secrets` is omitted, a
+`secrets` reference stays the withheld-context error. When the
+allowlist does not match, the directory is not opened and an exact
+file-secret expression is an empty string.
 
 `github.token` and `GITHUB_TOKEN` stay unset. The check-run post
 mints a separate installation token when `--app-key` is set. That
@@ -97,11 +115,11 @@ logs a warning that does not include the value. The check-run post
 applies the prefix rules to its request body. An empty or
 whitespace-only value is not a mask. The mask list is not copied
 into the next job. stderr is masked with the masks registered while
-that step's stdout was read. Reusable-workflow call outputs are still
-mapped through a fresh mask list. No engine path registers a secret,
-so omission does not apply at that boundary yet. p7-secret-env passes
-the job mask into that mapping. This does not open the secret directory
-and does not mint a token.
+that step's stdout was read. Reusable-workflow call outputs are
+mapped through the secret registrations collected from the jobs
+inside the call. Add-mask values are not copied onto that list. An
+injected file secret is registered with `secret=True` before the
+step writes a log line. No job token is minted.
 
 The poll compares a pull request's head and base repository ids.
 The ids are integers and match when they are equal. A bool is not
@@ -144,8 +162,8 @@ failure other than the mount refuses the combination. A worker that
 sets `--docker-socket` and sets neither `--app-key` nor `--secrets`
 still starts. Its host-control warning names
 `~/Secrets/github-app/rookrunner-app/` and
-`~/Secrets/rookrunner-secrets/`. This does not inject a secret and
-does not mint a job token. `poll` and `status` keep the post
+`~/Secrets/rookrunner-secrets/`. That warning does not inject a
+secret and does not mint a job token. `poll` and `status` keep the post
 credential they have today.
 
 ## Threat model
@@ -796,11 +814,13 @@ each item proves it.
 
 ## What this design does not do
 
-p7-mask, p7-trust-gate, and p7-socket-lock change the engine as
-the plan names.
+p7-mask, p7-trust-gate, p7-socket-lock, and p7-secret-env change
+the engine as the plan names. p7-secret-run and p7-job-token do
+not.
 No secret directory is created. No token is minted. No sign-in is
 started. No file under
 `~/Secrets/github-app/rookrunner-app/` is read. The App is not
 installed by this document. Its App ID is 5201333. No App
 permission is added. The installation and the private key remain
-pending. `write` stays rejected. `GITHUB_TOKEN` stays unset.
+pending. `write` stays rejected. `GITHUB_TOKEN` stays unset. A
+`run` script is not rewritten.

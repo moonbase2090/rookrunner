@@ -93,15 +93,20 @@ is not copied in. `with` becomes the called workflow's `inputs` context
 and is not exported as environment variables. An omitted optional input is
 false, 0, or an empty string
 (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
-Secrets are not passed, and `github.token` is not created. GitHub passes
-`github.token` into a called workflow. This subset does not. Step `if` and
-job `if` are evaluated.
+Secrets are not passed into a called workflow, and `github.token` is not
+created. GitHub passes `github.token` into a called workflow. This subset
+does not. Step `if` and job `if` are evaluated.
 Expressions in workflow and job `env`, step `env`, `run`, `with`, and
 step and job `name` are evaluated, including mixed text. The plan
 stores the source. `run` is written on the host just before exec.
 Workflow `name` stays literal, and that string is `github.workflow`.
-Service `env` stays literal. `secrets` is not available. `hashFiles`
-is not implemented. `github.event` is the caller event. `github.workspace`,
+Service `env` stays literal. An exact `secrets.NAME` in step `env` or
+`with` receives the file value when a secret configuration is passed and
+the allowlist matches. That value is registered on the job mask before
+the step writes a log line. Reusable-workflow call outputs use those
+secret registrations. `run` is not rewritten. `secrets.GITHUB_TOKEN`
+stays empty. `hashFiles` is not implemented. `github.event` is the caller
+event. `github.workspace`,
 `github.job`, `github.workflow`, `github.event_path`, and, when the caller
 sends one, `github.event_name` are set. `github.sha` is the manifest
 `base_commit` only when the capture is clean, `included` is empty, and
@@ -192,10 +197,12 @@ from .commands import (
     MaskList,
     job_output_value,
     mask_stored_copy,
+    mask_text,
     parse_env,
     parse_output,
     parse_path,
     process_stdout,
+    register_mask,
 )
 from .expr import (
     JOB_ENV_CONTEXTS,
@@ -204,10 +211,18 @@ from .expr import (
     WORKFLOW_ENV_CONTEXTS,
     ExprError,
     evaluate,
+    exact_secret_reference,
     job_is_enabled,
     mentions_context,
     render_text,
     step_is_enabled,
+)
+from .secrets import (
+    SecretAccess,
+    SecretError,
+    load_job_secrets,
+    same_repository,
+    secrets_allowed,
 )
 from .plan import (
     CAPABILITY_VERSION,
@@ -284,6 +299,8 @@ class _JobRuntime:
         self.paths = []
         self.outputs = {}
         self.masks = MaskList()
+        self.secret_values = None
+        self.secret_notes = []
         self.base_path = None
         # GITHUB_STATE for one action instance. Later steps do not receive it.
         # The post entry of that same action receives it as STATE_<name>.
@@ -2205,6 +2222,125 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
                 scripts[(planned_path, step["index"])] = script_name
 
 
+def _referenced_secret_names(job):
+    """Uppercase file names referenced by exact secrets expressions.
+
+    ``secrets.GITHUB_TOKEN`` is not a file. Step `run` and step `name`
+    are not injection points.
+    """
+
+    names = []
+
+    def add(text):
+        if not isinstance(text, str):
+            return
+        found = exact_secret_reference(text)
+        if found is None:
+            return
+        upper = found.upper()
+        if upper == "GITHUB_TOKEN" or upper.startswith("GITHUB_"):
+            return
+        if upper not in names:
+            names.append(upper)
+
+    def walk(step):
+        if not isinstance(step, dict):
+            return
+        env = step.get("env")
+        if isinstance(env, dict):
+            for value in env.values():
+                add(value)
+        raw_with = step.get("with")
+        if isinstance(raw_with, dict):
+            for value in raw_with.values():
+                add(value)
+        for inner in step.get("steps") or []:
+            walk(inner)
+
+    for step in job.get("steps") or []:
+        walk(step)
+    return names
+
+
+def _bind_job_secrets(runtime, access, event, event_name, job):
+    """Load referenced files onto `runtime` when the allowlist matches.
+
+    ``access`` None leaves `secret_values` None, which is the withheld
+    context. An allowlist miss sets an empty map and does not open the
+    directory. A repository mismatch raises before the directory is opened.
+    """
+
+    runtime.secret_values = None
+    runtime.secret_notes = []
+    if access is None:
+        return
+    if not isinstance(access, SecretAccess):
+        raise SecretError("secret configuration is not accepted")
+    if not secrets_allowed(access, event, event_name):
+        runtime.secret_values = {}
+        return
+    if not same_repository(access, event):
+        raise SecretError("repository does not match the secret repository")
+    names = _referenced_secret_names(job)
+    loaded = load_job_secrets(access.repository, names)
+    runtime.secret_values = {}
+    for name in names:
+        value = loaded.get(name)
+        if value is None:
+            runtime.secret_values[name] = ""
+            runtime.secret_notes.append(f"secret {name} is not set")
+            continue
+        runtime.secret_values[name] = value
+        register_mask(runtime.masks, value, secret=True, name=name)
+
+
+def _share_secret_masks(source, sink):
+    """Copy secret registrations only. `add-mask` values stay on `source`."""
+
+    if sink is None or source is None:
+        return
+    found = getattr(source, "secrets", None)
+    target = getattr(sink, "secrets", None)
+    if not isinstance(found, list) or not isinstance(target, list):
+        return
+    for value in found:
+        if value not in target:
+            target.append(value)
+
+
+def _secret_prelude(runtime):
+    notes = list(getattr(runtime, "secret_notes", []) or [])
+    warnings = getattr(runtime.masks, "warnings", None)
+    if isinstance(warnings, list):
+        notes.extend(warnings)
+    if not notes:
+        return ""
+    return "\n".join(notes) + "\n"
+
+
+def _attach_prelude(record, prelude):
+    if not prelude:
+        return
+    record["stderr"] = prelude + (record.get("stderr") or "")
+
+
+def _render_secret_or_expr(text, values, runtime):
+    """Render one step `env` or `with` value, including an exact secret."""
+
+    name = exact_secret_reference(text)
+    if name is None:
+        return _render_expr(text, values)
+    loaded = None if runtime is None else getattr(runtime, "secret_values", None)
+    if not isinstance(loaded, dict):
+        raise ExprError("context is not available: secrets")
+    upper = name.upper()
+    if upper == "GITHUB_TOKEN":
+        return ""
+    if upper.startswith("GITHUB_"):
+        raise ExprError("secrets reference is not accepted")
+    return loaded.get(upper, "")
+
+
 def run_job(
     snapshot_dir,
     snapshot_digest,
@@ -2222,6 +2358,7 @@ def run_job(
     node24=None,
     actions=None,
     runner_image=None,
+    secrets=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -2276,6 +2413,8 @@ def run_job(
         or "\r" in event_name
     ):
         _setup("event name is not accepted")
+    if secrets is not None and not isinstance(secrets, SecretAccess):
+        _setup("secret configuration is not accepted")
     started = time.monotonic()
     reference, digest, workflow, jobs, event_bytes, workspace, manifest = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
@@ -2397,7 +2536,7 @@ def run_job(
                 else:
                     records.append(_step_result(step, "skipped", None, "", "", None, inner["id"]))
 
-        def _execute_jobs(job_list, level_workflow, inputs, path, *, reset_first):
+        def _execute_jobs(job_list, level_workflow, inputs, path, *, reset_first, secret_sink=None):
             nonlocal deadline, failed, output_bytes, graceful, outcome, service_cleanup
             results = {}
             jobs_by_id = {item["id"]: item for item in job_list}
@@ -2500,15 +2639,18 @@ def run_job(
                             _mark_call(job, path, str(exc))
                             results[job["id"]] = {"result": "failure", "outputs": {}}
                             continue
+                        call_masks = MaskList()
                         inner_results = _execute_jobs(
                             job["call"]["jobs"],
                             job["call"]["workflow"],
                             resolved_inputs,
                             path + (job["id"],),
                             reset_first=True,
+                            secret_sink=call_masks,
                         )
                         if inner_results is None:
                             return None
+                        _share_secret_masks(call_masks, secret_sink)
                         try:
                             output_workflow = _workflow_for_job(
                                 job["call"]["workflow"],
@@ -2542,7 +2684,7 @@ def run_job(
                             {"outputs": job["call"]["outputs"]},
                             output_values,
                             output_bytes,
-                            MaskList(),
+                            call_masks,
                         )
                         call_failed = any(
                             item["result"] == "failure" for item in inner_results.values()
@@ -2666,6 +2808,16 @@ def run_job(
                                 continue
                             prior = []
                             runtime = _JobRuntime()
+                            try:
+                                _bind_job_secrets(runtime, secrets, event, event_name, active_job)
+                            except SecretError as exc:
+                                _fail_text(exc)
+                                if fail_fast:
+                                    break
+                                continue
+                            prelude = _secret_prelude(runtime)
+                            _share_secret_masks(runtime.masks, secret_sink)
+                            attached = False
                             for step in active_job["steps"]:
                                 if deadline - time.monotonic() <= 0:
                                     raise _JobDeadline()
@@ -2690,6 +2842,9 @@ def run_job(
                                     strategy=strategy_context,
                                     inputs=inputs,
                                 )
+                                if not attached:
+                                    _attach_prelude(record, prelude)
+                                    attached = True
                                 records.append(record)
                                 prior.append(record)
                                 if record["status"] == "failed":
@@ -3129,7 +3284,7 @@ def _consider_step(
     if step.get("checkout") == "captured":
         return _step_result(prepared, "succeeded", 0, "", "", None, job_id)
     if step.get("upload") in {"files", "sarif"}:
-        return _run_upload(prepared, workspace, values, job_id)
+        return _run_upload(prepared, workspace, values, job_id, runtime)
     if prepared.get("javascript") == "node24":
         return _run_javascript(
             docker,
@@ -3196,7 +3351,7 @@ def _upload_failure(step, job_id, stderr):
     return _step_result(step, "failed", 1, "", stderr, None, job_id)
 
 
-def _run_upload(step, workspace, values, job_id):
+def _run_upload(step, workspace, values, job_id, runtime=None):
     """Record selected paths. This starts no process and opens no socket."""
 
     attempt = _ATTEMPT.get()
@@ -3211,7 +3366,7 @@ def _run_upload(step, workspace, values, job_id):
     try:
         for key, value in raw.items():
             if isinstance(value, str):
-                rendered[key] = _render_expr(value, scoped)
+                rendered[key] = _render_secret_or_expr(value, scoped, runtime)
             elif type(value) is bool:
                 rendered[key] = value
             else:
@@ -3270,8 +3425,12 @@ def _scoped_values(values, contexts):
     return {name: values[name] for name in contexts if name in values}
 
 
-def _render_env_map(raw, values, contexts):
-    """Render one env map. Keys in that map do not see each other."""
+def _render_env_map(raw, values, contexts, runtime=None):
+    """Render one env map. Keys in that map do not see each other.
+
+    `runtime` is set for step env. Workflow and job env leave it unset,
+    so a `secrets` reference there stays withheld.
+    """
 
     if raw is None:
         return {}
@@ -3282,7 +3441,10 @@ def _render_env_map(raw, values, contexts):
     for key, value in raw.items():
         if not isinstance(key, str) or not isinstance(value, str):
             _setup("plan is not accepted")
-        rendered[key] = _render_expr(value, scoped)
+        if runtime is None:
+            rendered[key] = _render_expr(value, scoped)
+        else:
+            rendered[key] = _render_secret_or_expr(value, scoped, runtime)
     return rendered
 
 
@@ -3374,7 +3536,7 @@ def _with_rendered_step(
     )
     raw_env = step.get("env") if isinstance(step.get("env"), dict) else {}
     prepared = dict(step)
-    prepared["env"] = _render_env_map(raw_env, base, STEP_TEXT_CONTEXTS)
+    prepared["env"] = _render_env_map(raw_env, base, STEP_TEXT_CONTEXTS, runtime)
     values = _expression_values(
         event,
         workflow,
@@ -3393,7 +3555,10 @@ def _with_rendered_step(
     scoped = _scoped_values(values, STEP_TEXT_CONTEXTS)
     name = step.get("name")
     if isinstance(name, str):
-        prepared["name"] = _render_expr(name, scoped)
+        rendered_name = _render_expr(name, scoped)
+        if runtime is not None:
+            rendered_name = mask_text(rendered_name, runtime.masks)
+        prepared["name"] = rendered_name
     if render_run and isinstance(step.get("run"), str):
         prepared["run"] = _render_expr(step["run"], scoped)
     return prepared, values
@@ -3453,7 +3618,7 @@ def _run_composite(
         resolved = {}
         caller_scoped = _scoped_values(caller_values, STEP_TEXT_CONTEXTS)
         for key, raw in step.get("with", {}).items():
-            resolved[key] = _render_expr(raw, caller_scoped)
+            resolved[key] = _render_secret_or_expr(raw, caller_scoped, runtime)
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     spec = step.get("inputs")
@@ -3506,7 +3671,9 @@ def _run_composite(
             strategy=strategy,
         )
         try:
-            evaluated_env = _render_env_map(inner.get("env") or {}, base_values, STEP_TEXT_CONTEXTS)
+            evaluated_env = _render_env_map(
+                inner.get("env") or {}, base_values, STEP_TEXT_CONTEXTS, runtime
+            )
         except ExprError as exc:
             record = _step_result(inner, "failed", None, "", "", str(exc)[:512], job_id)
             inner_prior.append(record)
@@ -3547,9 +3714,11 @@ def _run_composite(
         try:
             inner_scoped = _scoped_values(if_values, STEP_TEXT_CONTEXTS)
             if isinstance(inner.get("name"), str):
-                runnable["name"] = _render_expr(inner["name"], inner_scoped)
+                runnable["name"] = mask_text(
+                    _render_expr(inner["name"], inner_scoped), runtime.masks
+                )
             if inner.get("upload") in {"files", "sarif"}:
-                record = _run_upload(runnable, workspace, if_values, job_id)
+                record = _run_upload(runnable, workspace, if_values, job_id, runtime)
                 inner_prior.append(record)
                 stdout_parts.append(record["stdout"])
                 stderr_parts.append(record["stderr"])
@@ -3723,13 +3892,13 @@ def _node_entry_path(step, entry):
     return "/actions/" + "/".join(parts)
 
 
-def _javascript_env(step, values):
+def _javascript_env(step, values, runtime=None):
     """Resolve node24 inputs. A with value wins. required does not fail a miss."""
 
     resolved = {}
     scoped = _scoped_values(values, STEP_TEXT_CONTEXTS)
     for key, raw in step.get("with", {}).items():
-        resolved[key] = _render_expr(raw, scoped)
+        resolved[key] = _render_secret_or_expr(raw, scoped, runtime)
     spec = step.get("inputs")
     if not isinstance(spec, dict):
         _setup("plan is not accepted")
@@ -3792,7 +3961,7 @@ def _run_javascript(
             matrix=matrix,
             strategy=strategy,
         )
-        extra = _javascript_env(step, values)
+        extra = _javascript_env(step, values, runtime)
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     runtime.javascript_inputs[step["index"]] = {

@@ -18,11 +18,13 @@ The owned upload stores its `uses` string and does not fetch the action,
 read an action file, or run its program. It checks that expressions can be
 parsed and does not evaluate them. `run`, `env`, `with`, and step and
 job `name` are checked, including mixed text. The plan stores the
-source. Workflow `name`, service `env`, and action output `value`
-that is not one whole expression stay unchecked. `concurrency` on a
-workflow or job is stored, including mixed text in the group. `secrets`
-is not available in the checked text positions, including a concurrency
-group. `queue: max` with `cancel-in-progress: true` is rejected.
+source. An exact `secrets.NAME` is accepted in step `env` and step
+`with` and stored as that text. Any other `secrets` read there is
+refused. `secrets` stays withheld in `run`, names, `if`, job `env`,
+workflow `env`, and concurrency. Workflow `name`, service `env`, and
+action output `value` that is not one whole expression stay unchecked.
+`concurrency` on a workflow or job is stored, including mixed text in
+the group. `queue: max` with `cancel-in-progress: true` is rejected.
 `hashFiles` is unsupported.
 Status functions are not accepted there. Matrix `include` and `exclude` are expanded here. A matrix value that
 is itself an expression is rejected. A called workflow is read from the
@@ -63,6 +65,7 @@ from .expr import (
     check_job_output,
     check_step_if,
     check_job_concurrency,
+    check_step_secret_value,
     check_step_text,
     check_workflow_concurrency,
     check_workflow_env,
@@ -670,7 +673,7 @@ class _Planner:
         )
         return declared
 
-    def _env(self, items, field, check=None):
+    def _env(self, items, field, check=None, reserve_secret=False):
         if "env" not in items:
             return {}
         path = _join(field, "env")
@@ -678,6 +681,11 @@ class _Planner:
         recorded = {
             key: self._string_scalar(value, _join(path, key)) for key, (_, value) in body.items()
         }
+        if reserve_secret:
+            for key in recorded:
+                if isinstance(key, str) and key.startswith("RR_SECRET_"):
+                    key_field = _join(path, key)
+                    _invalid(f"{key_field}: env key is not accepted", key_field)
         if check is not None:
             for key, value in recorded.items():
                 self._check_expression(value, _join(path, key), check)
@@ -1508,6 +1516,13 @@ class _Planner:
                     path,
                 ) from None
             if message.startswith("context is not available:"):
+                if message == "context is not available: secrets" and check in (
+                    check_job_env,
+                    check_workflow_env,
+                ):
+                    message += "; move this reference to the step env"
+                raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
+            if message == "secrets reference is not accepted":
                 raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
             raise PlanError(
                 "WORKFLOW_INVALID", f"{path}: expression is not accepted", path
@@ -1546,7 +1561,7 @@ class _Planner:
                 "name": self._checked_name(body, step_field, check_step_text),
                 "shell": self._optional_string(body, step_field, "shell"),
                 "working_directory": self._optional_string(body, step_field, "working-directory"),
-                "env": self._env(body, step_field, check_step_text),
+                "env": self._env(body, step_field, check_step_secret_value, reserve_secret=True),
             }
             if has_run:
                 run_field = _join(step_field, "run")
@@ -1689,7 +1704,7 @@ class _Planner:
                 accepted[key] = flag
                 continue
             text = self._string_scalar(value, field)
-            self._check_expression(text, field, check_step_text)
+            self._check_expression(text, field, check_step_secret_value)
             if key == "if-no-files-found" and "${{" not in text and text not in _UPLOAD_NO_FILES:
                 _invalid(f"{field}: if-no-files-found is not accepted", field)
             accepted[key] = text
@@ -2039,7 +2054,7 @@ class _Planner:
             "name": self._checked_name(step_body, step_field, check_step_text),
             "shell": shell,
             "working_directory": self._optional_string(step_body, step_field, "working-directory"),
-            "env": self._env(step_body, step_field, check_step_text),
+            "env": self._env(step_body, step_field, check_step_secret_value, reserve_secret=True),
         }
         recorded.update(self._owned_upload(step_body, step_field, uses_text))
         condition = self._if_text(step_body, step_field, check_step_if)
@@ -2121,7 +2136,9 @@ class _Planner:
                 "working_directory": self._optional_string(
                     step_body, step_field, "working-directory"
                 ),
-                "env": self._env(step_body, step_field, check_step_text),
+                "env": self._env(
+                    step_body, step_field, check_step_secret_value, reserve_secret=True
+                ),
             }
             self._check_expression(recorded["run"], run_field, check_step_text)
             condition = self._if_text(step_body, step_field, check_step_if)
@@ -2147,7 +2164,7 @@ class _Planner:
             if key not in inputs:
                 _invalid(f"{key_field}: input is not defined", key_field)
             text = self._string_scalar(value, key_field)
-            self._check_expression(text, key_field, check_step_text)
+            self._check_expression(text, key_field, check_step_secret_value)
             recorded[key] = text
         return recorded
 

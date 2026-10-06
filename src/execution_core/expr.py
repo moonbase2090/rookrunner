@@ -9,7 +9,9 @@ available value is an empty string. `hashFiles` is not implemented.
 `run`, `env`, `with`, and step and job `name` accept mixed text. Each
 `${{ }}` is inserted as text. A whole-string expression drops the
 surrounding whitespace and is stringified the same way. The inserted
-text is not scanned again. `secrets` is withheld in these positions.
+text is not scanned again. Step `env` and `with` accept an expression
+that is exactly `secrets.NAME`. `secrets` stays withheld in `run`,
+names, `if`, job `env`, workflow `env`, and concurrency.
 Status functions are not accepted there.
 
 `case` evaluates predicates in order and does not evaluate later branches.
@@ -189,6 +191,73 @@ def check_step_text(source):
     """Reject an expression in step `run`, `env`, `with`, or `name`."""
 
     check_text(source, STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
+
+
+_SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def exact_secret_reference(source):
+    """Return the name when `source` is exactly ``${{ secrets.NAME }}``."""
+
+    if not isinstance(source, str):
+        return None
+    text = source.strip()
+    if not (text.startswith("${{") and text.endswith("}}") and "${{" not in text[3:-2]):
+        return None
+    try:
+        tree = _parse(text[3:-2].strip())
+    except ExprError:
+        return None
+    if (
+        isinstance(tree, tuple)
+        and len(tree) == 3
+        and tree[0] == "prop"
+        and isinstance(tree[1], tuple)
+        and len(tree[1]) == 2
+        and tree[1][0] == "name"
+        and tree[1][1] == "secrets"
+        and isinstance(tree[2], str)
+        and _SECRET_NAME.fullmatch(tree[2])
+    ):
+        return tree[2]
+    return None
+
+
+def check_step_secret_value(source):
+    """Accept an exact ``secrets.NAME`` in step `env` or `with`.
+
+    Any other read of `secrets` in that text is refused. ``GITHUB_TOKEN``
+    is the one ``GITHUB_`` name that is accepted. The value is not read.
+    """
+
+    name = exact_secret_reference(source)
+    if name is not None:
+        upper = name.upper()
+        if upper.startswith("GITHUB_") and upper != "GITHUB_TOKEN":
+            raise ExprError("secrets reference is not accepted")
+        return
+    if _text_mentions_secrets(source):
+        raise ExprError("secrets reference is not accepted")
+    check_step_text(source)
+
+
+def _text_mentions_secrets(source):
+    try:
+        pieces = _text_pieces(source)
+    except ExprError:
+        return False
+    if pieces is None:
+        return False
+    for kind, text in pieces:
+        if kind != "expr":
+            continue
+        try:
+            tree = _parse(text)
+        except ExprError:
+            return False
+        if _mentions(tree, "secrets"):
+            return True
+    return False
 
 
 def check_job_env(source):

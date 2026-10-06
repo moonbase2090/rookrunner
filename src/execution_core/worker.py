@@ -21,8 +21,10 @@ not open it. `--secret-ref` and `--secret-pusher` may be repeated.
 `--docker-socket` combined with `--app-key` or `--secrets` refuses
 unless `--runner-image` is set and the `~/Secrets` probe exits 0.
 A worker that starts with `--docker-socket` warns that the exposure
-includes the key directory and the secret root. No secret is injected
-and no job token is minted.
+includes the key directory and the secret root. When `--secrets` is
+set and the allowlist matches, a step `env` or `with` expression that
+is exactly `secrets.NAME` receives that file's value on that step.
+A `run` script is not rewritten. No job token is minted.
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.
@@ -122,6 +124,7 @@ from .protocol import (
 )
 from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
+from .secrets import SecretAccess
 from .socket_lock import HOST_CONTROL_WARNING, accept_socket_flags
 from .status import MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
@@ -945,6 +948,15 @@ class Worker:
             node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
             actions=actions_root,
             runner_image=self.runner_image_digest,
+            secrets=(
+                None
+                if not self.secrets
+                else SecretAccess(
+                    self.github_repository,
+                    self.secret_refs,
+                    self.secret_pushers,
+                )
+            ),
         )
 
     def _abandoned(self, run_id):
