@@ -447,6 +447,7 @@ def main():
         ),
     )
     commands.add_parser("describe")
+    commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
     )
@@ -579,6 +580,11 @@ def main():
     if args.command == "poll" and not args.job:
         parser.error("poll requires at least one --job WORKFLOW JOB_ID")
     try:
+        if args.command == "mcp":
+            from .mcp import serve_stdio
+
+            serve_stdio(args.state)
+            return
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)
             print(canonical({"snapshot": result}))
