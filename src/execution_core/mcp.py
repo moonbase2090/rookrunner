@@ -332,8 +332,6 @@ def _forward(state, method, params):
                 return _failure("WORKER_TIMEOUT", "worker did not answer within 5 seconds", True)
             return _failure("INTERNAL_ERROR", "worker response was not a protocol result", False)
         break
-    else:
-        return _failure("WORKER_TIMEOUT", "worker did not answer within 5 seconds", True)
     if "error" in reply:
         error = reply["error"] if isinstance(reply["error"], dict) else {}
         data = error.get("data") if isinstance(error.get("data"), dict) else {}
