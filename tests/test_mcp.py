@@ -247,7 +247,7 @@ class McpReadTests(unittest.TestCase):
         session = self.session()
         listed = session.request("tools/list")
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["describe", "get", "list", "logs"])
+        self.assertEqual(names, ["describe", "get", "list", "logs", "artifacts", "artifact_read"])
         self.assertFalse({"submit", "run.status", "status", "fixture"} & set(names))
         described = session.call("describe")
         self.assertIs(described["isError"], False)

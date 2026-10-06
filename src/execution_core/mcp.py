@@ -1,4 +1,4 @@
-"""Stdio MCP adapter for the read tools.
+"""Stdio MCP adapter for the read and artifact tools.
 
 Each tool call opens one worker socket through the CLI client. The
 process binds no port, takes no key, and writes only MCP messages
@@ -60,6 +60,38 @@ _TOOLS = (
             "additionalProperties": False,
         },
     },
+    {
+        "name": "artifacts",
+        "description": "Read one page of a run's artifacts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "cursor": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["run_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "artifact_read",
+        "description": (
+            "Read one page of an artifact by id. There is no path argument. "
+            'The message "artifact bytes are not available" also covers '
+            "other internal failures."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "offset": {"type": "integer"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["artifact_id"],
+            "additionalProperties": False,
+        },
+    },
 )
 
 _FORWARD = {
@@ -67,6 +99,8 @@ _FORWARD = {
     "get": ("run.get", ("run_id",), ()),
     "list": ("run.list", (), ("cursor", "limit", "state")),
     "logs": ("run.logs", ("run_id",), ("cursor", "limit")),
+    "artifacts": ("run.artifacts", ("run_id",), ("cursor", "limit")),
+    "artifact_read": ("artifact.read", ("artifact_id",), ("offset", "limit")),
 }
 
 
@@ -187,7 +221,16 @@ def _call_tool(state, params):
                 False,
             )
         forwarded["cursor"] = cursor
-    for key in ("limit", "state"):
+    if "artifact_id" in arguments:
+        artifact_id = arguments["artifact_id"]
+        if not utf8_string(artifact_id, 1, 128):
+            return _failure(
+                "INVALID_PARAMS",
+                "artifact_id must be a nonempty UTF-8 string of at most 128 characters",
+                False,
+            )
+        forwarded["artifact_id"] = artifact_id
+    for key in ("limit", "state", "offset"):
         if key in arguments:
             forwarded[key] = arguments[key]
     return _forward(state, method, forwarded)
