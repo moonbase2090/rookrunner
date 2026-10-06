@@ -366,12 +366,18 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assertEqual(self._count("same"), 1)
         queued = session.call("get", {"run_id": run_id})
         self.assertEqual(queued["structuredContent"]["state"], "queued")
-        cancelled = session.call("cancel", {"run_id": run_id})
+        proxied = self.session()
+        cancelled = proxied.call("cancel", {"run_id": run_id})
         self.assertIs(cancelled["isError"], False)
         body = cancelled["structuredContent"]
         self.assertEqual(body["state"], "cancelled")
         self.assertFalse(body["state"] == "succeeded" and body["exit_code"] == 0)
         self.assertEqual(body["run_id"], run_id)
+        cancel_params = [
+            json.loads(raw)["params"] for raw in self.proxy.requests if b'"run.cancel"' in raw
+        ]
+        self.assertEqual(cancel_params, [{"run_id": run_id, "version": 0}])
+        self.assertIs(type(cancel_params[0]["version"]), int)
 
     def test_a_dropped_submit_is_retried_once(self):
         session = self.session()
