@@ -162,7 +162,7 @@ class CountingProxy:
 
 class McpErrorTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="mcp-err-", dir="/private/tmp")
+        self.tmp = tempfile.TemporaryDirectory(prefix="mcp-err-")
         self.root = Path(self.tmp.name)
         self.repo = self.root / "repo"
         self.repo.mkdir()
