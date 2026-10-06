@@ -931,6 +931,71 @@
           ],
           "additionalProperties": false
         },
+        "token_revocation": {
+          "description": "One record per job combination that reached revocation. The token is not stored.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "job_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[^\\u0000\\ud800-\\udfff]*$"
+              },
+              "attempted": {
+                "type": "boolean"
+              },
+              "accepted": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "job_id",
+              "attempted"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "attempted": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "attempted"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "attempted": {
+                      "const": false
+                    }
+                  },
+                  "required": [
+                    "attempted"
+                  ]
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "accepted"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        },
         "steps": {
           "description": "Stored step records. GitHub documents no per-job step limit. https://docs.github.com/en/actions/reference/limits",
           "type": "array",

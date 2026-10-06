@@ -50,8 +50,8 @@ keeps the NS-40 token file ([check runs](../design/check-runs.md)).
 The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and
 `write` permissions for owner-repository push and pull-request runs
 on this one local worker ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
-p7-socket-lock, p7-secret-env, and p7-secret-run are implemented.
-p7-job-token is not.
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented.
 MB2090 accepted the amended
 answers on 2026-10-05.
 The rest of the
@@ -1403,10 +1403,10 @@ assume a fixed rate.
   (https://docs.github.com/en/actions/reference/security/secure-use).
 - Deploy workflows. Secrets, `GITHUB_TOKEN`, and `write` permissions
   are designed in [secrets](../design/secrets.md). p7-mask,
-  p7-trust-gate, p7-socket-lock, p7-secret-env, and p7-secret-run
-  are implemented. p7-job-token is not. `write` stays rejected.
+  p7-trust-gate, p7-socket-lock, p7-secret-env, p7-secret-run, and
+  p7-job-token are implemented. `write` stays rejected.
   MB2090 accepted the amended answers on 2026-10-05.
-  Deploy workflows stay deferred until that plan is implemented.
+  Deploy workflows stay deferred.
 - The `actions/cache` and artifact HTTP services, Docker actions, `pre`
   entries, `node20` actions, tag or branch action refs, and private
   action repositories.
@@ -2248,8 +2248,8 @@ status with that installation token. Omitting `--app-key` keeps the
 NS-40 token file ([check runs](../design/check-runs.md)). The plan
 schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
-p7-socket-lock, p7-secret-env, and p7-secret-run are implemented.
-p7-job-token is not.
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented.
 MB2090 accepted the amended answers on 2026-10-05.
 
 Settled there, so the implementation does not reopen them:
@@ -2282,8 +2282,8 @@ optional check fields because that schema rejects unknown properties.
 `.github/workflows/check.yml` is unchanged. Omitting `--app-key` keeps
 the NS-40 token file. P7 designs secrets, `GITHUB_TOKEN`, and `write`
 permissions ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
-p7-socket-lock, p7-secret-env, and p7-secret-run are implemented.
-p7-job-token is not.
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented.
 MB2090 accepted the amended answers on 2026-10-05.
 
 The owner chose the credential on 2026-10-05:
@@ -2307,20 +2307,26 @@ The owner chose the credential on 2026-10-05:
 
 **P7. Secrets, GITHUB_TOKEN, and write permissions.**
 
-Status: designed. p7-mask, p7-trust-gate, p7-socket-lock,
-p7-secret-env, and p7-secret-run are implemented. p7-job-token is
-not. The design is [secrets](../design/secrets.md). The capability version
+Status: the six-PR plan is implemented. p7-mask, p7-trust-gate,
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented. The design is [secrets](../design/secrets.md). The capability version
 stays 12. A version 11 plan is not migrated. No plan field is added.
 The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
-stay rejected. `GITHUB_TOKEN` stays unset. An exact `secrets.NAME`
+stay rejected. An exact `secrets.NAME`
 in step `env` or `with` reads the file store when `--secrets` is
 set and the allowlist matches. An exact `secrets.NAME` in `run` is
 rewritten to `${RR_SECRET_NAME}` for bash and sh when the lexer
 proves the context. The script contains the rewritten text and does
 not contain the value. Other `secrets` references stay withheld.
-No job token is minted. MB2090 accepted the amended answers on
-2026-10-05. macOS jobs stay deferred.
+A job mints one Contents-read installation token when `--app-key`
+is set, permissions allow Contents read, and a step needs
+`secrets.GITHUB_TOKEN` or exact `github.token`. Otherwise those
+aliases stay empty and do not require `--secrets`. The token is
+revoked when the job ends. The record stores the attempt, not the
+token. `permissions: {}` mints nothing. MB2090 accepted the amended
+answers on 2026-10-05. macOS jobs stay deferred. `write` stays
+rejected.
 
 The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
 App ID is 5201333. The installation and the private key are still
@@ -2356,11 +2362,16 @@ The seven decisions and the proof for each pull request are in
    that variable on that step. The script file does not contain the
    value. `secrets.GITHUB_TOKEN` is recognized and stays unset. No
    job token is minted.
-6. **p7-job-token.** Mint only when a step needs a token, revoke it
-   when the job ends, fail the job when the mint fails, and warn at
-   55 minutes. `secrets.GITHUB_TOKEN` aliases the job token. The
-   mint body names the repository and Contents read.
-   `permissions: {}` mints nothing.
+6. **p7-job-token.** Implemented. The worker mints one
+   Contents-read installation token when `--app-key` is set,
+   permissions allow Contents read, and a step needs
+   `secrets.GITHUB_TOKEN` or exact `github.token`. Otherwise those
+   aliases stay empty and do not require `--secrets`. The mint body
+   names the repository and Contents read. A mint failure fails the
+   job before the first step. `permissions: {}` mints nothing. The
+   token is revoked when the job ends. The record stores the
+   attempt, not the token. One warning is logged at 55 minutes.
+   The check-run post token is unchanged.
 
 Each of those pull requests keeps capability version 12 and leaves
 `.github/workflows/check.yml` unchanged.
@@ -2371,10 +2382,10 @@ The NS-39 inventory reordered this list. At that reading,
 `concurrency` blocked 17 of the 18 push or pull-request workflows at
 plan time. Expressions did not. NS-44 and NS-45 are implemented.
 NS-46 implements item 3. P4 implements item 4. P6 implements item 6.
-P5 implements item 5. P7 designs item 7
+P5 implements item 5. P7 implements the six-PR plan for item 7. `write` stays rejected
 ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
-p7-socket-lock, p7-secret-env, and p7-secret-run are implemented.
-p7-job-token is not. MB2090 accepted the amended answers on
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented. MB2090 accepted the amended answers on
 2026-10-05.
 
 1. **NS-45.** `concurrency` and `cancel-in-progress` on one worker.
@@ -2425,10 +2436,11 @@ p7-job-token is not. MB2090 accepted the amended answers on
    image question for the local worker.
 7. **P7.** Secrets, `GITHUB_TOKEN`, and `write` permissions for
    owner-repository push and pull-request runs on this one local
-   worker. Designed
-   ([secrets](../design/secrets.md)). p7-mask, p7-trust-gate,
-   p7-socket-lock, p7-secret-env, and p7-secret-run are implemented.
-   p7-job-token is not. MB2090 accepted the amended answers
+   worker. The six pull requests are implemented
+   ([secrets](../design/secrets.md)). `write` stays rejected.
+   p7-mask, p7-trust-gate,
+   p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token
+   are implemented. MB2090 accepted the amended answers
    on 2026-10-05.
    The implementation order is p7-mask, p7-trust-gate,
    p7-socket-lock, p7-secret-env, p7-secret-run, and

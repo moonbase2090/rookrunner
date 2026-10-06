@@ -16,8 +16,9 @@ omits `image` when every selected job has `runs-on: ubuntu-latest`.
 The worker does not pull, build, or publish it. An explicit `image`
 still wins.
 `worker --secrets` takes no path and requires `--github-repository`.
-`worker --app-key` accepts only the Rookrunner App key path and does
-not open it. `--secret-ref` and `--secret-pusher` may be repeated.
+`worker --app-key` accepts only the Rookrunner App key path. The worker
+opens that file only when a job mints a Contents-read token.
+`--secret-ref` and `--secret-pusher` may be repeated.
 `--docker-socket` combined with `--app-key` or `--secrets` refuses
 unless `--runner-image` is set and the `~/Secrets` probe exits 0.
 A worker that starts with `--docker-socket` warns that the exposure
@@ -25,7 +26,11 @@ includes the key directory and the secret root. When `--secrets` is
 set and the allowlist matches, a step `env` or `with` expression that
 is exactly `secrets.NAME` receives that file's value on that step.
 An exact `secrets.NAME` in `run` is rewritten to `${RR_SECRET_NAME}`
-for bash and sh. No job token is minted.
+for bash and sh. When `--app-key` is set, the resolved permissions
+allow Contents read, and a step needs a token, the worker mints one
+installation token for that job. The mint names the repository and
+Contents read. The token is revoked when the job ends. The record
+stores the attempt, not the token. `permissions: {}` mints nothing.
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.
@@ -125,9 +130,10 @@ from .protocol import (
 )
 from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
+from .job_token import JobTokenConfig, public_token_revocation
 from .secrets import SecretAccess
 from .socket_lock import HOST_CONTROL_WARNING, accept_socket_flags
-from .status import MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
+from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
@@ -296,6 +302,7 @@ class Worker:
         app_key=None,
         secret_refs=None,
         secret_pushers=None,
+        api_base=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
@@ -331,6 +338,7 @@ class Worker:
         self.secrets = flags.secrets
         self.github_repository = flags.github_repository
         self.app_key = flags.app_key
+        self.api_base = DEFAULT_API_BASE if api_base is None else api_base
         self.secret_refs = flags.secret_refs
         self.secret_pushers = flags.secret_pushers
         self.host_control_warning = HOST_CONTROL_WARNING if docker_socket else None
@@ -864,6 +872,19 @@ class Worker:
                 if self.get(record["run_id"])["state"] in TERMINAL:
                     self.live.pop(record["run_id"], None)
 
+    def job_token_config(self):
+        """Return mint settings when --app-key is set. This does not open the key."""
+
+        if not isinstance(self.app_key, str) or self.app_key == "":
+            return None
+        return JobTokenConfig(
+            self.app_key,
+            self.api_base,
+            state_dir=self.state,
+            repository_root=self.repository,
+            github_repository=self.github_repository,
+        )
+
     def _run_accepted(self, record, request, owner=None):
         pinned = record["input"]
         event = request["event"]
@@ -958,6 +979,7 @@ class Worker:
                     self.secret_pushers,
                 )
             ),
+            job_token=self.job_token_config(),
         )
 
     def _abandoned(self, run_id):
@@ -1042,6 +1064,9 @@ class Worker:
             )
         if "node24" in outcome:
             current["node24"] = outcome["node24"]
+        stored_revocations = public_token_revocation(outcome.get("token_revocation"))
+        if stored_revocations:
+            current["token_revocation"] = stored_revocations
         current.update(finished_at=now(), cleanup="confirmed_no_external_resources")
         self.db.execute(
             "UPDATE runs SET log=? WHERE id=?",
@@ -2036,6 +2061,7 @@ def serve(
     app_key=None,
     secret_refs=None,
     secret_pushers=None,
+    api_base=None,
 ):
     worker = Worker(
         repository,
@@ -2050,6 +2076,7 @@ def serve(
         app_key=app_key,
         secret_refs=secret_refs,
         secret_pushers=secret_pushers,
+        api_base=api_base,
     )
     if worker.host_control_warning:
         print(worker.host_control_warning, file=sys.stderr, flush=True)

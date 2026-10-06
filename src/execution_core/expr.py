@@ -12,7 +12,9 @@ surrounding whitespace and is stringified the same way. The inserted
 text is not scanned again. Step `env` and `with` accept an expression
 that is exactly `secrets.NAME`. Step `run` rewrites that expression to
 `${RR_SECRET_NAME}` when the shell is bash or sh and a small lexer
-proves an unquoted or double-quoted context. `secrets` stays withheld
+proves an unquoted or double-quoted context. `secrets.GITHUB_TOKEN`
+and `github.token` are the same alias and rewrite to
+`${RR_SECRET_GITHUB_TOKEN}`. `secrets` stays withheld
 in names, `if`, job `env`, workflow `env`, and concurrency.
 Status functions are not accepted there.
 
@@ -217,25 +219,154 @@ def _exact_secret_tree(tree):
 def exact_secret_reference(source):
     """Return the name when `source` is exactly ``${{ secrets.NAME }}``."""
 
+    tree = _whole_tree(source)
+    if tree is None:
+        return None
+    return _exact_secret_tree(tree)
+
+
+def _whole_tree(source):
     if not isinstance(source, str):
         return None
     text = source.strip()
     if not (text.startswith("${{") and text.endswith("}}") and "${{" not in text[3:-2]):
         return None
     try:
-        tree = _parse(text[3:-2].strip())
+        return _parse(text[3:-2].strip())
     except ExprError:
         return None
-    return _exact_secret_tree(tree)
+
+
+def _exact_github_token_tree(tree):
+    return (
+        isinstance(tree, tuple)
+        and len(tree) == 3
+        and tree[0] == "prop"
+        and isinstance(tree[1], tuple)
+        and len(tree[1]) == 2
+        and tree[1][0] == "name"
+        and tree[1][1] == "github"
+        and tree[2] == "token"
+    )
+
+
+def _tree_reads_github_token(node):
+    if isinstance(node, list) or (
+        isinstance(node, tuple) and (not node or not isinstance(node[0], str))
+    ):
+        return any(_tree_reads_github_token(child) for child in node)
+    if not isinstance(node, tuple):
+        return False
+    if _exact_github_token_tree(node):
+        return True
+    if (
+        len(node) == 3
+        and node[0] == "index"
+        and isinstance(node[1], tuple)
+        and node[1][0] == "name"
+        and node[1][1] == "github"
+        and isinstance(node[2], tuple)
+        and node[2][0] == "lit"
+        and node[2][1] == "token"
+    ):
+        return True
+    return any(_tree_reads_github_token(child) for child in node[1:])
+
+
+def exact_job_token_reference(source):
+    """Return ``GITHUB_TOKEN`` for an exact ``secrets.GITHUB_TOKEN`` or ``github.token``."""
+
+    tree = _whole_tree(source)
+    if tree is None:
+        return None
+    secret = _exact_secret_tree(tree)
+    if isinstance(secret, str) and secret.upper() == "GITHUB_TOKEN":
+        return "GITHUB_TOKEN"
+    if _exact_github_token_tree(tree):
+        return "GITHUB_TOKEN"
+    return None
+
+
+def text_reads_github_token(source):
+    """Return whether any expression in `source` reads ``github.token``."""
+
+    if not isinstance(source, str) or "${{" not in source:
+        return False
+    try:
+        pieces = _text_pieces(source)
+    except ExprError:
+        return False
+    if not pieces:
+        return False
+    for kind, body in pieces:
+        if kind != "expr":
+            continue
+        try:
+            tree = _parse(body)
+        except ExprError:
+            return False
+        if _tree_reads_github_token(tree):
+            return True
+    return False
+
+
+def text_needs_job_token(source):
+    """Return whether env, with, or run text asks for the job token."""
+
+    if not isinstance(source, str) or "${{" not in source:
+        return False
+    if exact_job_token_reference(source) == "GITHUB_TOKEN":
+        return True
+    if text_reads_github_token(source):
+        return True
+    try:
+        pieces = _text_pieces(source)
+    except ExprError:
+        return False
+    if not pieces:
+        return False
+    for kind, body in pieces:
+        if kind != "expr":
+            continue
+        try:
+            tree = _parse(body)
+        except ExprError:
+            continue
+        name = _exact_secret_tree(tree)
+        if isinstance(name, str) and name.upper() == "GITHUB_TOKEN":
+            return True
+    return False
+
+
+def check_action_default(source):
+    """Accept an action default that is exactly the job-token alias.
+
+    Any other read of ``secrets`` or ``github.token`` is refused. The
+    plan field names the input.
+    """
+
+    if exact_job_token_reference(source) == "GITHUB_TOKEN":
+        return
+    if text_reads_github_token(source):
+        raise ExprError("github.token reference is not accepted")
+    if _text_mentions_secrets(source):
+        raise ExprError("secrets reference is not accepted")
+    check_step_text(source)
 
 
 def check_step_secret_value(source):
     """Accept an exact ``secrets.NAME`` in step `env` or `with`.
 
     Any other read of `secrets` in that text is refused. ``GITHUB_TOKEN``
-    is the one ``GITHUB_`` name that is accepted. The value is not read.
+    is the one ``GITHUB_`` name that is accepted. An exact ``github.token``
+    is the same alias. Any other ``github.token`` read is refused. The
+    value is not read.
     """
 
+    if exact_job_token_reference(source) == "GITHUB_TOKEN":
+        return
+    if text_reads_github_token(source):
+        raise ExprError("github.token reference is not accepted")
     name = exact_secret_reference(source)
     if name is not None:
         upper = name.upper()
@@ -1107,12 +1238,14 @@ def rewrite_run_secrets(source, shell):
 
     An exact ``secrets.NAME`` in a proven unquoted or double-quoted context
     becomes ``${RR_SECRET_NAME}``. ``file_names`` is the uppercase file names
-    in first-seen order. ``GITHUB_TOKEN`` is rewritten and is not a file.
-    A script with no ``secrets`` read is returned unchanged, including when
-    the shell cannot expand the variable. Any other shell, or a context the
-    lexer cannot prove, raises ``run is not accepted`` and does not return
-    text. A ``secrets`` read that is not an exact name raises
-    ``secrets reference is not accepted``.
+    in first-seen order. ``GITHUB_TOKEN`` and an exact ``github.token`` are
+    rewritten and are not files. A script with no secret or token read is
+    returned unchanged, including when the shell cannot expand the variable.
+    Any other shell, or a context the lexer cannot prove, raises
+    ``run is not accepted`` and does not return text. A ``secrets`` read
+    that is not an exact name raises ``secrets reference is not accepted``.
+    A ``github.token`` read that is not exact raises
+    ``github.token reference is not accepted``.
     """
 
     if not isinstance(source, str) or "\0" in source:
@@ -1123,23 +1256,30 @@ def rewrite_run_secrets(source, shell):
     for start, end, body, context in sites:
         tree = _parse(body)
         name = _exact_secret_tree(tree)
-        if name is not None or _walk_mentions_secrets(tree):
+        github_exact = _exact_github_token_tree(tree)
+        mentions_token = _tree_reads_github_token(tree)
+        if name is not None or github_exact or _walk_mentions_secrets(tree) or mentions_token:
             saw_secret = True
-            classified.append((start, end, context, name))
+            classified.append((start, end, context, name, github_exact, mentions_token))
         else:
             _check(tree, STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
     if saw_secret and not _shell_accepts_rewrite(shell):
         raise ExprError("run is not accepted")
     names = []
     replacements = []
-    for start, end, context, name in classified:
+    for start, end, context, name, github_exact, mentions_token in classified:
         if context not in {"unquoted", "double"}:
             raise ExprError("run is not accepted")
-        if name is None:
+        if github_exact:
+            upper = "GITHUB_TOKEN"
+        elif mentions_token:
+            raise ExprError("github.token reference is not accepted")
+        elif name is None:
             raise ExprError("secrets reference is not accepted")
-        upper = name.upper()
-        if upper.startswith("GITHUB_") and upper != "GITHUB_TOKEN":
-            raise ExprError("secrets reference is not accepted")
+        else:
+            upper = name.upper()
+            if upper.startswith("GITHUB_") and upper != "GITHUB_TOKEN":
+                raise ExprError("secrets reference is not accepted")
         if upper != "GITHUB_TOKEN" and upper not in names:
             names.append(upper)
         replacements.append((start, end, "${RR_SECRET_" + upper + "}"))
@@ -1153,7 +1293,7 @@ def rewrite_run_secrets(source, shell):
         cursor = end
     parts.append(source[cursor:])
     rewritten = "".join(parts)
-    if _rewritten_mentions_secrets(rewritten):
+    if _rewritten_mentions_secrets(rewritten) or text_reads_github_token(rewritten):
         raise ExprError("run is not accepted")
     return rewritten, names
 

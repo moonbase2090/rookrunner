@@ -65,6 +65,7 @@ from .expr import (
     check_job_if,
     check_job_name,
     check_job_output,
+    check_action_default,
     check_step_if,
     check_job_concurrency,
     check_step_run,
@@ -1534,7 +1535,12 @@ class _Planner:
                 ):
                     message += "; move this reference to the step env"
                 raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
-            if message in {"secrets reference is not accepted", "run is not accepted"}:
+            if message in {
+                "secrets reference is not accepted",
+                "run is not accepted",
+                "github.token reference is not accepted",
+                "token reference is not accepted",
+            }:
                 raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
             raise PlanError(
                 "WORKFLOW_INVALID", f"{path}: expression is not accepted", path
@@ -1970,7 +1976,7 @@ class _Planner:
             if "default" in spec:
                 default_field = _join(item_field, "default")
                 item["default"] = self._string_scalar(spec["default"][1], default_field)
-                self._check_expression(item["default"], default_field, check_step_text)
+                self._check_expression(item["default"], default_field, check_action_default)
             if "deprecationMessage" in spec:
                 item["deprecation_message"] = self._string_scalar(
                     spec["deprecationMessage"][1],

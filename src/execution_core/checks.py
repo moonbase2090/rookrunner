@@ -371,10 +371,17 @@ def _call(url, method, body, token, label):
     return code, raw
 
 
-def _exchange(api_base, installation_id, jwt):
+def post_installation_token(api_base, installation_id, jwt, payload):
+    """POST one installation access token. The caller chooses the body.
+
+    The check-run post passes Checks write and Commit statuses write, and
+    does not pass ``repositories``. A job token passes both ``repositories``
+    and Contents read. Redirects are refused.
+    """
+
     origin = api_origin(api_base)
     url = f"{origin}/app/installations/{installation_id}/access_tokens"
-    body = canonical({"permissions": {"checks": "write", "statuses": "write"}}).encode("ascii")
+    body = canonical(payload).encode("ascii")
     code, raw = _call(url, "POST", body, jwt, "token")
     try:
         parsed = strict_json(raw)
@@ -391,6 +398,54 @@ def _exchange(api_base, installation_id, jwt):
             "TOKEN_REJECTED", f"GitHub token request failed with HTTP {code}"
         ) from None
     return token
+
+
+def _exchange(api_base, installation_id, jwt):
+    """Mint the check-run post token. The body has no ``repositories`` field."""
+
+    return post_installation_token(
+        api_base,
+        installation_id,
+        jwt,
+        {"permissions": {"checks": "write", "statuses": "write"}},
+    )
+
+
+def revoke_installation_token(api_base, token):
+    """DELETE /installation/token. True only for HTTP 204.
+
+    ``_call`` accepts only 200 and 201, so this request has its own path.
+    A failure returns False and does not raise. Redirects are refused, so
+    the token is not sent to another host.
+    """
+
+    if not isinstance(token, str) or token == "":
+        return False
+    try:
+        origin = api_origin(api_base)
+    except StatusError:
+        return False
+    request = urllib.request.Request(f"{origin}/installation/token", method="DELETE")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("User-Agent", "rookrunner")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("Authorization", "Bearer " + token)
+    opener = urllib.request.build_opener(_redirect("token"))
+    try:
+        with opener.open(request, timeout=STATUS_TIMEOUT_SECONDS) as response:
+            code = response.status
+            response.read(64)
+    except StatusError:
+        return False
+    except urllib.error.HTTPError as error:
+        try:
+            error.read(64)
+        except OSError:
+            pass
+        return False
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+    return code == 204
 
 
 def _github_time(moment):
