@@ -1,8 +1,9 @@
-"""Stdio MCP adapter for the read and artifact tools.
+"""Stdio MCP adapter.
 
 Each tool call opens one worker socket through the CLI client. The
 process binds no port, takes no key, and writes only MCP messages
-on stdout. A read that times out is not sent again.
+on stdout. A read that times out is not sent again. A submit whose
+reply is missing is sent once more.
 """
 
 import sys
@@ -12,7 +13,7 @@ from .protocol import MAX_CURSOR, MAX_MESSAGE, canonical, strict_json, utf8_stri
 
 PROTOCOL_VERSION = "2025-11-25"
 
-# Submit, run.status, fixtures, poll, and the App key stay on the CLI.
+# run.status, fixtures, poll, and the App key stay on the CLI.
 _TOOLS = (
     {
         "name": "describe",
@@ -92,6 +93,35 @@ _TOOLS = (
             "additionalProperties": False,
         },
     },
+    {
+        "name": "submit",
+        "description": (
+            "Submit the checkout this worker is bound to. "
+            "Use a new submission key after each edit and compare snapshot ids. "
+            "The adapter sends event {} and omits event_name."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "submission_key": {"type": "string"},
+                "workflow": {"type": "string"},
+                "job_id": {"type": "string"},
+                "image": {"type": "string"},
+            },
+            "required": ["submission_key", "workflow", "job_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "cancel",
+        "description": "Cancel a run and return the worker record.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"run_id": {"type": "string"}},
+            "required": ["run_id"],
+            "additionalProperties": False,
+        },
+    },
 )
 
 _FORWARD = {
@@ -101,6 +131,8 @@ _FORWARD = {
     "logs": ("run.logs", ("run_id",), ("cursor", "limit")),
     "artifacts": ("run.artifacts", ("run_id",), ("cursor", "limit")),
     "artifact_read": ("artifact.read", ("artifact_id",), ("offset", "limit")),
+    "submit": ("run.submit", ("submission_key", "workflow", "job_id"), ("image",)),
+    "cancel": ("run.cancel", ("run_id",), ()),
 }
 
 
@@ -202,6 +234,10 @@ def _call_tool(state, params):
     method, required, optional = _FORWARD[name]
     if set(arguments) - set(required) - set(optional) or set(required) - set(arguments):
         return _failure("INVALID_PARAMS", "missing or unknown parameters", False)
+    if name == "submit":
+        return _submit(state, arguments)
+    if name == "cancel":
+        return _cancel(state, arguments)
     forwarded = {}
     if "run_id" in arguments:
         run_id = arguments["run_id"]
@@ -236,18 +272,68 @@ def _call_tool(state, params):
     return _forward(state, method, forwarded)
 
 
+def _submit(state, arguments):
+    key = arguments["submission_key"]
+    workflow = arguments["workflow"]
+    job_id = arguments["job_id"]
+    if (
+        not utf8_string(key, 1, 128)
+        or not utf8_string(workflow, 1, 1024)
+        or not utf8_string(job_id, 1, 128)
+    ):
+        return _failure("INVALID_PARAMS", "missing or unknown parameters", False)
+    if key.startswith("poll-"):
+        return _failure("INVALID_PARAMS", "submission_key must not start with poll-", False)
+    params = {
+        "version": 1,
+        "submission_key": key,
+        "workflow": workflow,
+        "job_id": job_id,
+        "event": {},
+    }
+    if "image" in arguments:
+        image = arguments["image"]
+        if not isinstance(image, str) or image == "":
+            return _failure("INVALID_PARAMS", "image must be a string", False)
+        params["image"] = image
+    return _forward(state, "run.submit", params)
+
+
+def _cancel(state, arguments):
+    run_id = arguments["run_id"]
+    if not utf8_string(run_id, 1, 128):
+        return _failure(
+            "INVALID_PARAMS",
+            "run_id must be a nonempty UTF-8 string of at most 128 characters",
+            False,
+        )
+    return _forward(state, "run.cancel", {"version": 0, "run_id": run_id})
+
+
 def _forward(state, method, params):
     # Imported here so loading the adapter does not cycle through the CLI.
     from .cli import call
 
-    try:
-        reply = call(state, method, params)
-    except TimeoutError:
+    # A lost submit reply is not rolled back. Send that same request once more.
+    tries = 2 if method == "run.submit" else 1
+    for attempt in range(tries):
+        try:
+            reply = call(state, method, params)
+        except TimeoutError:
+            if attempt + 1 < tries:
+                continue
+            return _failure("WORKER_TIMEOUT", "worker did not answer within 5 seconds", True)
+        except OSError:
+            return _failure("WORKER_UNAVAILABLE", "worker socket is not available", True)
+        except (ValueError, RecursionError, UnicodeError) as exc:
+            if attempt + 1 < tries and str(exc) == "invalid or oversized worker response":
+                continue
+            if str(exc) == "invalid or oversized worker response":
+                return _failure("WORKER_TIMEOUT", "worker did not answer within 5 seconds", True)
+            return _failure("INTERNAL_ERROR", "worker response was not a protocol result", False)
+        break
+    else:
         return _failure("WORKER_TIMEOUT", "worker did not answer within 5 seconds", True)
-    except OSError:
-        return _failure("WORKER_UNAVAILABLE", "worker socket is not available", True)
-    except (ValueError, RecursionError, UnicodeError):
-        return _failure("INTERNAL_ERROR", "worker response was not a protocol result", False)
     if "error" in reply:
         error = reply["error"] if isinstance(reply["error"], dict) else {}
         data = error.get("data") if isinstance(error.get("data"), dict) else {}
