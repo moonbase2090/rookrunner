@@ -19,9 +19,11 @@ read an action file, or run its program. It checks that expressions can be
 parsed and does not evaluate them. `run`, `env`, `with`, and step and
 job `name` are checked, including mixed text. The plan stores the
 source. An exact `secrets.NAME` is accepted in step `env` and step
-`with` and stored as that text. Any other `secrets` read there is
-refused. `secrets` stays withheld in `run`, names, `if`, job `env`,
-workflow `env`, and concurrency. Workflow `name`, service `env`, and
+`with` and stored as that text. An exact `secrets.NAME` in step `run`
+is accepted when the shell is bash or sh and the lexer proves the
+context, and the plan stores that text. Any other `secrets` read in
+those fields is refused. `secrets` stays withheld in names, `if`,
+job `env`, workflow `env`, and concurrency. Workflow `name`, service `env`, and
 action output `value` that is not one whole expression stay unchecked.
 `concurrency` on a workflow or job is stored, including mixed text in
 the group. `queue: max` with `cancel-in-progress: true` is rejected.
@@ -65,6 +67,7 @@ from .expr import (
     check_job_output,
     check_step_if,
     check_job_concurrency,
+    check_step_run,
     check_step_secret_value,
     check_step_text,
     check_workflow_concurrency,
@@ -505,6 +508,7 @@ class _Planner:
         self.call_stack = []
         self.called_workflows = set()
         self.workflow_level = 1
+        self.workflow_shell = None
 
     def plan(self, workflow, job_id):
         if not isinstance(job_id, str) or job_id == "":
@@ -525,6 +529,7 @@ class _Planner:
         concurrency = self._concurrency(body, "", check_workflow_concurrency)
         if concurrency is not None:
             workflow_plan["concurrency"] = concurrency
+        self.workflow_shell = workflow_plan["defaults"]["shell"]
         if "jobs" not in body:
             _invalid("no selected job", "jobs")
         jobs = self._mapping(body["jobs"][1], "jobs")
@@ -873,19 +878,20 @@ class _Planner:
             self._allow(job_body, job_field, CALL_JOB_KEYS)
             return self._reusable_job(job_body, job_node, job_field, job_id)
         self._allow(job_body, job_field, JOB_KEYS)
+        defaults = self._defaults(job_body, job_field)
         recorded = {
             "id": job_id,
             "location": _location(job_node),
             "name": self._checked_name(job_body, job_field, check_job_name),
             "needs": self._needs(job_body, job_field, job_id),
             "runs_on": self._runs_on(job_body, job_field),
-            "defaults": self._defaults(job_body, job_field),
+            "defaults": defaults,
             "env": self._env(job_body, job_field, check_job_env),
             "outputs": self._outputs(job_body, job_field),
             "timeout_minutes": self._timeout_minutes(job_body, job_field),
             "strategy": self._strategy(job_body, job_field),
             "services": self._services(job_body, job_field),
-            "steps": self._steps(job_body, job_field),
+            "steps": self._steps(job_body, job_field, defaults["shell"]),
         }
         permissions = self._permissions(job_body, job_field)
         if permissions is not None:
@@ -1065,20 +1071,26 @@ class _Planner:
         jobs = self._mapping(body["jobs"][1], "jobs")
         if not jobs:
             _invalid(f"{field}: no jobs", field)
-        parsed = {key: self._job(jobs, key) for key in jobs}
-        planned = [parsed[key] for key in self._order_all(parsed)]
-        return {
-            "inputs": spec["inputs"],
-            "outputs": spec["outputs"],
-            "workflow": self._called_workflow(body),
-            "jobs": planned,
-        }
+        previous_shell = self.workflow_shell
+        try:
+            called_defaults = self._defaults(body, "")
+            self.workflow_shell = called_defaults["shell"]
+            parsed = {key: self._job(jobs, key) for key in jobs}
+            planned = [parsed[key] for key in self._order_all(parsed)]
+            return {
+                "inputs": spec["inputs"],
+                "outputs": spec["outputs"],
+                "workflow": self._called_workflow(body, called_defaults),
+                "jobs": planned,
+            }
+        finally:
+            self.workflow_shell = previous_shell
 
-    def _called_workflow(self, body):
+    def _called_workflow(self, body, defaults):
         recorded = {
             "name": self._optional_string(body, "", "name"),
             "env": self._env(body, "", check_workflow_env),
-            "defaults": self._defaults(body, ""),
+            "defaults": defaults,
         }
         permissions = self._permissions(body, "")
         if permissions is not None:
@@ -1522,13 +1534,20 @@ class _Planner:
                 ):
                     message += "; move this reference to the step env"
                 raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
-            if message == "secrets reference is not accepted":
+            if message in {"secrets reference is not accepted", "run is not accepted"}:
                 raise PlanError("WORKFLOW_INVALID", f"{path}: {message}", path) from None
             raise PlanError(
                 "WORKFLOW_INVALID", f"{path}: expression is not accepted", path
             ) from None
 
-    def _steps(self, items, field):
+    def _run_shell(self, step_shell, job_shell):
+        if step_shell is not None:
+            return step_shell
+        if job_shell is not None:
+            return job_shell
+        return self.workflow_shell
+
+    def _steps(self, items, field, job_shell=None):
         if "steps" not in items:
             _invalid(f"{field} is not sequential run steps", _join(field, "steps"))
         path = _join(field, "steps")
@@ -1566,7 +1585,12 @@ class _Planner:
             if has_run:
                 run_field = _join(step_field, "run")
                 recorded["run"] = self._string_scalar(body["run"][1], run_field)
-                self._check_expression(recorded["run"], run_field, check_step_text)
+                chosen = self._run_shell(recorded["shell"], job_shell)
+                self._check_expression(
+                    recorded["run"],
+                    run_field,
+                    lambda source, shell=chosen: check_step_run(source, shell),
+                )
             else:
                 uses_field = _join(step_field, "uses")
                 uses_text = self._string_scalar(body["uses"][1], uses_field)
@@ -2140,7 +2164,11 @@ class _Planner:
                     step_body, step_field, check_step_secret_value, reserve_secret=True
                 ),
             }
-            self._check_expression(recorded["run"], run_field, check_step_text)
+            self._check_expression(
+                recorded["run"],
+                run_field,
+                lambda source, shell=shell: check_step_run(source, shell),
+            )
             condition = self._if_text(step_body, step_field, check_step_if)
             if condition is not None:
                 recorded["if"] = condition

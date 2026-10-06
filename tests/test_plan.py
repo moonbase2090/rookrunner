@@ -163,9 +163,9 @@ jobs:
         self.assertEqual(step["env"]["STEP"], "${{ vars.MODE }}")
         rejected = (
             (
-                "jobs:\n  build:\n    steps:\n      - run: echo ${{ secrets.TOKEN }}\n",
+                "jobs:\n  build:\n    steps:\n      - run: \"echo '${{ secrets.TOKEN }}'\"\n",
                 "WORKFLOW_INVALID",
-                "context is not available: secrets",
+                "run is not accepted",
             ),
             (
                 "jobs:\n  build:\n    steps:\n      - run: echo ${{ hashFiles('*.txt') }}\n",

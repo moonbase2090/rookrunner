@@ -24,7 +24,8 @@ A worker that starts with `--docker-socket` warns that the exposure
 includes the key directory and the secret root. When `--secrets` is
 set and the allowlist matches, a step `env` or `with` expression that
 is exactly `secrets.NAME` receives that file's value on that step.
-A `run` script is not rewritten. No job token is minted.
+An exact `secrets.NAME` in `run` is rewritten to `${RR_SECRET_NAME}`
+for bash and sh. No job token is minted.
 A remote `node24` main is copied into the attempt and mounted read-write
 at `/actions`. The content store is not mounted. `post` runs after that
 job's main steps when the main ran. `pre` stays rejected.

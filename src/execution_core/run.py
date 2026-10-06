@@ -104,8 +104,12 @@ Service `env` stays literal. An exact `secrets.NAME` in step `env` or
 `with` receives the file value when a secret configuration is passed and
 the allowlist matches. That value is registered on the job mask before
 the step writes a log line. Reusable-workflow call outputs use those
-secret registrations. `run` is not rewritten. `secrets.GITHUB_TOKEN`
-stays empty. `hashFiles` is not implemented. `github.event` is the caller
+secret registrations. An exact `secrets.NAME` in `run` is rewritten
+to `${RR_SECRET_NAME}` when the shell is bash or sh and the lexer
+proves the context. The engine sets that variable on that step. The
+script file does not contain the value. `secrets.GITHUB_TOKEN` is
+rewritten the same way and stays unset. No job token is minted.
+`hashFiles` is not implemented. `github.event` is the caller
 event. `github.workspace`,
 `github.job`, `github.workflow`, `github.event_path`, and, when the caller
 sends one, `github.event_name` are set. `github.sha` is the manifest
@@ -215,6 +219,7 @@ from .expr import (
     job_is_enabled,
     mentions_context,
     render_text,
+    rewrite_run_secrets,
     step_is_enabled,
 )
 from .secrets import (
@@ -726,6 +731,7 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
     if runtime is not None:
         merged.update(runtime.env)
     merged.update(_env_layer(step.get("env")))
+    merged.update(_run_secret_env(step))
     if path_value is not None:
         merged["PATH"] = path_value
     reserved = _reserved_env(script_name)
@@ -2222,11 +2228,45 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
                 scripts[(planned_path, step["index"])] = script_name
 
 
-def _referenced_secret_names(job):
+def _recorded_shell(step, job, workflow):
+    """Shell recorded on the step, then the job, then the workflow.
+
+    An omitted shell is None. This does not validate the plan.
+    """
+
+    if isinstance(step, dict) and isinstance(step.get("shell"), str):
+        return step.get("shell")
+    for body in (job, workflow):
+        if not isinstance(body, dict):
+            continue
+        defaults = body.get("defaults")
+        if isinstance(defaults, dict) and isinstance(defaults.get("shell"), str):
+            return defaults.get("shell")
+    return None
+
+
+def _run_secret_env(step):
+    """File values the engine injects for this step's rewritten `run`."""
+
+    raw = step.get("_rr_secrets") if isinstance(step, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    merged = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not isinstance(value, str) or "\0" in value:
+            continue
+        key = "RR_SECRET_" + name
+        if not _ENV_NAME.fullmatch(key):
+            continue
+        merged[key] = value
+    return merged
+
+
+def _referenced_secret_names(job, workflow=None):
     """Uppercase file names referenced by exact secrets expressions.
 
-    ``secrets.GITHUB_TOKEN`` is not a file. Step `run` and step `name`
-    are not injection points.
+    ``secrets.GITHUB_TOKEN`` is not a file. Step `name` is not an
+    injection point. A `run` reference is, when the rewrite accepts it.
     """
 
     names = []
@@ -2243,6 +2283,17 @@ def _referenced_secret_names(job):
         if upper not in names:
             names.append(upper)
 
+    def add_run(text, shell):
+        if not isinstance(text, str):
+            return
+        try:
+            _rewritten, found = rewrite_run_secrets(text, shell)
+        except ExprError:
+            return
+        for upper in found:
+            if upper not in names:
+                names.append(upper)
+
     def walk(step):
         if not isinstance(step, dict):
             return
@@ -2254,6 +2305,7 @@ def _referenced_secret_names(job):
         if isinstance(raw_with, dict):
             for value in raw_with.values():
                 add(value)
+        add_run(step.get("run"), _recorded_shell(step, job, workflow))
         for inner in step.get("steps") or []:
             walk(inner)
 
@@ -2262,7 +2314,7 @@ def _referenced_secret_names(job):
     return names
 
 
-def _bind_job_secrets(runtime, access, event, event_name, job):
+def _bind_job_secrets(runtime, access, event, event_name, job, workflow=None):
     """Load referenced files onto `runtime` when the allowlist matches.
 
     ``access`` None leaves `secret_values` None, which is the withheld
@@ -2281,7 +2333,7 @@ def _bind_job_secrets(runtime, access, event, event_name, job):
         return
     if not same_repository(access, event):
         raise SecretError("repository does not match the secret repository")
-    names = _referenced_secret_names(job)
+    names = _referenced_secret_names(job, workflow)
     loaded = load_job_secrets(access.repository, names)
     runtime.secret_values = {}
     for name in names:
@@ -2339,6 +2391,25 @@ def _render_secret_or_expr(text, values, runtime):
     if upper.startswith("GITHUB_"):
         raise ExprError("secrets reference is not accepted")
     return loaded.get(upper, "")
+
+
+def _render_run(text, values, shell, runtime):
+    """Rewrite exact `run` secrets, then render the remaining expressions.
+
+    The env map is the file values for this step. ``GITHUB_TOKEN`` is not
+    included. A missing file name is an empty string. ``--secrets`` omitted
+    leaves `secret_values` unset and refuses before the script is published.
+    """
+
+    rewritten, file_names = rewrite_run_secrets(text, shell)
+    if rewritten != text:
+        loaded = None if runtime is None else getattr(runtime, "secret_values", None)
+        if not isinstance(loaded, dict):
+            raise ExprError("context is not available: secrets")
+        secret_env = {name: loaded.get(name, "") for name in file_names}
+    else:
+        secret_env = {}
+    return _render_expr(rewritten, values), secret_env
 
 
 def run_job(
@@ -2809,7 +2880,9 @@ def run_job(
                             prior = []
                             runtime = _JobRuntime()
                             try:
-                                _bind_job_secrets(runtime, secrets, event, event_name, active_job)
+                                _bind_job_secrets(
+                                    runtime, secrets, event, event_name, active_job, active_workflow
+                                )
                             except SecretError as exc:
                                 _fail_text(exc)
                                 if fail_fast:
@@ -3278,7 +3351,15 @@ def _consider_step(
         and isinstance(step.get("run"), str)
     ):
         try:
-            prepared["run"] = _render_expr(step["run"], _scoped_values(values, STEP_TEXT_CONTEXTS))
+            rendered, secret_env = _render_run(
+                step["run"],
+                _scoped_values(values, STEP_TEXT_CONTEXTS),
+                _chosen_shell(step, job, workflow),
+                runtime,
+            )
+            prepared["run"] = rendered
+            if secret_env:
+                prepared["_rr_secrets"] = secret_env
         except ExprError as exc:
             return _step_result(prepared, "failed", None, "", "", str(exc)[:512], job_id)
     if step.get("checkout") == "captured":
@@ -3560,7 +3641,12 @@ def _with_rendered_step(
             rendered_name = mask_text(rendered_name, runtime.masks)
         prepared["name"] = rendered_name
     if render_run and isinstance(step.get("run"), str):
-        prepared["run"] = _render_expr(step["run"], scoped)
+        rendered, secret_env = _render_run(
+            step["run"], scoped, _chosen_shell(step, job, workflow), runtime
+        )
+        prepared["run"] = rendered
+        if secret_env:
+            prepared["_rr_secrets"] = secret_env
     return prepared, values
 
 
@@ -3725,7 +3811,15 @@ def _run_composite(
                 if record["status"] == "failed" and failed is None:
                     failed = record
                 continue
-            runnable["run"] = _render_expr(inner["run"], inner_scoped)
+            rendered, secret_env = _render_run(
+                inner["run"],
+                inner_scoped,
+                _chosen_shell(inner, job, workflow),
+                runtime,
+            )
+            runnable["run"] = rendered
+            if secret_env:
+                runnable["_rr_secrets"] = secret_env
         except ExprError as exc:
             record = _step_result(inner, "failed", None, "", "", str(exc)[:512], job_id)
             inner_prior.append(record)
