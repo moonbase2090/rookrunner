@@ -448,12 +448,10 @@ def main():
     )
     commands.add_parser("describe")
     commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
-    commands.add_parser("dashboard", help="print run states from the worker socket")
-    dashboard_html = commands.add_parser(
-        "dashboard-html",
-        help="write one HTML snapshot of run states and exit",
+    commands.add_parser(
+        "dashboard",
+        help="terminal view of runs, logs, and artifacts",
     )
-    dashboard_html.add_argument("--output", required=True, help="file to write; the command exits")
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
     )
@@ -592,14 +590,9 @@ def main():
             serve_stdio(args.state)
             return
         if args.command == "dashboard":
-            from .dashboard import render_terminal
+            from .dashboard import serve_terminal
 
-            sys.stdout.write(render_terminal(args.state))
-            return
-        if args.command == "dashboard-html":
-            from .dashboard import write_html
-
-            write_html(args.state, args.output)
+            serve_terminal(args.state)
             return
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)

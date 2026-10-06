@@ -22,7 +22,6 @@ from execution_core.protocol import canonical
 from execution_core.worker import Worker
 
 _STAMP = re.compile(r"Run state as of (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.")
-_CONTROLS = ("<form", "<button", "<script", "<input", "<a ", "onclick", "worker.sock")
 
 
 def _command(state, *args):
@@ -155,8 +154,6 @@ class DashboardOptionTests(unittest.TestCase):
         completed = _command(absent, *args)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         text = completed.stdout
-        if args and args[0] == "dashboard-html":
-            text = Path(args[args.index("--output") + 1]).read_text()
         self.assertIn("worker socket is not available", text)
         self.assertNotIn(str(absent), text)
         self.assertNotIn("worker.sock", text)
@@ -168,38 +165,22 @@ class DashboardOptionTests(unittest.TestCase):
         self._assert_records(completed.stdout)
         self._assert_closed_socket("dashboard")
 
-    def test_html_option_writes_one_stale_file_and_exits(self):
-        output = self.root / "runs.html"
-        completed = _command(self.state, "dashboard-html", "--output", str(output))
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout, "")
-        text = output.read_text()
-        self._assert_records(text)
-        lowered = text.lower()
-        for token in _CONTROLS:
-            self.assertNotIn(token, lowered)
-        self._assert_closed_socket("dashboard-html", "--output", str(self.root / "closed.html"))
-        closed = (self.root / "closed.html").read_text().lower()
-        for token in _CONTROLS:
-            self.assertNotIn(token, closed)
+    def test_html_option_is_removed(self):
+        completed = _command(self.state, "dashboard-html", "--output", str(self.root / "runs.html"))
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertIn("invalid choice", completed.stderr)
+        self.assertFalse((self.root / "runs.html").exists())
 
     def test_options_do_not_bind_a_socket(self):
-        output = self.root / "guard.html"
-        for args in (("dashboard",), ("dashboard-html", "--output", str(output))):
-            completed = _guarded(self.state, *args)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertNotIn("bind", completed.stderr)
-            self.assertNotIn("listen", completed.stderr)
+        completed = _guarded(self.state, "dashboard")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("bind", completed.stderr)
+        self.assertNotIn("listen", completed.stderr)
 
     def test_options_take_no_app_key(self):
-        for args in (
-            ("dashboard", "--app-key", "unused"),
-            ("dashboard-html", "--output", str(self.root / "unused.html"), "--app-key", "unused"),
-        ):
-            completed = _command(self.state, *args)
-            self.assertEqual(completed.returncode, 2, completed.stderr)
-            self.assertIn("unrecognized arguments", completed.stderr)
-            self.assertFalse((self.root / "unused.html").exists())
+        completed = _command(self.state, "dashboard", "--app-key", "unused")
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertIn("unrecognized arguments", completed.stderr)
 
 
 if __name__ == "__main__":
