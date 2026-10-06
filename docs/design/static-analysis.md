@@ -47,14 +47,17 @@ constraint notes, security notes, and links to GitHub's docs.
 There is no required license header. Choosing one belongs to M4,
 not to this plan.
 
-Ruff family counts on `src` and `tests` together:
+Ruff family counts on `src` and `tests` together, under the
+repo `target-version` of py311. That is the config CI runs.
+An `--isolated` run uses ruff's default py39 target and
+undercounts B, UP, and SIM.
 
 | Family | Findings | What they are |
 | --- | --- | --- |
-| B | 8 | bugbear |
+| B | 9 | bugbear; one is B905 |
 | S | 257 | bandit; 226 are subprocess partial-path checks |
-| UP | 3 | pyupgrade |
-| SIM | 39 | simplify |
+| UP | 35 | pyupgrade; 18 are UP038 and 14 are UP017 |
+| SIM | 43 | simplify; four are SIM110 and two are SIM108 |
 | C90 | 73 | mccabe, all in `src`, ruff's default limit of 10 |
 | PL | 294 | pylint; 90 are magic-value comparisons |
 | ANN | 4129 | missing annotations |
@@ -319,8 +322,10 @@ workflow.
 Order, each its own pull request, each green at the tip:
 
 1. ERA, PGH, RUF, B, and UP. ERA and PGH are already at zero.
-   RUF is 9, B is 8, UP is 3. UP's fixes are mechanical.
-2. SIM. Thirty-nine findings. Some join branches. The tests
+   RUF is 9, B is 9, UP is 35. That is 53 findings. UP017
+   and UP012 are autofixable. UP038 and UP031 are manual
+   and small.
+2. SIM. Forty-three findings. Some join branches. The tests
    cover the touched modules.
 3. T20, with the print rows above.
 4. The narrow S codes `S101`, `S103`, `S108`, `S110`, and
