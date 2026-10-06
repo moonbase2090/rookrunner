@@ -198,7 +198,7 @@ class FixtureEvidenceTests(unittest.TestCase):
         names = [tool["name"] for tool in listed]
         self.assertIn("artifacts", names)
         self.assertIn("artifact_read", names)
-        self.assertFalse({"submit", "run.status", "status", "fixture"} & set(names))
+        self.assertFalse({"run.status", "status", "fixture"} & set(names))
         reader = next(tool for tool in listed if tool["name"] == "artifact_read")
         self.assertNotIn("path", reader["inputSchema"]["properties"])
         self.assertEqual(reader["inputSchema"]["required"], ["artifact_id"])

@@ -243,12 +243,24 @@ class McpReadTests(unittest.TestCase):
                 break
         self.assertEqual(b"".join(cli_chunks), payload)
 
-    def test_tool_table_omits_submit_status_and_fixtures(self):
+    def test_tool_table_lists_submit_and_omits_status_and_fixtures(self):
         session = self.session()
         listed = session.request("tools/list")
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["describe", "get", "list", "logs", "artifacts", "artifact_read"])
-        self.assertFalse({"submit", "run.status", "status", "fixture"} & set(names))
+        self.assertEqual(
+            names,
+            [
+                "describe",
+                "get",
+                "list",
+                "logs",
+                "artifacts",
+                "artifact_read",
+                "submit",
+                "cancel",
+            ],
+        )
+        self.assertFalse({"run.status", "status", "fixture"} & set(names))
         described = session.call("describe")
         self.assertIs(described["isError"], False)
         self.assertIn("run.status", described["structuredContent"]["methods"])
