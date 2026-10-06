@@ -11,7 +11,10 @@ timestamp, the accepted mint risk for any edited workflow, the
 adapter's rejection of a `poll-` submission key, the same-key
 snapshot rule, the existing artifact path test, the
 `status_posts` effect of `run.status`, the installation wording,
-and the adapter-local error tests.
+and the adapter-local error tests. A second amendment names the
+worker the adapter submits to, the MCP result shape, the socket
+timeout and the lost-submit retry, the long-log and missing-byte
+tests, and the cancel races PR 7 runs.
 
 The milestone is the roadmap's M3: an MCP adapter, a local
 dashboard, and bounded evidence retrieval through the protocol the
@@ -209,6 +212,48 @@ wants those calls the CLI. `follow` stays a CLI loop of `get` and
 A tool error carries the worker's `data.kind` and message when the
 worker returned a fault. The stdio session stays open. The next
 tool call is a new socket connection.
+
+### Which worker
+
+The adapter is started with one state directory. Submit and every
+other tool use that directory's socket and the repository
+`worker.describe` reports for it. The intended binding is a
+worker whose repository is the checkout the agent edits. `poll`
+is aimed at a different state directory.
+
+`poll` refuses with `CLONE_MISMATCH` unless its clone is that
+worker repository, and it then runs `git checkout --detach
+--force` of the fetched SHA or the pull-request merge commit. A
+version 1 submit has no ref parameter. It captures the working
+tree that is present. Pointing the adapter at the poll worker
+captures that checkout, which may be another branch tip or a
+merge commit, and a capture that sees files change during that
+checkout returns `SOURCE_UNSTABLE`. The socket has no flag that
+marks a poll worker, so the adapter cannot refuse one. The
+operator keeps the two state directories apart. Question 1's
+submit tool documents this effect, and PR 4 tests it.
+
+### Timeouts and cursors
+
+The adapter uses a 5 second socket timeout, the same value as
+`cli.call`. The worker allows 1 second to read the request
+bytes. Handling the request, including capture, is not under
+that 1 second cap. This plan does not change that worker limit.
+A client timeout does not roll back a submit the worker already
+accepted. On a timeout or a short read of `submit`, the adapter
+sends that same request once more. The worker serves one request
+at a time, so a retry that arrives while the first submit is
+still capturing waits for it and then receives that run. The
+same key returns the same run. A second timeout is kind `WORKER_TIMEOUT` and `retryable`
+true. A read that times out is the same kind and is not retried
+by the adapter. The session stays open.
+
+A cursor the adapter sends is a string of 1 to 1024 characters.
+Anything else is `INVALID_PARAMS` before the dial. A cursor the
+worker rejects, including one for another run or one past the
+end of the log, is `CURSOR_EXPIRED` and `retryable` false. A
+`next_cursor` from one connection is valid on the next
+connection.
 
 ### Human access
 
@@ -429,7 +474,8 @@ that cites it.
    - B. The adapter decodes bytes to text and replaces bytes that
      are not UTF-8.
    - Recommendation: A. P11 is then a comparison of canonical
-     JSON. A text tool can be a later slice.
+     JSON. Question 9 places that object in `structuredContent`.
+     A decoded text tool can be a later slice.
 
 8. **Does the dashboard submit?**
    - A. It lists, shows one run, pages logs and artifacts, and
@@ -442,6 +488,30 @@ that cites it.
    - Recommendation: A. RR-35 and RR-36 are inspect and cancel.
      The HTML file is a snapshot with a write timestamp. Its
      command is the cancel path.
+
+9. **How does the adapter speak MCP?**
+   - A. The adapter writes MCP JSON-RPC on stdio itself. It does
+     not add the MCP Python SDK. Dependencies stay
+     `pyyaml==6.0.3`. The Python floor stays `>=3.11`. The
+     revision is `2025-11-25`
+     (https://modelcontextprotocol.io/specification/2025-11-25/schema).
+     A successful tool call is a JSON-RPC result with `isError`
+     false. `structuredContent` is the protocol result object.
+     `content` is one text block whose text is the canonical JSON
+     of that object. A worker fault and an adapter rejection,
+     including an unknown tool name, a missing parameter, and a
+     bad cursor, are a JSON-RPC result with `isError` true and
+     `structuredContent` of `{kind, message, retryable}`. They
+     are not JSON-RPC errors. A line that is not a JSON-RPC
+     request is a JSON-RPC error for that request, and the
+     session stays open for the next line.
+   - B. Add the MCP Python SDK. That dependency needs the
+     provenance and license check before it is imported, and it
+     may move the Python floor. The result shape is still the
+     shape in A.
+   - Recommendation: A. The canonical-JSON comparison in PR 1
+     reads `structuredContent`. No new dependency is required for
+     that comparison.
 
 ## Pull requests
 
@@ -456,21 +526,30 @@ temporary directory when they touch a key path. No test reads
 `api.github.com`. Existing contract, secret, job-token, and
 artifact tests still pass. Ruff still passes.
 
-1. **m3-mcp-read.** Depends on question 7 staying A. Add the stdio
-   adapter and the tools `describe`, `get`, `list`, and `logs`.
-   One tool call uses one socket connection. The tool result is
-   the protocol object. There is no `submit` tool yet, and there
-   is no tool for `run.status`, a fixture, `poll`, or the App key.
-   The adapter binds no port and takes no key flag.
+1. **m3-mcp-read.** Depends on question 7 staying A and question
+   9 staying A. Add the stdio adapter and the tools `describe`,
+   `get`, `list`, and `logs`. One tool call uses one socket
+   connection. `structuredContent` is the protocol result object.
+   There is no `submit` tool yet, and there is no tool for
+   `run.status`, a fixture, `poll`, or the App key. The adapter
+   binds no port and takes no key flag. The socket timeout is 5
+   seconds.
    Tests, in `tests/test_mcp.py`, using the development backend
-   and a temporary state directory: canonical JSON of `get` and of
-   one `logs` page equals the socket response for the same
-   parameters; a second tool call on the same stdio session
-   succeeds; exiting the adapter leaves the run's state as the
-   worker stored it; a missing socket is a tool error and is a
-   different kind from `RUN_NOT_FOUND`. The test reads the tool
-   table and fails if `submit`, `run.status`, or a fixture tool is
-   present. `check.yml` is byte-identical.
+   and a temporary state directory: canonical JSON of
+   `structuredContent` for `get` and for one `logs` page equals
+   the socket response for the same parameters; the text content
+   is that same canonical JSON; a second tool call on the same
+   stdio session succeeds; exiting the adapter leaves the run's
+   state as the worker stored it; a missing socket is a tool
+   error and is a different kind from `RUN_NOT_FOUND`. The test
+   writes a log longer than 65536 bytes into the development
+   store, reads it in pages of at most 65536 bytes through MCP
+   and through the CLI, and the concatenated bytes match. A
+   `next_cursor` from the first connection returns the following
+   page on a new connection. The test reads the tool table and
+   fails if `submit`, `run.status`, or a fixture tool is present.
+   `check.yml` is byte-identical. The dependency list stays
+   `pyyaml`.
 2. **m3-mcp-errors.** Depends on m3-mcp-read. A malformed tool
    call returns a tool error, and the same stdio session accepts
    a later `get`. When the worker answered, the error includes
@@ -488,7 +567,11 @@ artifact tests still pass. Ruff still passes.
    reported as `lost`, and a `lost` run is not reported as
    `succeeded`. After each adapter-local rejection and after each
    worker-answered error, a later `get` on the same session
-   succeeds.
+   succeeds. A cursor that is well formed and names another run,
+   and a cursor whose offset is past the log, each return
+   `CURSOR_EXPIRED` with `retryable` false. A read that exceeds
+   the 5 second timeout returns `WORKER_TIMEOUT` with `retryable`
+   true, and the adapter does not send that read again.
 3. **m3-mcp-evidence.** Depends on m3-mcp-read and on question 3
    staying A. Add `artifacts` and `artifact_read`. The tool takes
    the artifact id, which is a UUID, and it has no path
@@ -504,7 +587,15 @@ artifact tests still pass. Ruff still passes.
    in `tests/test_artifacts.py`: that test plants a row whose
    path is `../outside` and expects `INTERNAL_ERROR` without the
    outside bytes. This pull request does not re-plant that row.
-   The workflow case uses the same disposable-container setup as
+   A workspace file deleted after the manifest was written, or
+   whose bytes no longer match the manifest, returns
+   `INTERNAL_ERROR` with the message `artifact bytes are not
+   available`. M3 adds no new error kind for that case. The tool
+   text says the same message also covers other internal
+   failures, so the agent cannot tell a missing file from those
+   failures. The test deletes the file and expects that kind and
+   message, and the session then accepts another call. The
+   workflow case uses the same disposable-container setup as
    `tests/test_artifacts.py`.
 4. **m3-mcp-submit.** Depends on m3-mcp-read and on question 1
    staying A and question 2 staying A. Add `submit` and `cancel`.
@@ -520,8 +611,17 @@ artifact tests still pass. Ruff still passes.
    run. The same key after a tracked file in the checkout changes
    returns the original `run_id` and the original snapshot id.
    The tool description says to use a new key after each edit and
-   to compare snapshot ids. `cancel` sends version 0 and returns
-   the worker record.
+   to compare snapshot ids. The adapter is bound to the state
+   directory of the worker under test. The test checks out a
+   second commit with `git checkout --detach --force` and the
+   submitted snapshot matches that commit. A checkout that
+   changes files during capture is `SOURCE_UNSTABLE`, which
+   `test_symbolic_ref_change_during_capture_is_unstable` in
+   `tests/test_snapshot.py` already proves. This pull request
+   does not add a second overlapping-checkout test. A submit
+   whose response is dropped is retried once with the same key,
+   and the store contains one run with that `run_id`. `cancel`
+   sends version 0 and returns the worker record.
    Cancelling a queued run yields `cancelled`. The result is
    `succeeded` only when the record's state is `succeeded` and
    `exit_code` is 0. `allowlist_matches({}, (), (), None)` is
@@ -572,10 +672,20 @@ artifact tests still pass. Ruff still passes.
    and the cleanup value on the record. The chosen option has no
    control that submits a run. The test cancels a queued
    development run and checks the rendered state is `cancelled`.
-   A second test feeds a `lost` record with cleanup `unresolved`
-   and checks the view shows both values. The rendered result is
-   `succeeded` only when the record's state is `succeeded` and
-   `exit_code` is 0.
+   A finished run, cancelled after its state is already
+   `succeeded`, stays `succeeded` with `exit_code` 0. Stopping
+   the worker while the view is open shows the socket-absent
+   state, and starting that worker again shows the same `run_id`
+   and state. A second test feeds a `lost` record with cleanup
+   `unresolved` and checks the view shows both values. The
+   rendered result is `succeeded` only when the record's state
+   is `succeeded` and `exit_code` is 0. Cancelling a running
+   workflow whose container does not stop is the worker's
+   `_stop_and_commit` path: the record becomes `lost` with
+   cleanup `unresolved` and error kind `WORKER_INTERRUPTED`.
+   This slice does not start a container that refuses to stop.
+   The view's rendering of that record is the hand-fed `lost`
+   test. The live container race stays a worker test.
 8. **m3-install-note.** Depends on question 6 staying A. Docs
    only. Update `secrets.md` and `check-runs.md` so they say the
    operator names the installation as `168290590`, the mint reads
@@ -587,6 +697,9 @@ artifact tests still pass. Ruff still passes.
 
 Pull requests 4 and 7 change if question 1 or question 8 is
 answered B. Pull request 4 is dropped when submit is out. Pull
+request 1 waits if question 9 is answered B, and that answer
+includes the provenance and license check before the SDK is
+added. Pull
 request 5's programs change if question 4 is answered B, and that
 answer needs a new threat-model note before the branch opens.
 Pull request 8 is dropped if question 6 is answered C. If
