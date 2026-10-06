@@ -179,11 +179,14 @@ class RemoteActionTests(unittest.TestCase):
         ).fetchone()
 
     def test_action_remote_must_be_github_or_an_absolute_directory(self):
+        message = "action remote must be https://github.com or an absolute directory"
         Worker(self.repo, self.state)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as remote:
             Worker(self.repo, self.state, action_remote="remote")
-        with self.assertRaises(ValueError):
+        self.assertEqual(str(remote.exception), message)
+        with self.assertRaises(ValueError) as https:
             Worker(self.repo, self.state, action_remote="https://example.invalid")
+        self.assertEqual(str(https.exception), message)
 
     def test_pinned_composite_is_recorded_and_reused(self):
         sha = self._action({"action.yml": HELLO})

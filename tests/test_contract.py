@@ -152,11 +152,20 @@ class ContractTests(unittest.TestCase):
             {**self.submission(), "backend": "shell"},
             {**self.submission(), "extra": "ignored?"},
         ]
-        for params in requests:
-            self.assertIn("error", call(self.state, "run.submit", params))
+        expected = (
+            ("INVALID_PARAMS", -32602),
+            ("INVALID_PARAMS", -32602),
+            ("INVALID_PARAMS", -32602),
+            ("INVALID_PARAMS", -32602),
+            ("INVALID_PARAMS", -32602),
+            ("CAPABILITY_UNSUPPORTED", -32000),
+            ("INVALID_PARAMS", -32602),
+        )
+        for params, (kind, code) in zip(requests, expected, strict=True):
+            self.assert_fault(call(self.state, "run.submit", params), kind, code)
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
-        self.assertIn("error", call(self.state, "run.list", {"limit": True}))
-        self.assertIn("error", call(self.state, "run.list", {"state": []}))
+        self.assert_fault(call(self.state, "run.list", {"limit": True}), "INVALID_PARAMS", -32602)
+        self.assert_fault(call(self.state, "run.list", {"state": []}), "INVALID_PARAMS", -32602)
 
     def test_socket_permissions_and_single_owner(self):
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
@@ -208,8 +217,11 @@ class ContractTests(unittest.TestCase):
             self.state, "run.logs", {"run_id": other["run_id"], "cursor": page["next_cursor"]}
         )
         self.assertEqual(reply["error"]["data"]["kind"], "CURSOR_EXPIRED")
-        reply = call(self.state, "run.logs", {"run_id": first["run_id"], "limit": 65537})
-        self.assertIn("error", reply)
+        self.assert_fault(
+            call(self.state, "run.logs", {"run_id": first["run_id"], "limit": 65537}),
+            "INVALID_PARAMS",
+            -32602,
+        )
 
     def test_pagination(self):
         ids = [self.submit(str(i))["run_id"] for i in range(3)]
@@ -233,14 +245,19 @@ class ContractTests(unittest.TestCase):
         self.assertNotEqual(unsafe.returncode, 0)
 
     def test_malformed_and_oversized_transport(self):
-        for raw in (b"{broken\n", b"[]\n", b"x" * MAX_MESSAGE + b"\n"):
+        cases = (
+            (b"{broken\n", "PARSE_ERROR", -32700),
+            (b"[]\n", "INVALID_REQUEST", -32600),
+            (b"x" * MAX_MESSAGE + b"\n", "INVALID_REQUEST", -32600),
+        )
+        for raw, kind, code in cases:
             with socket.socket(socket.AF_UNIX) as connection:
                 connection.settimeout(5)
                 connection.connect(str(self.state / "worker.sock"))
                 connection.sendall(raw)
                 with connection.makefile("rb") as stream:
                     reply = json.loads(stream.readline())
-                self.assertIn("error", reply)
+            self.assert_fault(reply, kind, code)
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
 
     def test_cli_json_and_failure_exit(self):

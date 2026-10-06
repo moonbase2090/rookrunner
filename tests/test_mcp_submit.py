@@ -384,7 +384,6 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.proxy.drop_next = True
         accepted = self._submit(session, "retry")
         self.assertIs(accepted["isError"], False)
-        run_id = accepted["structuredContent"]["run_id"]
         keys = [
             json.loads(raw)["params"]["submission_key"]
             for raw in self.proxy.requests
@@ -392,7 +391,17 @@ class WorkflowSubmitTests(unittest.TestCase):
         ]
         self.assertEqual(keys, ["retry", "retry"])
         self.assertEqual(self._count("retry"), 1)
-        self.assertEqual(accepted["structuredContent"]["run_id"], run_id)
+        database = sqlite3.connect(self.state / "runs.sqlite3", timeout=5)
+        try:
+            stored = database.execute(
+                "SELECT record FROM runs WHERE submission_key=?", ("retry",)
+            ).fetchone()
+        finally:
+            database.close()
+        self.assertEqual(
+            accepted["structuredContent"]["run_id"],
+            json.loads(stored[0])["run_id"],
+        )
 
     def test_a_second_submit_timeout_is_not_retried_again(self):
         session = self.session()
