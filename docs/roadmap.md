@@ -111,8 +111,10 @@ through NS-43 in [next steps](planning/next-steps.md).
    mask. p7-trust-gate compares pull-request repository ids and
    stores the allowlist fields on the event. p7-socket-lock adds the
    worker secret flags and refuses --docker-socket combined with
-   --app-key or --secrets unless the ~/Secrets probe exits 0. The
-   other P7 pull requests are not implemented. MB2090 accepted the amended
+   --app-key or --secrets unless the ~/Secrets probe exits 0.
+   p7-secret-env reads file secrets into step `env` and `with` when
+   `--secrets` is set and the allowlist matches. p7-secret-run and
+   p7-job-token are not implemented. MB2090 accepted the amended
    answers on 2026-10-05.
    The rest of the provisional list is not numbered
    yet.

@@ -381,7 +381,9 @@ def main():
         action="store_true",
         help=(
             "Takes no path. Requires --github-repository owner/name. "
-            "Does not open the secret directory and does not inject a value. "
+            "When the allowlist matches, a step env or with expression "
+            "that is exactly secrets.NAME receives that file's value. "
+            "Does not mint a token and does not rewrite run. "
             "Combined with --docker-socket, startup refuses unless "
             "--runner-image is set and the ~/Secrets probe exits 0."
         ),
@@ -390,7 +392,8 @@ def main():
         "--github-repository",
         help=(
             "GitHub repository as owner/name. Required with --secrets. "
-            "Not a filesystem path. The secret directory is not opened."
+            "Not a filesystem path. The secret directory is "
+            "~/Secrets/rookrunner-secrets/<owner>/<repo>/."
         ),
     )
     worker.add_argument(

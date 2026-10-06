@@ -13,7 +13,7 @@ secrets, `GITHUB_TOKEN`, and `write` permissions for
 owner-repository push and pull-request runs on this one local worker
 ([secrets](secrets.md)). p7-mask changes the job mask. p7-trust-gate
 compares pull-request repository ids and stores the allowlist fields
-on the event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. The other P7 pull requests are not implemented. This is
+on the event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. p7-secret-env reads a file secret into a step env or with expression that is exactly secrets.NAME when --secrets is set and the allowlist matches, and passes those secret registrations into reusable-workflow call outputs. p7-secret-run and p7-job-token are not implemented. This is
 not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
@@ -232,7 +232,7 @@ supplied a store and that pin ran. That uses is not a new gap.
 | Rank | Field | Workflows | Disposition |
 | --- | --- | --- | --- |
 | 1 | `concurrency` | 17 | The planner rejects the workflow before any job body. This is the first engine gap after NS-43 |
-| 2 | a permissions value of `write` | 10 | Stays rejected. The secrets design does not change the engine ([secrets](secrets.md)) |
+| 2 | a permissions value of `write` | 10 | Stays rejected. p7-secret-env does not accept `write` ([secrets](secrets.md)) |
 | 3 | `actions/upload-artifact` pinned by a full SHA | 8 | The artifact HTTP service is deferred |
 | 4 | `github/codeql-action/upload-sarif` pinned by a full SHA | 6 | Same deferral. These workflows also set `security-events: write` |
 | 5 | `actions/checkout@v5` | 5 | Not a 40-character SHA. All five are deploy workflows, which are out of scope |
@@ -270,8 +270,11 @@ one local worker ([secrets](secrets.md)). p7-mask changes the job
 mask. p7-trust-gate compares pull-request repository ids and stores
 the allowlist fields on the event. p7-socket-lock adds the worker
 secret flags and refuses --docker-socket combined with --app-key or
---secrets unless the ~/Secrets probe exits 0. The other P7 pull
-requests are not implemented. MB2090 accepted the amended answers on
+--secrets unless the ~/Secrets probe exits 0. p7-secret-env reads a file secret into a step env or with
+expression that is exactly secrets.NAME when --secrets is set and the
+allowlist matches, and passes those secret registrations into
+reusable-workflow call outputs. p7-secret-run and p7-job-token are
+not implemented. MB2090 accepted the amended answers on
 2026-10-05.
 The rank table above stays the 2026-10-04 reading.
 
@@ -366,8 +369,9 @@ this inventory. Reordered by the counts above:
 5. Check runs, if the owner chooses a GitHub App.
 6. A runner image for `ubuntu-latest` jobs that use `sudo` and apt.
 7. `write` permissions and `GITHUB_TOKEN`. Designed in
-   [secrets](secrets.md). p7-mask, p7-trust-gate, and p7-socket-lock
-   are implemented.
+   [secrets](secrets.md). p7-mask, p7-trust-gate, p7-socket-lock, and
+   p7-secret-env are implemented. p7-secret-run and p7-job-token are
+   not.
    MB2090 accepted the amended answers on 2026-10-05. macOS jobs stay
    deferred.
 

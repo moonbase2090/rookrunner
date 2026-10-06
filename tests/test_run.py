@@ -3596,3 +3596,426 @@ jobs:
             (workspace / "called.txt").read_text(),
             ".github/workflows/called.yml inner",
         )
+
+    def _keep_docker_config(self):
+        """Keep the Docker context when a test points HOME at a secret store.
+
+        The Docker CLI reads its context from the home directory. These
+        tests change HOME. Pinning DOCKER_CONFIG leaves that context in
+        place. An already set DOCKER_CONFIG is left alone.
+        """
+
+        if os.environ.get("DOCKER_CONFIG"):
+            return
+        config = Path.home() / ".docker"
+        if not config.is_dir():
+            return
+        os.environ["DOCKER_CONFIG"] = str(config)
+
+        def restore():
+            os.environ.pop("DOCKER_CONFIG", None)
+
+        self.addCleanup(restore)
+
+    def _secret_home(self, files, repo_mode=0o700, repository="owner/demo"):
+        self._keep_docker_config()
+        slot = self.root / f"sec-{len(list(self.root.iterdir()))}"
+        slot.mkdir()
+        home = slot / "home"
+        owner, repo = repository.split("/", 1)
+        repo_dir = home / "Secrets" / "rookrunner-secrets" / owner / repo
+        repo_dir.mkdir(parents=True)
+        for path in (
+            home,
+            home / "Secrets",
+            home / "Secrets" / "rookrunner-secrets",
+            home / "Secrets" / "rookrunner-secrets" / owner,
+            repo_dir,
+        ):
+            os.chmod(path, 0o700)
+        os.chmod(repo_dir, repo_mode)
+        for name, payload in files.items():
+            target = repo_dir / name
+            target.write_bytes(payload)
+            os.chmod(target, 0o600)
+        previous = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous
+
+        self.addCleanup(restore)
+        return home
+
+    def _push_event(self, ref="refs/heads/main", full_name="owner/demo"):
+        return {
+            "ref": ref,
+            "repository": {"full_name": full_name, "default_branch": "main"},
+        }
+
+    def _secret_forms(self, value):
+        import base64
+        import json
+        from urllib.parse import quote
+
+        return (
+            value,
+            base64.b64encode(value.encode()).decode("ascii"),
+            json.dumps(value)[1:-1],
+            quote(value, safe="-._~"),
+        )
+
+    def _stored(self, result, plan, workspace, snapshot):
+        import json
+
+        chunks = [json.dumps(result), json.dumps(plan)]
+        for root in (workspace, snapshot):
+            for path in root.rglob("*"):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        return "\n".join(chunks)
+
+    def _assert_secret_hidden(self, blob, forms):
+        for form in forms:
+            if form and form in blob:
+                self.fail("stored text contains a secret form")
+
+    def _run_secret(self, name, workflow, event, secrets, extra=None, job_id="build"):
+        root = self.root / name
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(root, workflow, extra)
+        plan = plan_snapshot(snapshot, job_id)["plan"]
+        result = run_job(
+            snapshot,
+            digest,
+            workspace,
+            plan,
+            self.image,
+            event,
+            docker=str(self.docker),
+            step_timeout=60,
+            event_name="push",
+            secrets=secrets,
+        )
+        return result, plan, workspace, snapshot
+
+    def test_step_env_receives_the_file_and_the_log_is_masked(self):
+        from execution_core.secrets import SecretAccess
+
+        value = 'fixture secret "9f3a"'
+        forms = self._secret_forms(value)
+        self._secret_home({"API": value.encode() + b"\n"})
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - env:
+          TOKEN: ${{ secrets.API }}
+          GONE: ${{ secrets.MISSING }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os
+          from urllib.parse import quote
+          value = os.environ["TOKEN"]
+          print(value)
+          print(base64.b64encode(value.encode()).decode())
+          print(json.dumps(value)[1:-1])
+          print(quote(value, safe="-._~"))
+          root = os.environ["GITHUB_WORKSPACE"]
+          digest = hashlib.sha256(value.encode()).hexdigest()
+          open(root + "/token.sha256", "w").write(digest)
+          open(root + "/gone.txt", "w").write(os.environ.get("GONE", "missing"))
+          flag = os.environ.get("GITHUB_TOKEN", "missing")
+          open(root + "/token-env.txt", "w").write("empty" if flag == "" else "set")
+          PY
+      - run: |
+          if [ -n "${TOKEN:-}" ]; then printf leaked; else printf absent; fi > "$GITHUB_WORKSPACE/second.txt"
+"""
+        result, plan, workspace, snapshot = self._run_secret(
+            "secret-env",
+            workflow,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(
+            (workspace / "token.sha256").read_text(),
+            hashlib.sha256(value.encode()).hexdigest(),
+        )
+        self.assertEqual((workspace / "gone.txt").read_text(), "")
+        self.assertEqual((workspace / "token-env.txt").read_text(), "empty")
+        self.assertEqual((workspace / "second.txt").read_text(), "absent")
+        self.assertEqual(plan["job"]["steps"][0]["env"]["TOKEN"], "${{ secrets.API }}")
+        logged = "\n".join(
+            (step.get("stdout") or "") + (step.get("stderr") or "") for step in result["steps"]
+        )
+        self.assertIn("***", logged)
+        self.assertIn("secret MISSING is not set", result["steps"][0]["stderr"])
+        self._assert_secret_hidden(self._stored(result, plan, workspace, snapshot), forms)
+
+    def test_composite_with_receives_the_file_on_that_step_only(self):
+        from execution_core.secrets import SecretAccess
+
+        value = 'fixture secret "9f3a"'
+        forms = self._secret_forms(value)
+        self._secret_home({"API": value.encode() + b"\n"})
+        action = """\
+name: pass
+description: pass
+inputs:
+  token:
+    description: token
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+      run: |
+        python3 - <<'PY'
+        import hashlib, os
+        value = os.environ["TOKEN"]
+        print(value)
+        digest = hashlib.sha256(value.encode()).hexdigest()
+        open(os.environ["GITHUB_WORKSPACE"] + "/token.sha256", "w").write(digest)
+        PY
+"""
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: ./pass
+        with:
+          token: ${{ secrets.API }}
+      - run: |
+          if [ -n "${TOKEN:-}" ]; then printf leaked; else printf clean; fi > "$GITHUB_WORKSPACE/later.txt"
+"""
+        result, plan, workspace, snapshot = self._run_secret(
+            "secret-with",
+            workflow,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+            {"pass/action.yml": action},
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(plan["job"]["steps"][0]["with"]["token"], "${{ secrets.API }}")
+        self.assertEqual(
+            (workspace / "token.sha256").read_text(),
+            hashlib.sha256(value.encode()).hexdigest(),
+        )
+        self.assertEqual((workspace / "later.txt").read_text(), "clean")
+        logged = "\n".join((step.get("stdout") or "") for step in result["steps"])
+        self.assertIn("***", logged)
+        self._assert_secret_hidden(self._stored(result, plan, workspace, snapshot), forms)
+
+    def test_call_outputs_receive_the_job_secret_mask(self):
+        from unittest.mock import patch
+
+        from execution_core.secrets import SecretAccess
+
+        value = 'fixture secret "9f3a"'
+        forms = self._secret_forms(value)
+        self._secret_home({"API": value.encode() + b"\n"})
+        called = """\
+on:
+  workflow_call:
+    outputs:
+      marker:
+        value: ${{ jobs.build.outputs.marker }}
+jobs:
+  build:
+    outputs:
+      marker: ${{ steps.one.outputs.marker }}
+    steps:
+      - id: one
+        env:
+          TOKEN: ${{ secrets.API }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          value = os.environ["TOKEN"]
+          digest = hashlib.sha256(value.encode()).hexdigest()
+          root = os.environ["GITHUB_WORKSPACE"]
+          open(root + "/token.sha256", "w").write(digest)
+          open(os.environ["GITHUB_OUTPUT"], "a").write("marker=ok" + chr(10))
+          PY
+"""
+        workflow = """\
+on: push
+jobs:
+  use:
+    uses: ./.github/workflows/called.yml
+  report:
+    needs: use
+    steps:
+      - if: "${{ needs.use.outputs.marker == 'ok' }}"
+        run: printf seen > "$GITHUB_WORKSPACE/seen.txt"
+"""
+        root = self.root / "secret-call"
+        root.mkdir()
+        _repo, snapshot, digest, workspace = _capture(
+            root, workflow, {".github/workflows/called.yml": called}
+        )
+        plan = plan_snapshot(snapshot, "report")["plan"]
+        flags = []
+        real = _job_outputs
+
+        def spy(job, values, used, masks=None):
+            found = getattr(masks, "secrets", None)
+            flags.append(bool(found))
+            return real(job, values, used, masks)
+
+        with patch("execution_core.run._job_outputs", spy):
+            result = run_job(
+                snapshot,
+                digest,
+                workspace,
+                plan,
+                self.image,
+                self._push_event(),
+                docker=str(self.docker),
+                step_timeout=60,
+                event_name="push",
+                secrets=SecretAccess("owner/demo"),
+            )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "seen.txt").read_text(), "seen")
+        self.assertGreaterEqual(sum(1 for item in flags if item), 2)
+        self.assertIn(False, flags)
+        self._assert_secret_hidden(self._stored(result, plan, workspace, snapshot), forms)
+
+    def test_allowlist_miss_does_not_open_or_inject(self):
+        from execution_core.secrets import SecretAccess
+
+        self._secret_home({"API": b"value\n"}, repo_mode=0o777)
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - env:
+          TOKEN: ${{ secrets.API }}
+        run: |
+          if [ -z "$TOKEN" ]; then printf empty; else printf filled; fi > "$GITHUB_WORKSPACE/seen.txt"
+"""
+        result, _plan, workspace, _snapshot = self._run_secret(
+            "secret-miss",
+            workflow,
+            self._push_event(ref="refs/heads/feature"),
+            SecretAccess("owner/demo"),
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "seen.txt").read_text(), "empty")
+        text = "\n".join(
+            (step.get("error") or "") + (step.get("stderr") or "") for step in result["steps"]
+        )
+        self.assertNotIn("secret directory", text)
+        self.assertNotIn("is not set", text)
+
+    def test_omitted_secrets_keep_the_withheld_context_error(self):
+        self._secret_home({"API": b"value\n"}, repo_mode=0o777)
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - env:
+          TOKEN: ${{ secrets.API }}
+        run: printf ran > "$GITHUB_WORKSPACE/seen.txt"
+"""
+        result, _plan, workspace, _snapshot = self._run_secret(
+            "secret-off",
+            workflow,
+            self._push_event(),
+            None,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse((workspace / "seen.txt").exists())
+        text = "\n".join((step.get("error") or "") for step in result["steps"])
+        self.assertIn("context is not available: secrets", text)
+        self.assertNotIn("secret directory", text)
+
+    def test_empty_secret_file_fails_before_the_step_runs(self):
+        from execution_core.secrets import SecretAccess
+
+        self._secret_home({"API": b"\n"})
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - env:
+          TOKEN: ${{ secrets.API }}
+        run: printf ran > "$GITHUB_WORKSPACE/ran.txt"
+"""
+        result, _plan, workspace, _snapshot = self._run_secret(
+            "secret-empty",
+            workflow,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse((workspace / "ran.txt").exists())
+        text = "\n".join((step.get("error") or "") for step in result["steps"])
+        self.assertIn("secret API is empty", text)
+
+    def test_secret_directory_is_checked_when_nothing_is_referenced(self):
+        from execution_core.secrets import SecretAccess
+
+        self._keep_docker_config()
+        home = self.root / "empty-home"
+        home.mkdir()
+        os.chmod(home, 0o700)
+        previous = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous
+
+        self.addCleanup(restore)
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: printf ran > "$GITHUB_WORKSPACE/ran.txt"
+"""
+        result, _plan, workspace, _snapshot = self._run_secret(
+            "secret-missing-dir",
+            workflow,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse((workspace / "ran.txt").exists())
+        text = "\n".join((step.get("error") or "") for step in result["steps"])
+        self.assertIn("secret directory is not accepted", text)
+        self.assertNotIn(str(home), text)
+
+        self._secret_home({"HUGE": b"h" * (100 * 1024)})
+        workflow_ok = """\
+on: push
+jobs:
+  build:
+    steps:
+      - run: printf ran > "$GITHUB_WORKSPACE/ran.txt"
+"""
+        result, _plan, workspace, _snapshot = self._run_secret(
+            "secret-unreferenced",
+            workflow_ok,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+        )
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual((workspace / "ran.txt").read_text(), "ran")
