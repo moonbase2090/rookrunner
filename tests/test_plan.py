@@ -826,10 +826,12 @@ jobs:
             patch("os.system", fail),
         ):
             planned = self.plan()
-            with self.assertRaises(PlanError):
+            with self.assertRaises(PlanError) as raised:
                 plan_workflow(
                     b"jobs:\n  build:\n    steps:\n      - uses: example/action@v1\n", "build"
                 )
+            self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+            self.assertEqual(raised.exception.field, "jobs.build.steps.0.uses")
         self.assertEqual(planned["plan"]["job"]["id"], "build")
 
     def test_snapshot_bytes_match_the_captured_file(self):

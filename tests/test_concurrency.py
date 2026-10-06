@@ -47,14 +47,13 @@ class ConcurrencyPolicyTests(unittest.TestCase):
         self.assertEqual(cancel, {"running", "pending"})
 
     def test_queue_max_keeps_one_hundred_pending_runs(self):
-        pending = [
-            _run(f"p{index}", "queued", "deploy", queue="max") for index in range(MAX_PENDING)
-        ]
+        self.assertEqual(MAX_PENDING, 100)
+        pending = [_run(f"p{index}", "queued", "deploy", queue="max") for index in range(100)]
         new = _run("new", "queued", "deploy", queue="max")
         cancel, reject = decide(pending, new)
         self.assertTrue(reject)
         self.assertEqual(cancel, set())
-        room = pending[:-1]
+        room = [_run(f"p{index}", "queued", "deploy", queue="max") for index in range(99)]
         cancel, reject = decide(room, new)
         self.assertFalse(reject)
         self.assertEqual(cancel, set())

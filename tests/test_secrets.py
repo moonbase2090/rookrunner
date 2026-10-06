@@ -3,12 +3,12 @@
 No test reads the GitHub App key directory or contacts api.github.com.
 """
 
-import hashlib
 import os
 from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from execution_core.expr import (
     ExprError,
@@ -537,18 +537,36 @@ class SecretBindTests(unittest.TestCase):
 
     def test_github_token_does_not_read_an_unreferenced_file(self):
         huge = b"h" * (100 * 1024)
-        home, _repo = _secret_home(self.root, {"API": huge})
+        home, _repo = _secret_home(self.root, {"API": huge, "OTHER": b"referenced-value\n"})
         os.environ["HOME"] = str(home)
+        reads = []
+        real_read = os.read
+
+        def spy(fd, size):
+            block = real_read(fd, size)
+            reads.append(block)
+            return block
+
         runtime = _JobRuntime()
+        with patch("execution_core.secrets.os.read", spy):
+            _bind_job_secrets(
+                runtime,
+                SecretAccess("owner/demo"),
+                PUSH,
+                "push",
+                self._job({"TOKEN": "${{ secrets.GITHUB_TOKEN }}"}),
+            )
+        self.assertEqual(runtime.secret_values, {})
+        self.assertNotIn(b"h" * 64, b"".join(reads))
+        referenced = _JobRuntime()
         _bind_job_secrets(
-            runtime,
+            referenced,
             SecretAccess("owner/demo"),
             PUSH,
             "push",
-            self._job({"TOKEN": "${{ secrets.GITHUB_TOKEN }}"}),
+            self._job({"TOKEN": "${{ secrets.OTHER }}"}),
         )
-        self.assertEqual(runtime.secret_values, {})
-        self.assertEqual(hashlib.sha256(huge).hexdigest(), hashlib.sha256(huge).hexdigest())
+        self.assertEqual(referenced.secret_values, {"OTHER": "referenced-value"})
 
     def test_no_reference_still_checks_the_directory(self):
         home = self.root / "home"

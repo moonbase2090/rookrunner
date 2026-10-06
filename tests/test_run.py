@@ -3325,7 +3325,16 @@ jobs:
             text=True,
         )
         system, architecture = inspected.stdout.split()
-        arch = _runner_arch(system, architecture)
+        if (system, architecture) == ("linux", "amd64"):
+            arch = "X64"
+        elif (system, architecture) == ("linux", "arm64"):
+            arch = "ARM64"
+        elif (system, architecture) == ("linux", "386"):
+            arch = "X86"
+        elif (system, architecture) == ("linux", "arm"):
+            arch = "ARM"
+        else:
+            self.fail(f"fixture platform {(system, architecture)} has no runner.arch literal")
         manifest = verify_snapshot(self.snapshot, self.digest)
         sha = manifest["base_commit"]
         self.assertIs(manifest["dirty"], False)

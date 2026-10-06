@@ -144,7 +144,6 @@ class RunnerImageFlagTests(unittest.TestCase):
         self.assertEqual(record["state"], "queued")
         self.assertEqual(record["input"]["image_reference"], NAMED)
         self.assertEqual(record["input"]["image_digest"], DIGEST)
-        self.assertTrue(DIGEST.startswith("sha256:"))
         again = self._submit(worker)
         self.assertEqual(again["run_id"], record["run_id"])
 
