@@ -10,8 +10,10 @@ available value is an empty string. `hashFiles` is not implemented.
 `${{ }}` is inserted as text. A whole-string expression drops the
 surrounding whitespace and is stringified the same way. The inserted
 text is not scanned again. Step `env` and `with` accept an expression
-that is exactly `secrets.NAME`. `secrets` stays withheld in `run`,
-names, `if`, job `env`, workflow `env`, and concurrency.
+that is exactly `secrets.NAME`. Step `run` rewrites that expression to
+`${RR_SECRET_NAME}` when the shell is bash or sh and a small lexer
+proves an unquoted or double-quoted context. `secrets` stays withheld
+in names, `if`, job `env`, workflow `env`, and concurrency.
 Status functions are not accepted there.
 
 `case` evaluates predicates in order and does not evaluate later branches.
@@ -196,18 +198,7 @@ def check_step_text(source):
 _SECRET_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def exact_secret_reference(source):
-    """Return the name when `source` is exactly ``${{ secrets.NAME }}``."""
-
-    if not isinstance(source, str):
-        return None
-    text = source.strip()
-    if not (text.startswith("${{") and text.endswith("}}") and "${{" not in text[3:-2]):
-        return None
-    try:
-        tree = _parse(text[3:-2].strip())
-    except ExprError:
-        return None
+def _exact_secret_tree(tree):
     if (
         isinstance(tree, tuple)
         and len(tree) == 3
@@ -221,6 +212,21 @@ def exact_secret_reference(source):
     ):
         return tree[2]
     return None
+
+
+def exact_secret_reference(source):
+    """Return the name when `source` is exactly ``${{ secrets.NAME }}``."""
+
+    if not isinstance(source, str):
+        return None
+    text = source.strip()
+    if not (text.startswith("${{") and text.endswith("}}") and "${{" not in text[3:-2]):
+        return None
+    try:
+        tree = _parse(text[3:-2].strip())
+    except ExprError:
+        return None
+    return _exact_secret_tree(tree)
 
 
 def check_step_secret_value(source):
@@ -1075,3 +1081,574 @@ def _from_json(value):
         return json.loads(value)
     except json.JSONDecodeError:
         _reject()
+
+
+def _shell_accepts_rewrite(shell):
+    """Bash and sh can expand ``${RR_SECRET_NAME}``. Other shells cannot."""
+
+    if shell is None or shell == "bash" or shell == "sh":
+        return True
+    if not isinstance(shell, str) or shell == "" or "\0" in shell:
+        return False
+    parts = shell.split()
+    if len(parts) < 2 or parts.count("{0}") != 1:
+        return False
+    return parts[0] in {"bash", "sh"}
+
+
+def check_step_run(source, shell):
+    """Reject a step `run` whose secrets cannot be rewritten. Does not keep the text."""
+
+    rewrite_run_secrets(source, shell)
+
+
+def rewrite_run_secrets(source, shell):
+    """Return ``(text, file_names)`` for one step `run`.
+
+    An exact ``secrets.NAME`` in a proven unquoted or double-quoted context
+    becomes ``${RR_SECRET_NAME}``. ``file_names`` is the uppercase file names
+    in first-seen order. ``GITHUB_TOKEN`` is rewritten and is not a file.
+    A script with no ``secrets`` read is returned unchanged, including when
+    the shell cannot expand the variable. Any other shell, or a context the
+    lexer cannot prove, raises ``run is not accepted`` and does not return
+    text. A ``secrets`` read that is not an exact name raises
+    ``secrets reference is not accepted``.
+    """
+
+    if not isinstance(source, str) or "\0" in source:
+        _reject()
+    sites = _RunLexer(source).scan()
+    classified = []
+    saw_secret = False
+    for start, end, body, context in sites:
+        tree = _parse(body)
+        name = _exact_secret_tree(tree)
+        if name is not None or _walk_mentions_secrets(tree):
+            saw_secret = True
+            classified.append((start, end, context, name))
+        else:
+            _check(tree, STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
+    if saw_secret and not _shell_accepts_rewrite(shell):
+        raise ExprError("run is not accepted")
+    names = []
+    replacements = []
+    for start, end, context, name in classified:
+        if context not in {"unquoted", "double"}:
+            raise ExprError("run is not accepted")
+        if name is None:
+            raise ExprError("secrets reference is not accepted")
+        upper = name.upper()
+        if upper.startswith("GITHUB_") and upper != "GITHUB_TOKEN":
+            raise ExprError("secrets reference is not accepted")
+        if upper != "GITHUB_TOKEN" and upper not in names:
+            names.append(upper)
+        replacements.append((start, end, "${RR_SECRET_" + upper + "}"))
+    parts = []
+    cursor = 0
+    for start, end, replacement in replacements:
+        if start < cursor:
+            raise ExprError("run is not accepted")
+        parts.append(source[cursor:start])
+        parts.append(replacement)
+        cursor = end
+    parts.append(source[cursor:])
+    rewritten = "".join(parts)
+    if _rewritten_mentions_secrets(rewritten):
+        raise ExprError("run is not accepted")
+    return rewritten, names
+
+
+def _walk_mentions_secrets(node):
+    """Return whether any node reads the `secrets` context.
+
+    Argument lists are tuples of nodes, including the empty tuple, so this
+    walk does not treat every tuple as a node.
+    """
+
+    if isinstance(node, list) or (
+        isinstance(node, tuple) and (not node or not isinstance(node[0], str))
+    ):
+        return any(_walk_mentions_secrets(child) for child in node)
+    if not isinstance(node, tuple):
+        return False
+    if node[0] == "name" and len(node) > 1 and node[1] == "secrets":
+        return True
+    return any(_walk_mentions_secrets(child) for child in node[1:])
+
+
+def _rewritten_mentions_secrets(text):
+    try:
+        pieces = _text_pieces(text)
+    except ExprError:
+        return False
+    if pieces is None:
+        return False
+    for kind, body in pieces:
+        if kind != "expr":
+            continue
+        try:
+            tree = _parse(body)
+        except ExprError:
+            return False
+        if _walk_mentions_secrets(tree):
+            return True
+    return False
+
+
+class _RunLexer:
+    """Classify ``${{ }}`` in a bash or sh script.
+
+    Rewrite is allowed only for unquoted and double-quoted sites. A heredoc
+    body, a comment, a quote, an escape, and any context this lexer cannot
+    prove are recorded as something else. A pending heredoc belongs to the
+    frame that saw ``<<``. Its body starts at the next newline in that same
+    frame. A closer that arrives while a heredoc is still pending fails the
+    rest of the script.
+    """
+
+    def __init__(self, source):
+        self.source = source
+        self.n = len(source)
+        self.i = 0
+        self.sites = []
+
+    def scan(self):
+        self._read_unquoted(None)
+        return self.sites
+
+    def _record(self, context):
+        body, end = _scan_wrapper(self.source, self.i + 3)
+        self.sites.append((self.i, end, body, context))
+        self.i = end
+
+    def _fail(self):
+        while self.i < self.n:
+            if self.source.startswith("${{", self.i):
+                try:
+                    body, end = _scan_wrapper(self.source, self.i + 3)
+                except ExprError:
+                    break
+                self.sites.append((self.i, end, body, "unproven"))
+                self.i = end
+                continue
+            self.i += 1
+        self.i = self.n
+
+    def _reclassify(self, opened, context):
+        for index in range(opened, len(self.sites)):
+            start, end, body, _old = self.sites[index]
+            self.sites[index] = (start, end, body, context)
+
+    def _read_unquoted(self, closer):
+        pending = []
+        depth = 0
+        word_start = True
+        while self.i < self.n:
+            char = self.source[self.i]
+            if char == "\n":
+                self.i += 1
+                word_start = True
+                if pending and not self._consume_heredocs(pending):
+                    self._fail()
+                    return
+                pending.clear()
+                continue
+            if char == "\\":
+                if self.i + 1 < self.n and self.source[self.i + 1] == "\n":
+                    self.i += 2
+                    continue
+                if self.i + 1 < self.n and self.source.startswith("${{", self.i + 1):
+                    self.i += 1
+                    self._record("literal")
+                    word_start = False
+                    continue
+                self.i += 2 if self.i + 1 < self.n else 1
+                word_start = False
+                continue
+            if char == "`":
+                if closer == "backtick":
+                    if pending:
+                        self._fail()
+                        return
+                    self.i += 1
+                    return
+                self.i += 1
+                self._read_unquoted("backtick")
+                word_start = False
+                continue
+            if self.source.startswith("${{", self.i):
+                self._record("unquoted")
+                word_start = False
+                continue
+            if self.source.startswith("$'", self.i):
+                self.i += 2
+                self._read_ansi()
+                word_start = False
+                continue
+            if self.source.startswith('$"', self.i):
+                self.i += 2
+                self._read_double("unproven")
+                word_start = False
+                continue
+            if self.source.startswith("$((", self.i):
+                self._read_arith()
+                word_start = False
+                continue
+            if self.source.startswith("$(", self.i):
+                self.i += 2
+                self._read_unquoted("paren")
+                word_start = False
+                continue
+            if self.source.startswith("${", self.i):
+                self._read_param()
+                word_start = False
+                continue
+            if char == "'":
+                self.i += 1
+                self._read_single()
+                word_start = False
+                continue
+            if char == '"':
+                self.i += 1
+                self._read_double("double")
+                word_start = False
+                continue
+            if char == "#" and word_start:
+                self._read_comment()
+                word_start = True
+                continue
+            if self.source.startswith("<<<", self.i):
+                self.i += 3
+                word_start = True
+                continue
+            if self.source.startswith("<<", self.i):
+                queued = self._queue_heredoc()
+                if queued is None:
+                    self._fail()
+                    return
+                pending.append(queued)
+                word_start = True
+                continue
+            if char == ")" and closer == "paren" and depth == 0:
+                if pending:
+                    self._fail()
+                    return
+                self.i += 1
+                return
+            if char == "(":
+                depth += 1
+                self.i += 1
+                word_start = True
+                continue
+            if char == ")":
+                if depth > 0:
+                    depth -= 1
+                self.i += 1
+                word_start = True
+                continue
+            if char in "|&;<>" or char.isspace():
+                self.i += 1
+                word_start = True
+                continue
+            self.i += 1
+            word_start = False
+        if pending:
+            self._fail()
+
+    def _read_double(self, context):
+        opened = len(self.sites)
+        while self.i < self.n:
+            char = self.source[self.i]
+            if char == "\\":
+                if self.i + 1 < self.n and self.source[self.i + 1] == "\n":
+                    self.i += 2
+                    continue
+                if self.i + 1 < self.n and self.source.startswith("${{", self.i + 1):
+                    self.i += 1
+                    self._record("literal")
+                    continue
+                self.i += 2 if self.i + 1 < self.n else 1
+                continue
+            if char == '"':
+                self.i += 1
+                return
+            if self.source.startswith("${{", self.i):
+                self._record(context)
+                continue
+            if char == "`":
+                self.i += 1
+                self._read_unquoted("backtick")
+                continue
+            if self.source.startswith("$((", self.i):
+                self._read_arith()
+                continue
+            if self.source.startswith("$(", self.i):
+                self.i += 2
+                self._read_unquoted("paren")
+                continue
+            if self.source.startswith("${", self.i):
+                self._read_param()
+                continue
+            self.i += 1
+        self._reclassify(opened, "unproven")
+
+    def _read_single(self):
+        while self.i < self.n:
+            if self.source[self.i] == "'":
+                self.i += 1
+                return
+            if self.source.startswith("${{", self.i):
+                self._record("single")
+                continue
+            self.i += 1
+
+    def _read_ansi(self):
+        while self.i < self.n:
+            char = self.source[self.i]
+            if char == "\\":
+                if self.i + 1 < self.n and self.source.startswith("${{", self.i + 1):
+                    self.i += 1
+                    self._record("ansi")
+                    continue
+                self.i += 2 if self.i + 1 < self.n else 1
+                continue
+            if char == "'":
+                self.i += 1
+                return
+            if self.source.startswith("${{", self.i):
+                self._record("ansi")
+                continue
+            self.i += 1
+
+    def _read_comment(self):
+        while self.i < self.n and self.source[self.i] != "\n":
+            if self.source.startswith("${{", self.i):
+                self._record("comment")
+                continue
+            self.i += 1
+
+    def _read_param(self):
+        if self.source.startswith("${{", self.i):
+            self._record("unproven")
+            return
+        self.i += 2
+        depth = 1
+        while self.i < self.n and depth > 0:
+            if self.source.startswith("${{", self.i):
+                self._record("unproven")
+                continue
+            if self.source.startswith("$((", self.i):
+                self._read_arith()
+                continue
+            if self.source.startswith("$(", self.i):
+                self.i += 2
+                self._read_unquoted("paren")
+                continue
+            char = self.source[self.i]
+            if (
+                char in "'\""
+                or self.source.startswith("$'", self.i)
+                or self.source.startswith('$"', self.i)
+            ):
+                self._fail()
+                return
+            if char == "{":
+                depth += 1
+                self.i += 1
+                continue
+            if char == "}":
+                depth -= 1
+                self.i += 1
+                continue
+            if char == "\\":
+                self.i += 2 if self.i + 1 < self.n else 1
+                continue
+            self.i += 1
+        if depth != 0:
+            self._fail()
+
+    def _read_arith(self):
+        self.i += 3
+        depth = 0
+        closers = 2
+        while self.i < self.n:
+            if self.source.startswith("${{", self.i):
+                self._record("unproven")
+                continue
+            if self.source.startswith("$(", self.i):
+                self._fail()
+                return
+            char = self.source[self.i]
+            if char in "'\"`":
+                self._fail()
+                return
+            if char == "(":
+                depth += 1
+                self.i += 1
+                continue
+            if char == ")":
+                if depth > 0:
+                    depth -= 1
+                    self.i += 1
+                    continue
+                self.i += 1
+                closers -= 1
+                if closers == 0:
+                    return
+                if self.i >= self.n or self.source[self.i] != ")":
+                    self._fail()
+                    return
+                continue
+            self.i += 1
+        self._fail()
+
+    def _queue_heredoc(self):
+        self.i += 2
+        strip_tabs = False
+        if self.i < self.n and self.source[self.i] == "-":
+            # `<<<` is a here-string and is handled before this method.
+            strip_tabs = True
+            self.i += 1
+        while self.i < self.n and self.source[self.i] in " \t":
+            self.i += 1
+        delimiter = self._heredoc_word()
+        if delimiter is None:
+            return None
+        return (delimiter, strip_tabs)
+
+    def _heredoc_word(self):
+        if self.i >= self.n or self.source[self.i] in " \t\n|&;()<>":
+            return None
+        parts = []
+        while self.i < self.n:
+            if self.source.startswith("${{", self.i):
+                self._record("unproven")
+                return None
+            char = self.source[self.i]
+            if char in " \t\n|&;()<>":
+                break
+            if char == "\\":
+                if self.i + 1 >= self.n:
+                    return None
+                parts.append(self.source[self.i + 1])
+                self.i += 2
+                continue
+            if char == "'":
+                chunk = self._delimiter_quotes("'", "single")
+                if chunk is None:
+                    return None
+                parts.append(chunk)
+                continue
+            if char == '"':
+                chunk = self._delimiter_quotes('"', "double")
+                if chunk is None:
+                    return None
+                parts.append(chunk)
+                continue
+            if self.source.startswith("$'", self.i):
+                chunk = self._delimiter_ansi()
+                if chunk is None:
+                    return None
+                parts.append(chunk)
+                continue
+            if self.source.startswith('$"', self.i):
+                self.i += 1
+                chunk = self._delimiter_quotes('"', "unproven")
+                if chunk is None:
+                    return None
+                parts.append(chunk)
+                continue
+            parts.append(char)
+            self.i += 1
+        return "".join(parts)
+
+    def _delimiter_quotes(self, quote, context):
+        self.i += 1
+        chars = []
+        while self.i < self.n:
+            if self.source.startswith("${{", self.i):
+                self._record(context)
+                return None
+            if self.source[self.i] == "\\" and quote == '"':
+                if self.i + 1 >= self.n:
+                    return None
+                chars.append(self.source[self.i + 1])
+                self.i += 2
+                continue
+            if self.source[self.i] == quote:
+                self.i += 1
+                return "".join(chars)
+            chars.append(self.source[self.i])
+            self.i += 1
+        return None
+
+    def _delimiter_ansi(self):
+        self.i += 2
+        chars = []
+        while self.i < self.n:
+            if self.source.startswith("${{", self.i):
+                self._record("ansi")
+                return None
+            char = self.source[self.i]
+            if char == "\\":
+                if self.i + 1 >= self.n:
+                    return None
+                nxt = self.source[self.i + 1]
+                if nxt == "n":
+                    chars.append("\n")
+                elif nxt == "t":
+                    chars.append("\t")
+                else:
+                    chars.append(nxt)
+                self.i += 2
+                continue
+            if char == "'":
+                self.i += 1
+                return "".join(chars)
+            chars.append(char)
+            self.i += 1
+        return None
+
+    def _consume_heredocs(self, pending):
+        for delimiter, strip_tabs in pending:
+            if not self._consume_one(delimiter, strip_tabs):
+                return False
+        return True
+
+    def _consume_one(self, delimiter, strip_tabs):
+        body_start = self.i
+        while self.i < self.n:
+            line_start = self.i
+            newline = self.source.find("\n", self.i)
+            if newline < 0:
+                line = self.source[self.i :]
+                line_end = self.n
+                has_nl = False
+            else:
+                line = self.source[self.i : newline]
+                line_end = newline
+                has_nl = True
+            compare = line.lstrip("\t") if strip_tabs else line
+            if compare == delimiter:
+                after = self._record_between(body_start, line_start, "heredoc")
+                self.i = after if after > line_start else line_end + (1 if has_nl else 0)
+                return True
+            if not has_nl:
+                self._record_between(body_start, self.n, "heredoc")
+                self.i = self.n
+                return False
+            self.i = line_end + 1
+        return False
+
+    def _record_between(self, start, end, context):
+        index = start
+        while index < end:
+            found = self.source.find("${{", index)
+            if found < 0 or found >= end:
+                return end
+            self.i = found
+            self._record(context)
+            index = self.i
+            if index > end:
+                return index
+        return end

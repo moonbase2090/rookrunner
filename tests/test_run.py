@@ -3759,6 +3759,71 @@ jobs:
         self.assertIn("secret MISSING is not set", result["steps"][0]["stderr"])
         self._assert_secret_hidden(self._stored(result, plan, workspace, snapshot), forms)
 
+    def test_run_script_receives_the_variable_and_hides_the_value(self):
+        from execution_core.secrets import SecretAccess
+
+        value = 'fixture run "9f3a"'
+        forms = self._secret_forms(value)
+        self._secret_home({"API": value.encode() + b"\n"})
+        action = """\
+name: show
+description: show
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        token="${{ secrets.API }}_v2"
+        missing="${{ secrets.MISSING }}"
+        cp /run/rookrunner-cmd/step-0-script "$GITHUB_WORKSPACE/script.txt"
+        python3 - <<'PY'
+        import hashlib, os
+        value = os.environ["RR_SECRET_API"]
+        print(value)
+        root = os.environ["GITHUB_WORKSPACE"]
+        open(root + "/token.sha256", "w").write(hashlib.sha256(value.encode()).hexdigest())
+        flag = os.environ.get("RR_SECRET_MISSING", "unset")
+        open(root + "/missing.txt", "w").write("empty" if flag == "" else "other")
+        PY
+"""
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: ./show
+      - run: |
+          if [ -n "${RR_SECRET_API:-}" ]; then printf leaked; else printf absent; fi > "$GITHUB_WORKSPACE/second.txt"
+"""
+        result, plan, workspace, snapshot = self._run_secret(
+            "secret-run",
+            workflow,
+            self._push_event(),
+            SecretAccess("owner/demo"),
+            {"show/action.yml": action},
+        )
+        self.assertEqual(result["status"], "succeeded")
+        stored_run = plan["job"]["steps"][0]["steps"][0]["run"]
+        self.assertIn("${{ secrets.API }}", stored_run)
+        self.assertNotIn(value, stored_run)
+        script = (workspace / "script.txt").read_text()
+        self.assertIn("${RR_SECRET_API}_v2", script)
+        self.assertIn("${RR_SECRET_MISSING}", script)
+        self.assertNotIn(value, script)
+        self.assertNotIn("${{ secrets.API }}", script)
+        self.assertEqual(
+            (workspace / "token.sha256").read_text(),
+            hashlib.sha256(value.encode()).hexdigest(),
+        )
+        self.assertEqual((workspace / "missing.txt").read_text(), "empty")
+        self.assertEqual((workspace / "second.txt").read_text(), "absent")
+        logged = "\n".join(
+            (step.get("stdout") or "") + (step.get("stderr") or "") for step in result["steps"]
+        )
+        self.assertIn("***", logged)
+        self.assertIn("secret MISSING is not set", result["steps"][0]["stderr"])
+        self._assert_secret_hidden(self._stored(result, plan, workspace, snapshot), forms)
+
     def test_composite_with_receives_the_file_on_that_step_only(self):
         from execution_core.secrets import SecretAccess
 

@@ -113,8 +113,11 @@ through NS-43 in [next steps](planning/next-steps.md).
    worker secret flags and refuses --docker-socket combined with
    --app-key or --secrets unless the ~/Secrets probe exits 0.
    p7-secret-env reads file secrets into step `env` and `with` when
-   `--secrets` is set and the allowlist matches. p7-secret-run and
-   p7-job-token are not implemented. MB2090 accepted the amended
+   `--secrets` is set and the allowlist matches. p7-secret-run
+   rewrites an exact `secrets.NAME` in `run` to `${RR_SECRET_NAME}`
+   for bash and sh when the lexer proves the context. The script
+   contains the rewritten text and does not contain the value.
+   p7-job-token is not implemented. MB2090 accepted the amended
    answers on 2026-10-05.
    The rest of the provisional list is not numbered
    yet.

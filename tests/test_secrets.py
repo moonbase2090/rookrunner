@@ -1,4 +1,4 @@
-"""File-backed step env and with. HOME points at a temporary directory.
+"""File-backed step env, with, and run. HOME points at a temporary directory.
 
 No test reads the GitHub App key directory or contacts api.github.com.
 """
@@ -11,12 +11,21 @@ import tempfile
 import unittest
 
 from execution_core.expr import (
+    ExprError,
+    check_step_run,
     check_step_secret_value,
     check_step_text,
     exact_secret_reference,
+    rewrite_run_secrets,
 )
 from execution_core.plan import CAPABILITY_VERSION, PlanError, plan_workflow
-from execution_core.run import _JobRuntime, _bind_job_secrets
+from execution_core.run import (
+    _JobRuntime,
+    _bind_job_secrets,
+    _merged_env,
+    _publish_script,
+    _render_run,
+)
 from execution_core.secrets import (
     MAX_SECRET_BYTES,
     SecretAccess,
@@ -282,7 +291,7 @@ jobs:
         self.assertIn("secrets reference is not accepted", str(raised.exception))
         self.assertIn("env.TOKEN", raised.exception.field or "")
 
-    def test_run_name_if_and_concurrency_stay_withheld(self):
+    def test_run_stores_an_exact_secret_and_names_stay_withheld(self):
         run = """\
 on: push
 jobs:
@@ -290,10 +299,9 @@ jobs:
     steps:
       - run: echo ${{ secrets.TOKEN }}
 """
-        with self.assertRaises(PlanError) as raised:
-            plan_workflow(run.encode(), "build")
-        self.assertIn("context is not available: secrets", str(raised.exception))
-        self.assertNotIn("move this reference", str(raised.exception))
+        planned = plan_workflow(run.encode(), "build")["plan"]
+        self.assertEqual(planned["capability_version"], 12)
+        self.assertEqual(planned["job"]["steps"][0]["run"], "echo ${{ secrets.TOKEN }}")
 
         named = """\
 on: push
@@ -559,8 +567,352 @@ class SecretBindTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "secret directory is not accepted")
         self.assertNotIn(str(home), str(raised.exception))
 
+    def test_run_reference_loads_masks_and_names_a_miss(self):
+        home, _repo = _secret_home(self.root, {"API": b"fixture-run-value-9f3a\n"})
+        os.environ["HOME"] = str(home)
+        runtime = _JobRuntime()
+        _bind_job_secrets(
+            runtime,
+            SecretAccess("owner/demo"),
+            PUSH,
+            "push",
+            {"steps": [{"run": 'echo "${{ secrets.API }}_v2 ${{ secrets.MISSING }}"'}]},
+        )
+        self.assertEqual(runtime.secret_values["API"], "fixture-run-value-9f3a")
+        self.assertEqual(runtime.secret_values["MISSING"], "")
+        self.assertNotIn("GITHUB_TOKEN", runtime.secret_values)
+        self.assertIn("fixture-run-value-9f3a", runtime.masks.secrets)
+        self.assertIn("secret MISSING is not set", runtime.secret_notes)
+        self.assertNotIn(str(home), " ".join(runtime.secret_notes))
+
+    def test_run_github_token_does_not_read_a_file(self):
+        huge = b"h" * (100 * 1024)
+        home, _repo = _secret_home(self.root, {"API": huge})
+        os.environ["HOME"] = str(home)
+        runtime = _JobRuntime()
+        _bind_job_secrets(
+            runtime,
+            SecretAccess("owner/demo"),
+            PUSH,
+            "push",
+            {"steps": [{"run": "echo ${{ secrets.GITHUB_TOKEN }}"}]},
+        )
+        self.assertEqual(runtime.secret_values, {})
+
+    def test_run_empty_file_is_refused_before_a_value_is_returned(self):
+        home, _repo = _secret_home(self.root, {"API": b"\n"})
+        os.environ["HOME"] = str(home)
+        runtime = _JobRuntime()
+        with self.assertRaises(SecretError) as raised:
+            _bind_job_secrets(
+                runtime,
+                SecretAccess("owner/demo"),
+                PUSH,
+                "push",
+                {"steps": [{"run": "echo ${{ secrets.API }}"}]},
+            )
+        self.assertEqual(str(raised.exception), "secret API is empty")
+        self.assertNotIn(str(home), str(raised.exception))
+
+    def test_run_allowlist_miss_does_not_open_a_loose_directory(self):
+        home, _repo = _secret_home(self.root, {"API": b"value\n"}, repo_mode=0o777)
+        os.environ["HOME"] = str(home)
+        runtime = _JobRuntime()
+        event = {
+            "ref": "refs/heads/feature",
+            "repository": {"full_name": "owner/demo", "default_branch": "main"},
+        }
+        _bind_job_secrets(
+            runtime,
+            SecretAccess("owner/demo"),
+            event,
+            "push",
+            {"steps": [{"run": "echo ${{ secrets.API }}"}]},
+        )
+        self.assertEqual(runtime.secret_values, {})
+        self.assertEqual(runtime.secret_notes, [])
+
+    def test_run_omitted_config_does_not_open(self):
+        home, _repo = _secret_home(self.root, {"API": b"value\n"}, repo_mode=0o777)
+        os.environ["HOME"] = str(home)
+        runtime = _JobRuntime()
+        _bind_job_secrets(
+            runtime,
+            None,
+            PUSH,
+            "push",
+            {"steps": [{"run": "echo ${{ secrets.API }}"}]},
+        )
+        self.assertIsNone(runtime.secret_values)
+
 
 class SecretModeTests(unittest.TestCase):
     def test_directory_mode_constant(self):
         self.assertEqual(stat.S_IMODE(0o100700), 0o700)
         self.assertEqual(MAX_SECRET_BYTES, 48 * 1024)
+
+
+class RunRewriteTests(unittest.TestCase):
+    def test_proven_contexts_rewrite_to_the_reserved_name(self):
+        cases = {
+            "echo ${{ secrets.API }}": ("echo ${RR_SECRET_API}", ["API"]),
+            "echo ${{ secrets.API }}_v2": ("echo ${RR_SECRET_API}_v2", ["API"]),
+            'echo "${{ secrets.API }}"': ('echo "${RR_SECRET_API}"', ["API"]),
+            "echo ${{ secrets.npm_token }}": ("echo ${RR_SECRET_NPM_TOKEN}", ["NPM_TOKEN"]),
+            "echo ${{ secrets.API }}${{ secrets.OTHER }}": (
+                "echo ${RR_SECRET_API}${RR_SECRET_OTHER}",
+                ["API", "OTHER"],
+            ),
+            "echo ${{ secrets.API }} ${{ github.sha }}": (
+                "echo ${RR_SECRET_API} ${{ github.sha }}",
+                ["API"],
+            ),
+            "echo ${{ secrets.GITHUB_TOKEN }}": ("echo ${RR_SECRET_GITHUB_TOKEN}", []),
+            "echo  ${{ secrets.API }}": ("echo  ${RR_SECRET_API}", ["API"]),
+            "echo $(echo ${{ secrets.API }})": ("echo $(echo ${RR_SECRET_API})", ["API"]),
+            'echo "$(echo ${{ secrets.API }})"': (
+                'echo "$(echo ${RR_SECRET_API})"',
+                ["API"],
+            ),
+            "echo <<< ${{ secrets.API }}": ("echo <<< ${RR_SECRET_API}", ["API"]),
+            "echo ${var:-x} ${{ secrets.API }}": (
+                "echo ${var:-x} ${RR_SECRET_API}",
+                ["API"],
+            ),
+            "echo ${var:-$(echo ${{ secrets.API }})}": (
+                "echo ${var:-$(echo ${RR_SECRET_API})}",
+                ["API"],
+            ),
+            "cat <<'EOF'\nbody\nEOF\necho ${{ secrets.API }}\n": (
+                "cat <<'EOF'\nbody\nEOF\necho ${RR_SECRET_API}\n",
+                ["API"],
+            ),
+            "cat <<EOF $(echo x)\nEOF\necho ${{ secrets.API }}\n": (
+                "cat <<EOF $(echo x)\nEOF\necho ${RR_SECRET_API}\n",
+                ["API"],
+            ),
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(rewrite_run_secrets(source, None), expected)
+                check_step_run(source, None)
+
+    def test_unproven_contexts_and_other_shells_name_run(self):
+        refused = [
+            "echo '${{ secrets.API }}'",
+            "echo $'${{ secrets.API }}'",
+            "echo $'\\'${{ secrets.API }}'",
+            "echo hi # ${{ secrets.API }}",
+            "cat <<'EOF'\n${{ secrets.API }}\nEOF\n",
+            "cat <<EOF\n${{ secrets.API }}\nEOF\n",
+            "cat <<EOF $(echo x)\n${{ secrets.API }}\nEOF\n",
+            "echo $(cat <<EOF)\n${{ secrets.API }}\nEOF\n",
+            'echo $"${{ secrets.API }}"',
+            "echo ${var:-${{ secrets.API }}}",
+            "echo ${var:-'${{ secrets.API }}'}",
+            "echo $(( ${{ secrets.API }} ))",
+            "echo \\${{ secrets.API }}",
+            'echo "${{ secrets.API }}',
+            "echo \"$(echo '${{ secrets.API }}')\"",
+        ]
+        for source in refused:
+            with self.subTest(source=source):
+                with self.assertRaises(ExprError) as raised:
+                    rewrite_run_secrets(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+        for shell in ("pwsh", "python {0}", "/bin/bash", "bash ", "Bash", "", "bash {0} {0}"):
+            with self.subTest(shell=shell):
+                with self.assertRaises(ExprError) as raised:
+                    rewrite_run_secrets("echo ${{ secrets.API }}", shell)
+                self.assertEqual(str(raised.exception), "run is not accepted")
+        for shell in (
+            "bash",
+            "sh",
+            "bash -e {0}",
+            "sh -e {0}",
+            "bash --noprofile --norc -eo pipefail {0}",
+        ):
+            with self.subTest(shell=shell):
+                text, names = rewrite_run_secrets("echo ${{ secrets.API }}", shell)
+                self.assertEqual(text, "echo ${RR_SECRET_API}")
+                self.assertEqual(names, ["API"])
+        self.assertEqual(rewrite_run_secrets("echo hi", "pwsh"), ("echo hi", []))
+
+    def test_other_secret_reads_stay_refused(self):
+        for source in (
+            "echo ${{ secrets.API || 'x' }}",
+            "echo ${{ secrets['API'] }}",
+            "echo ${{ secrets.GITHUB_PATH }}",
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(ExprError) as raised:
+                    rewrite_run_secrets(source, None)
+                self.assertEqual(str(raised.exception), "secrets reference is not accepted")
+
+    def test_plan_refuses_a_bad_shell_and_keeps_a_bash_override(self):
+        refused = """\
+on: push
+defaults:
+  run:
+    shell: pwsh
+jobs:
+  build:
+    steps:
+      - run: echo ${{ secrets.API }}
+"""
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(refused.encode(), "build")
+        self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+        self.assertTrue((raised.exception.field or "").endswith(".run"))
+        self.assertIn("run is not accepted", str(raised.exception))
+
+        overridden = """\
+on: push
+defaults:
+  run:
+    shell: pwsh
+jobs:
+  build:
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: echo ${{ secrets.API }}
+"""
+        planned = plan_workflow(overridden.encode(), "build")["plan"]
+        self.assertEqual(planned["job"]["steps"][0]["run"], "echo ${{ secrets.API }}")
+
+        step_shell = """\
+on: push
+defaults:
+  run:
+    shell: pwsh
+jobs:
+  build:
+    steps:
+      - shell: bash
+        run: echo ${{ secrets.API }}
+"""
+        planned = plan_workflow(step_shell.encode(), "build")["plan"]
+        self.assertEqual(planned["job"]["steps"][0]["run"], "echo ${{ secrets.API }}")
+
+        plain = """\
+on: push
+jobs:
+  build:
+    steps:
+      - shell: pwsh
+        run: echo hi
+"""
+        planned = plan_workflow(plain.encode(), "build")["plan"]
+        self.assertEqual(planned["job"]["steps"][0]["run"], "echo hi")
+
+    def test_composite_uses_its_own_shell(self):
+        workflow = """\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: ./pass
+"""
+        bash = """\
+name: pass
+description: pass
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo ${{ secrets.API }}
+"""
+        root = Path(tempfile.mkdtemp(prefix="rr-run-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        action = root / "pass"
+        action.mkdir()
+        (action / "action.yml").write_text(bash)
+        planned = plan_workflow(workflow.encode(), "build", action_root=root)["plan"]
+        self.assertEqual(
+            planned["job"]["steps"][0]["steps"][0]["run"],
+            "echo ${{ secrets.API }}",
+        )
+        (action / "action.yml").write_text(bash.replace("shell: bash", "shell: pwsh"))
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(workflow.encode(), "build", action_root=root)
+        self.assertIn("run is not accepted", str(raised.exception))
+        self.assertTrue((raised.exception.field or "").endswith(".run"))
+
+    def test_called_workflow_uses_its_own_shell(self):
+        caller = """\
+on: push
+defaults:
+  run:
+    shell: pwsh
+jobs:
+  call:
+    uses: ./.github/workflows/called.yml
+"""
+        called = """\
+on: workflow_call
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    steps:
+      - run: echo ${{ secrets.API }}
+"""
+        root = Path(tempfile.mkdtemp(prefix="rr-call-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        path = root / ".github" / "workflows" / "called.yml"
+        path.parent.mkdir(parents=True)
+        path.write_text(called)
+        planned = plan_workflow(caller.encode(), "call", action_root=root)["plan"]
+        self.assertEqual(
+            planned["job"]["call"]["jobs"][0]["steps"][0]["run"],
+            "echo ${{ secrets.API }}",
+        )
+        path.write_text(called.replace("shell: bash", "shell: pwsh"))
+        caller_bash = caller.replace("shell: pwsh", "shell: bash")
+        with self.assertRaises(PlanError) as raised:
+            plan_workflow(caller_bash.encode(), "call", action_root=root)
+        self.assertIn("run is not accepted", str(raised.exception))
+
+    def test_publish_and_render_keep_the_value_out_of_the_script(self):
+        commands = Path(tempfile.mkdtemp(prefix="rr-cmd-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(commands))
+        mounted = _publish_script(commands, "step-0", "echo ${RR_SECRET_API}_v2\n")
+        self.assertEqual(mounted, "/run/rookrunner-cmd/step-0-script")
+        body = (commands / "step-0-script").read_text(encoding="utf-8")
+        self.assertIn("${RR_SECRET_API}", body)
+        self.assertNotIn("fixture", body)
+
+        runtime = _JobRuntime()
+        with self.assertRaises(ExprError) as raised:
+            _render_run("echo ${{ secrets.API }}", {}, None, runtime)
+        self.assertEqual(str(raised.exception), "context is not available: secrets")
+
+        runtime.secret_values = {}
+        text, env = _render_run("echo ${{ secrets.API }}_v2", {}, None, runtime)
+        self.assertEqual(text, "echo ${RR_SECRET_API}_v2")
+        self.assertEqual(env, {"API": ""})
+        text, env = _render_run("echo ${{ secrets.GITHUB_TOKEN }}", {}, None, runtime)
+        self.assertEqual(text, "echo ${RR_SECRET_GITHUB_TOKEN}")
+        self.assertEqual(env, {})
+
+        runtime.secret_values = {"API": 'fixture run "9f3a"'}
+        text, env = _render_run(
+            "echo ${{ secrets.API }} ${{ github.sha }}",
+            {"github": {"sha": "abc123"}},
+            "bash",
+            runtime,
+        )
+        self.assertEqual(text, "echo ${RR_SECRET_API} abc123")
+        self.assertEqual(env["API"], 'fixture run "9f3a"')
+        self.assertNotIn("fixture", text)
+
+        step = {"env": {}, "_rr_secrets": {"API": 'fixture run "9f3a"'}}
+        other = {"env": {}}
+        job = {"env": {"RR_SECRET_API": "from-job"}}
+        found = dict(_merged_env({"env": {}}, job, step, None, "step-0", None))
+        self.assertEqual(found["RR_SECRET_API"], 'fixture run "9f3a"')
+        plain = dict(_merged_env({"env": {}}, {"env": {}}, other, None, "step-1", None))
+        self.assertNotIn("RR_SECRET_API", plain)
