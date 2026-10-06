@@ -14,10 +14,12 @@ on 2026-10-05.
 
 The owner chose the credential on 2026-10-05. It is a new GitHub App.
 Its name is Rookrunner-App. It is not the moonbase2090-agents App.
-The App exists. Its App ID is 5201333. The installation and the
-private key are still pending. This document does not install the
+The App exists. Its App ID is 5201333. The operator names the
+installation as `168290590`. The mint reads `installation-id` and
+the code does not compare the file to that number. The private key
+stays out of the repository. This document does not install the
 App, does not start a sign-in, and does not read a key. It contains
-no client id, installation id, or key material.
+no client id or key material.
 
 ## Credential
 
@@ -56,9 +58,12 @@ world-readable, or a path that resolves outside that directory is a
 refusal. The refusal happens before any HTTP request. The error does
 not include the path, the key, or file bytes.
 
-The key, the client id, and the installation id never enter this
-repository, `.github/workflows/check.yml`, a job container, a log, or
-a run record. Tests point `HOME` at a temporary directory and generate
+The private key stays out of the repository. The key, the client
+id, and the `installation-id` file never enter this repository,
+`.github/workflows/check.yml`, a job container, a log, or a run
+record. The operator names the installation as `168290590`. The
+mint reads `installation-id` and the code does not compare the file
+to that number. Tests point `HOME` at a temporary directory and generate
 a fixture key there. No test reads `~/Secrets/github-app/rookrunner-app/`
 and no test contacts `api.github.com`.
 
@@ -222,7 +227,9 @@ does not remove that warning.
 ## What this implementation does not do
 
 The App exists. Its name is Rookrunner-App and its App ID is
-5201333. It is not installed, and the private key is still pending.
+5201333. The operator names the installation as `168290590`. The
+mint reads `installation-id` and the code does not compare the file
+to that number. The private key stays out of the repository.
 No sign-in is started. No file under
 `~/Secrets/github-app/rookrunner-app/` is read by a test or by this
 repository. Omitting `--app-key` still posts a commit status from

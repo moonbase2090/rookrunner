@@ -43,10 +43,12 @@ plan below has landed.
 
 The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
 App ID is 5201333. It is not the moonbase2090-agents App. The
-installation and the private key are still pending. This document
+operator names the installation as `168290590`. The mint reads
+`installation-id` and the code does not compare the file to that
+number. The private key stays out of the repository. This document
 does not install the App, does not start a sign-in, and does not
-read a key. It contains no client id, installation id, or key
-material. Permissions on the App stay Checks write, Commit statuses
+read a key. It contains no client id or key material. Permissions
+on the App stay Checks write, Commit statuses
 write, and Contents read. GitHub sets Metadata to read on every App.
 That is not an extra permission.
 
@@ -632,9 +634,10 @@ These stay out of this design.
 - Refreshing the job token, and writing it to disk.
 - Creating the secret directory, minting a token, installing the
   App, starting a sign-in, or reading a key. The App ID is
-  5201333. The installation and the private key are still pending,
-  so an implementation cannot mint against the live App until the
-  operator finishes those steps.
+  5201333. The operator names the installation as `168290590`.
+  The mint reads `installation-id` and the code does not compare
+  the file to that number. The private key stays out of the
+  repository.
 
 ## Decided answers
 
@@ -844,8 +847,10 @@ No secret directory is created by this document. No sign-in is
 started. No file under
 `~/Secrets/github-app/rookrunner-app/` is read by this document.
 The App is not installed by this document. Its App ID is 5201333.
-No App permission is added. The installation and the private key
-remain pending. `write` stays rejected. A job token is minted only
+No App permission is added. The operator names the installation as
+`168290590`. The mint reads `installation-id` and the code does not
+compare the file to that number. The private key stays out of the
+repository. `write` stays rejected. A job token is minted only
 when `--app-key` is set, permissions allow Contents read, and a
 step needs `secrets.GITHUB_TOKEN` or exact `github.token`.
 `permissions: {}` mints nothing. The record stores the revocation
