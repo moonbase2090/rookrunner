@@ -401,10 +401,15 @@ def main():
         help=(
             "private key path for the Rookrunner GitHub App. "
             "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
-            "The worker does not open the file and does not mint a token. "
+            "worker --app-key opens that file only when a job mints a Contents-read token. "
             "Combined with --docker-socket, startup refuses unless "
             "--runner-image is set and the ~/Secrets probe exits 0."
         ),
+    )
+    worker.add_argument(
+        "--api-base",
+        default=DEFAULT_API_BASE,
+        help=f"GitHub API origin (default {DEFAULT_API_BASE})",
     )
     worker.add_argument(
         "--secret-ref",
@@ -598,6 +603,7 @@ def main():
                 app_key=args.app_key,
                 secret_refs=args.secret_ref,
                 secret_pushers=args.secret_pusher,
+                api_base=args.api_base,
             )
             return
         if args.command == "describe":

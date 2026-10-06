@@ -1,8 +1,8 @@
 # Secrets, GITHUB_TOKEN, and write permissions
 
-Status: designed. p7-mask, p7-trust-gate, p7-socket-lock,
-p7-secret-env, and p7-secret-run are implemented. p7-job-token is
-not.
+Status: the six-PR plan is implemented. p7-mask, p7-trust-gate,
+p7-socket-lock, p7-secret-env, p7-secret-run, and p7-job-token are
+implemented.
 MB2090 accepted the amended answers for all seven questions on
 2026-10-05. The source of
 those answers is the review comment on pull request 63:
@@ -22,18 +22,22 @@ reusable-workflow call outputs. The capability
 version stays 12. A version 11 plan is not migrated. No plan field
 and no capability entry are added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` and `write-all`
-stay rejected. `GITHUB_TOKEN` and `github.token` stay unset. No
-job token is minted. An exact `secrets.NAME` in `run` is rewritten
+stay rejected. An exact `secrets.NAME` in `run` is rewritten
 to `${RR_SECRET_NAME}` for bash and sh when the lexer proves the
 context. The script contains the rewritten text and does not
-contain the value. `secrets.GITHUB_TOKEN` is recognized and stays
-empty. This is not a GitHub-equivalence claim.
+contain the value. A job mints one Contents-read installation token
+when `--app-key` is set, permissions allow Contents read, and a step
+needs `secrets.GITHUB_TOKEN` or exact `github.token`. Otherwise those
+two aliases stay empty and do not require `--secrets`. The token is
+revoked when the job ends. The run record stores the attempt, not the
+token. `permissions: {}` mints nothing. This is not a GitHub-equivalence claim.
 
 The seven answers below are accepted direction. Masking from answer
 3 is implemented. The fork comparison and the allowlist match from
 answer 7 are implemented. The worker flags and the socket lock from
 answer 6 are implemented. File secrets in step `env` and `with` are
-implemented. The `run` rewrite is implemented. The job token is not.
+implemented. The `run` rewrite is implemented. The job token is
+implemented.
 Deploy workflows and macOS jobs stay deferred until the implementation
 plan below has landed.
 
@@ -58,7 +62,7 @@ https://docs.github.com/en/organizations/managing-programmatic-access-to-your-or
 
 ## What the engine does today
 
-These are implemented facts. p7-job-token does not change them yet.
+These are implemented facts.
 
 The planner records `read`, `none`, and `read-all`. It rejects
 `write`, `write-all`, and an unknown scope. No token is created from
@@ -93,20 +97,27 @@ sets that variable on that step only. The script file contains the
 rewritten text and does not contain the value. Another shell,
 single quotes, `$'...'`, a quoted heredoc, a comment, or an
 unproven context refuses and names `run`, and the step does not
-run. `secrets.GITHUB_TOKEN` is recognized and stays empty. No job
-token is minted. `github.token` is not rewritten. When `--secrets`
-is omitted, a `secrets` reference stays the withheld-context
-error. When the
-allowlist does not match, the directory is not opened and an exact
-file-secret expression is an empty string.
+run. `secrets.GITHUB_TOKEN` and exact `github.token` rewrite to
+`${RR_SECRET_GITHUB_TOKEN}`. When the job holds a token, that
+variable is the token. Otherwise both aliases stay empty. Those two
+aliases do not require `--secrets`. Other secrets still do. When
+`--secrets` is omitted, another `secrets` reference stays the
+withheld-context error. When the allowlist does not match, the
+directory is not opened and an exact file-secret expression is an
+empty string.
 
-`github.token` and `GITHUB_TOKEN` stay unset. The check-run post
-mints a separate installation token when `--app-key` is set. That
-token requests Checks write and Commit statuses write only. It is
-discarded before the post command returns. It is not exported to the
-job and it is not `GITHUB_TOKEN`. The key path rules in
+A job mints one Contents-read installation token when `--app-key` is
+set, permissions allow Contents read, and a step needs
+`secrets.GITHUB_TOKEN` or exact `github.token`. `permissions: {}`
+mints nothing. The token is revoked when the job ends. The run
+record stores whether revocation was attempted and accepted, and it
+does not store the token. The check-run post mints a separate
+installation token when `--app-key` is set. That token requests
+Checks write and Commit statuses write only. It is discarded before
+the post command returns. It is not exported to the job and it is
+not `GITHUB_TOKEN`. The key path rules in
 [check runs](check-runs.md) stay. The key directory is not a job
-mount.
+mount. `worker --app-key` opens the key only when a job mints.
 
 Stdout `add-mask` registers a value for later log text in the same
 job. The mask replaces that value, each of its whitespace-separated
@@ -131,7 +142,8 @@ that step's stdout was read. Reusable-workflow call outputs are
 mapped through the secret registrations collected from the jobs
 inside the call. Add-mask values are not copied onto that list. An
 injected file secret is registered with `secret=True` before the
-step writes a log line. No job token is minted.
+step writes a log line. A minted job token is registered on that
+mask before the first step.
 
 The poll compares a pull request's head and base repository ids.
 The ids are integers and match when they are equal. A bool is not
@@ -158,8 +170,8 @@ secret is read and no token is minted.
 `worker --github-repository owner/name`. Any other shape is a
 refusal at startup, and the error names the flag.
 `worker --app-key` accepts only
-`~/Secrets/github-app/rookrunner-app/private-key.pem` and does not
-open that file. `worker --secret-ref` and `worker --secret-pusher`
+`~/Secrets/github-app/rookrunner-app/private-key.pem` and opens that
+file only when a job mints a Contents-read token. `worker --secret-ref` and `worker --secret-pusher`
 may be repeated. A ref must be a full ref. A pusher must be a
 GitHub login. `--docker-socket` combined with `--app-key` or
 `--secrets` refuses at startup and names both flags, unless
@@ -826,12 +838,15 @@ each item proves it.
 
 ## What this design does not do
 
-p7-mask, p7-trust-gate, p7-socket-lock, p7-secret-env, and
-p7-secret-run change the engine as the plan names. p7-job-token
-does not.
-No secret directory is created. No token is minted. No sign-in is
+p7-mask, p7-trust-gate, p7-socket-lock, p7-secret-env,
+p7-secret-run, and p7-job-token change the engine as the plan names.
+No secret directory is created by this document. No sign-in is
 started. No file under
-`~/Secrets/github-app/rookrunner-app/` is read. The App is not
-installed by this document. Its App ID is 5201333. No App
-permission is added. The installation and the private key remain
-pending. `write` stays rejected. `GITHUB_TOKEN` stays unset.
+`~/Secrets/github-app/rookrunner-app/` is read by this document.
+The App is not installed by this document. Its App ID is 5201333.
+No App permission is added. The installation and the private key
+remain pending. `write` stays rejected. A job token is minted only
+when `--app-key` is set, permissions allow Contents read, and a
+step needs `secrets.GITHUB_TOKEN` or exact `github.token`.
+`permissions: {}` mints nothing. The record stores the revocation
+attempt, not the token.

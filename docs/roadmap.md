@@ -117,7 +117,7 @@ through NS-43 in [next steps](planning/next-steps.md).
    rewrites an exact `secrets.NAME` in `run` to `${RR_SECRET_NAME}`
    for bash and sh when the lexer proves the context. The script
    contains the rewritten text and does not contain the value.
-   p7-job-token is not implemented. MB2090 accepted the amended
+   p7-job-token is implemented. MB2090 accepted the amended
    answers on 2026-10-05.
    The rest of the provisional list is not numbered
    yet.

@@ -13,7 +13,7 @@ secrets, `GITHUB_TOKEN`, and `write` permissions for
 owner-repository push and pull-request runs on this one local worker
 ([secrets](secrets.md)). p7-mask changes the job mask. p7-trust-gate
 compares pull-request repository ids and stores the allowlist fields
-on the event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. p7-secret-env reads a file secret into a step env or with expression that is exactly secrets.NAME when --secrets is set and the allowlist matches, and passes those secret registrations into reusable-workflow call outputs. p7-secret-run rewrites an exact secrets.NAME in run to ${RR_SECRET_NAME} for bash and sh when the lexer proves the context. The script contains the rewritten text and does not contain the value. p7-job-token is not implemented. This is
+on the event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. p7-secret-env reads a file secret into a step env or with expression that is exactly secrets.NAME when --secrets is set and the allowlist matches, and passes those secret registrations into reusable-workflow call outputs. p7-secret-run rewrites an exact secrets.NAME in run to ${RR_SECRET_NAME} for bash and sh when the lexer proves the context. The script contains the rewritten text and does not contain the value. p7-job-token is implemented. This is
 not a GitHub-equivalence claim.
 
 The scope is the operator's own repositories. It is outbound HTTPS
@@ -276,7 +276,7 @@ allowlist matches, and passes those secret registrations into
 reusable-workflow call outputs. p7-secret-run rewrites an exact
 `secrets.NAME` in `run` to `${RR_SECRET_NAME}` for bash and sh when
 the lexer proves the context. The script contains the rewritten text
-and does not contain the value. p7-job-token is not implemented.
+and does not contain the value. p7-job-token is implemented.
 MB2090 accepted the amended answers on
 2026-10-05.
 The rank table above stays the 2026-10-04 reading.

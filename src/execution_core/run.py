@@ -93,9 +93,11 @@ is not copied in. `with` becomes the called workflow's `inputs` context
 and is not exported as environment variables. An omitted optional input is
 false, 0, or an empty string
 (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax).
-Secrets are not passed into a called workflow, and `github.token` is not
-created. GitHub passes `github.token` into a called workflow. This subset
-does not. Step `if` and job `if` are evaluated.
+Secrets are not passed into a called workflow. `github.token` is not a
+github context property. GitHub passes `github.token` into a called
+workflow. This subset does not. Each job mints its own token when
+that level's permissions allow Contents read and a step needs it.
+Step `if` and job `if` are evaluated.
 Expressions in workflow and job `env`, step `env`, `run`, `with`, and
 step and job `name` are evaluated, including mixed text. The plan
 stores the source. `run` is written on the host just before exec.
@@ -107,8 +109,15 @@ the step writes a log line. Reusable-workflow call outputs use those
 secret registrations. An exact `secrets.NAME` in `run` is rewritten
 to `${RR_SECRET_NAME}` when the shell is bash or sh and the lexer
 proves the context. The engine sets that variable on that step. The
-script file does not contain the value. `secrets.GITHUB_TOKEN` is
-rewritten the same way and stays unset. No job token is minted.
+script file does not contain the value. `secrets.GITHUB_TOKEN` and an
+exact `github.token` are rewritten the same way. When the job holds a
+token, that variable is the token. Otherwise it is empty. Those two
+aliases do not require `--secrets`. Other secrets still do. A held
+token is also `GITHUB_TOKEN` on every step of that job, including
+`post`. The token stays in memory. The run record stores whether
+revocation was attempted and whether the call was accepted. It does
+not store the token. One warning is written when a held token reaches
+55 minutes.
 `hashFiles` is not implemented. `github.event` is the caller
 event. `github.workspace`,
 `github.job`, `github.workflow`, `github.event_path`, and, when the caller
@@ -215,13 +224,26 @@ from .expr import (
     WORKFLOW_ENV_CONTEXTS,
     ExprError,
     evaluate,
+    exact_job_token_reference,
     exact_secret_reference,
     job_is_enabled,
     mentions_context,
     render_text,
     rewrite_run_secrets,
     step_is_enabled,
+    text_reads_github_token,
 )
+from .job_token import (
+    JobTokenConfig,
+    TokenExpiry,
+    contents_read_granted,
+    finish_job_token,
+    job_needs_token,
+    mint_job_token,
+    public_token_revocation,
+    resolved_permissions,
+)
+from .status import StatusError
 from .secrets import (
     SecretAccess,
     SecretError,
@@ -739,6 +761,12 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
     if extra_reserved:
         reserved.update(extra_reserved)
     merged.update(reserved)
+    # Applied last, and only while this job holds a token. The default
+    # sets stay without GITHUB_TOKEN. A step that does not hold one
+    # keeps the name unset.
+    held = _held_job_token(runtime)
+    if held is not None:
+        merged["GITHUB_TOKEN"] = held
     return [(key, merged[key]) for key in sorted(merged)]
 
 
@@ -2376,9 +2404,90 @@ def _attach_prelude(record, prelude):
     record["stderr"] = prelude + (record.get("stderr") or "")
 
 
+def _held_job_token(runtime):
+    """Return the token this job holds, or None when it holds none."""
+
+    token = None if runtime is None else getattr(runtime, "job_token", None)
+    if isinstance(token, str) and token != "":
+        return token
+    return None
+
+
+def _clock_value(now):
+    """Return a monotonic reading. A bool or a non-number is not a clock."""
+
+    if not callable(now):
+        return None
+    value = now()
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _job_token_default(default, runtime):
+    """Return the held token, or empty, for an exact job-token action default.
+
+    None means this default is not that alias. Other defaults keep their
+    current evaluation, including a composite default left as source text.
+    """
+
+    if exact_job_token_reference(default) != "GITHUB_TOKEN":
+        return None
+    held = _held_job_token(runtime)
+    return "" if held is None else held
+
+
+def _prepare_job_token(runtime, config, job, workflow, now, fail):
+    """Mint when every gate passes. True means the steps may run.
+
+    False means `fail` already recorded the mint error. A job that does
+    not receive a token still runs, and the two aliases deliver empty.
+    The key is not opened unless a mint is required.
+    """
+
+    if config is None:
+        return True
+    if not isinstance(config, JobTokenConfig):
+        fail("job token configuration is not accepted")
+        return False
+    if not contents_read_granted(resolved_permissions(job, workflow)):
+        return True
+    if not job_needs_token(job):
+        return True
+    try:
+        token = mint_job_token(config)
+    except StatusError as exc:
+        fail(str(exc))
+        return False
+    runtime.job_token = token
+    minted_at = _clock_value(now)
+    runtime.token_minted_at = time.monotonic() if minted_at is None else minted_at
+    register_mask(runtime.masks, token, secret=True, name="GITHUB_TOKEN")
+    return True
+
+
+def _stamp_token_warning(record, runtime, now):
+    """Prepend the one expiry warning. The text does not include the token."""
+
+    if not isinstance(record, dict) or _held_job_token(runtime) is None:
+        return
+    expiry = getattr(runtime, "token_expiry", None)
+    if expiry is None:
+        return
+    warning = expiry.observe(getattr(runtime, "token_minted_at", None), now)
+    if not isinstance(warning, str) or warning == "":
+        return
+    record["stderr"] = warning + "\n" + (record.get("stderr") or "")
+
+
 def _render_secret_or_expr(text, values, runtime):
     """Render one step `env` or `with` value, including an exact secret."""
 
+    if exact_job_token_reference(text) == "GITHUB_TOKEN":
+        held = _held_job_token(runtime)
+        return "" if held is None else held
+    if text_reads_github_token(text):
+        raise ExprError("github.token reference is not accepted")
     name = exact_secret_reference(text)
     if name is None:
         return _render_expr(text, values)
@@ -2396,19 +2505,23 @@ def _render_secret_or_expr(text, values, runtime):
 def _render_run(text, values, shell, runtime):
     """Rewrite exact `run` secrets, then render the remaining expressions.
 
-    The env map is the file values for this step. ``GITHUB_TOKEN`` is not
-    included. A missing file name is an empty string. ``--secrets`` omitted
-    leaves `secret_values` unset and refuses before the script is published.
+    The env map is the file values for this step. ``GITHUB_TOKEN`` is
+    included only when this job holds a token and the rewrite named that
+    alias. A missing file name is an empty string. ``--secrets`` omitted
+    refuses when a file secret was rewritten. The two job-token aliases
+    do not require it, and they deliver empty when no token is held.
     """
 
     rewritten, file_names = rewrite_run_secrets(text, shell)
-    if rewritten != text:
+    secret_env = {}
+    if file_names:
         loaded = None if runtime is None else getattr(runtime, "secret_values", None)
         if not isinstance(loaded, dict):
             raise ExprError("context is not available: secrets")
         secret_env = {name: loaded.get(name, "") for name in file_names}
-    else:
-        secret_env = {}
+    held = _held_job_token(runtime)
+    if held is not None and "${RR_SECRET_GITHUB_TOKEN}" in rewritten:
+        secret_env["GITHUB_TOKEN"] = held
     return _render_expr(rewritten, values), secret_env
 
 
@@ -2430,6 +2543,8 @@ def run_job(
     actions=None,
     runner_image=None,
     secrets=None,
+    job_token=None,
+    token_clock=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -2486,6 +2601,8 @@ def run_job(
         _setup("event name is not accepted")
     if secrets is not None and not isinstance(secrets, SecretAccess):
         _setup("secret configuration is not accepted")
+    if job_token is not None and not isinstance(job_token, JobTokenConfig):
+        _setup("job token configuration is not accepted")
     started = time.monotonic()
     reference, digest, workflow, jobs, event_bytes, workspace, manifest = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
@@ -2509,6 +2626,7 @@ def run_job(
     mounted = None
     failure = None
     records = []
+    revocations = []
     service_cleanup = 0
     attempt_token = None
     path_token = None
@@ -2606,6 +2724,10 @@ def run_job(
                         failed = record
                 else:
                     records.append(_step_result(step, "skipped", None, "", "", None, inner["id"]))
+
+        def token_now():
+            value = _clock_value(token_clock)
+            return time.monotonic() if value is None else value
 
         def _execute_jobs(job_list, level_workflow, inputs, path, *, reset_first, secret_sink=None):
             nonlocal deadline, failed, output_bytes, graceful, outcome, service_cleanup
@@ -2879,119 +3001,147 @@ def run_job(
                                 continue
                             prior = []
                             runtime = _JobRuntime()
+                            runtime.token_expiry = TokenExpiry()
                             try:
-                                _bind_job_secrets(
-                                    runtime, secrets, event, event_name, active_job, active_workflow
-                                )
-                            except SecretError as exc:
-                                _fail_text(exc)
-                                if fail_fast:
-                                    break
-                                continue
-                            prelude = _secret_prelude(runtime)
-                            _share_secret_masks(runtime.masks, secret_sink)
-                            attached = False
-                            for step in active_job["steps"]:
-                                if deadline - time.monotonic() <= 0:
-                                    raise _JobDeadline()
-                                record = _consider_step(
-                                    docker_bin,
-                                    name,
-                                    step,
-                                    active_workflow,
-                                    active_job,
-                                    event,
-                                    workspace,
-                                    bash_ok,
-                                    step_timeout,
-                                    deadline,
-                                    prior,
-                                    owner is not None and owner.cancelled(),
-                                    needs,
-                                    scripts[(path + (job["id"],), step["index"])],
+                                try:
+                                    _bind_job_secrets(
+                                        runtime,
+                                        secrets,
+                                        event,
+                                        event_name,
+                                        active_job,
+                                        active_workflow,
+                                    )
+                                except SecretError as exc:
+                                    _fail_text(exc)
+                                    if fail_fast:
+                                        break
+                                    continue
+                                if not _prepare_job_token(
                                     runtime,
-                                    commands,
-                                    matrix=matrix,
-                                    strategy=strategy_context,
-                                    inputs=inputs,
-                                )
-                                if not attached:
-                                    _attach_prelude(record, prelude)
-                                    attached = True
-                                records.append(record)
-                                prior.append(record)
-                                if record["status"] == "failed":
-                                    job_failed = True
-                                    if failed is None:
-                                        failed = record
-                            if owner is not None and owner.cancelled():
-                                graceful = True
-                                outcome = _cancelled(resolved, reference, records)
-                                cancelled_run = True
-                                break
-                            posts = _node24_posts(active_job, runtime)
-                            if posts and deadline - time.monotonic() <= 0:
-                                raise _JobDeadline()
-                            post_index = len(active_job["steps"])
-                            for step in posts:
+                                    job_token,
+                                    active_job,
+                                    active_workflow,
+                                    token_now,
+                                    _fail_text,
+                                ):
+                                    if fail_fast:
+                                        break
+                                    continue
+                                prelude = _secret_prelude(runtime)
+                                _share_secret_masks(runtime.masks, secret_sink)
+                                attached = False
+                                for step in active_job["steps"]:
+                                    if deadline - time.monotonic() <= 0:
+                                        raise _JobDeadline()
+                                    record = _consider_step(
+                                        docker_bin,
+                                        name,
+                                        step,
+                                        active_workflow,
+                                        active_job,
+                                        event,
+                                        workspace,
+                                        bash_ok,
+                                        step_timeout,
+                                        deadline,
+                                        prior,
+                                        owner is not None and owner.cancelled(),
+                                        needs,
+                                        scripts[(path + (job["id"],), step["index"])],
+                                        runtime,
+                                        commands,
+                                        matrix=matrix,
+                                        strategy=strategy_context,
+                                        inputs=inputs,
+                                    )
+                                    if not attached:
+                                        _attach_prelude(record, prelude)
+                                        attached = True
+                                    _stamp_token_warning(record, runtime, token_now())
+                                    records.append(record)
+                                    prior.append(record)
+                                    if record["status"] == "failed":
+                                        job_failed = True
+                                        if failed is None:
+                                            failed = record
                                 if owner is not None and owner.cancelled():
                                     graceful = True
                                     outcome = _cancelled(resolved, reference, records)
                                     cancelled_run = True
                                     break
-                                if deadline - time.monotonic() <= 0:
+                                posts = _node24_posts(active_job, runtime)
+                                if posts and deadline - time.monotonic() <= 0:
                                     raise _JobDeadline()
-                                record = _consider_post(
-                                    docker_bin,
-                                    name,
-                                    step,
-                                    active_workflow,
-                                    active_job,
-                                    event,
-                                    workspace,
-                                    bash_ok,
-                                    step_timeout,
-                                    deadline,
-                                    prior,
-                                    needs,
-                                    scripts[(path + (job["id"],), step["index"])],
-                                    runtime,
-                                    commands,
-                                    post_index,
-                                    job.get("id"),
-                                    matrix=matrix,
-                                    strategy=strategy_context,
-                                    inputs=inputs,
-                                )
-                                records.append(record)
-                                post_index += 1
-                                if record["status"] == "failed":
-                                    job_failed = True
-                                    if failed is None:
-                                        failed = record
-                            if cancelled_run:
-                                break
-                            if publish:
-                                produced, output_bytes = _job_outputs(
-                                    active_job,
-                                    _expression_values(
-                                        event,
+                                post_index = len(active_job["steps"])
+                                for step in posts:
+                                    if owner is not None and owner.cancelled():
+                                        graceful = True
+                                        outcome = _cancelled(resolved, reference, records)
+                                        cancelled_run = True
+                                        break
+                                    if deadline - time.monotonic() <= 0:
+                                        raise _JobDeadline()
+                                    record = _consider_post(
+                                        docker_bin,
+                                        name,
+                                        step,
                                         active_workflow,
                                         active_job,
-                                        {"env": {}},
+                                        event,
+                                        workspace,
+                                        bash_ok,
+                                        step_timeout,
+                                        deadline,
                                         prior,
-                                        cancelled,
                                         needs,
+                                        scripts[(path + (job["id"],), step["index"])],
                                         runtime,
-                                        inputs=inputs,
+                                        commands,
+                                        post_index,
+                                        job.get("id"),
                                         matrix=matrix,
                                         strategy=strategy_context,
-                                    ),
-                                    output_bytes,
-                                    runtime.masks,
-                                )
-                            if job_failed and fail_fast:
-                                break
+                                        inputs=inputs,
+                                    )
+                                    _stamp_token_warning(record, runtime, token_now())
+                                    records.append(record)
+                                    post_index += 1
+                                    if record["status"] == "failed":
+                                        job_failed = True
+                                        if failed is None:
+                                            failed = record
+                                if cancelled_run:
+                                    break
+                                if publish:
+                                    produced, output_bytes = _job_outputs(
+                                        active_job,
+                                        _expression_values(
+                                            event,
+                                            active_workflow,
+                                            active_job,
+                                            {"env": {}},
+                                            prior,
+                                            cancelled,
+                                            needs,
+                                            runtime,
+                                            inputs=inputs,
+                                            matrix=matrix,
+                                            strategy=strategy_context,
+                                        ),
+                                        output_bytes,
+                                        runtime.masks,
+                                    )
+                                if job_failed and fail_fast:
+                                    break
+                            finally:
+                                if job_token is not None or _held_job_token(runtime) is not None:
+                                    finish_job_token(
+                                        runtime,
+                                        active_job.get("id"),
+                                        revocations,
+                                        job_token,
+                                    )
                 finally:
                     if service_names or service_network is not None:
                         retired = _retire_services(
@@ -3063,6 +3213,9 @@ def run_job(
         _setup("container cleanup failed")
     if outcome is not None and mounted is not None:
         outcome["node24"] = mounted
+    stored_revocations = public_token_revocation(revocations)
+    if outcome is not None and stored_revocations:
+        outcome["token_revocation"] = stored_revocations
     return outcome
 
 
@@ -3721,7 +3874,8 @@ def _run_composite(
             if isinstance(message, str) and message != "":
                 deprecations.append(message)
         elif isinstance(item.get("default"), str):
-            inputs[key] = item["default"]
+            delivered = _job_token_default(item["default"], runtime)
+            inputs[key] = item["default"] if delivered is None else delivered
         else:
             inputs[key] = ""
     for key in resolved:
@@ -4006,7 +4160,8 @@ def _javascript_env(step, values, runtime=None):
         if key in resolved:
             value = resolved[key]
         elif isinstance(item.get("default"), str):
-            value = _render_expr(item["default"], scoped)
+            delivered = _job_token_default(item["default"], runtime)
+            value = _render_expr(item["default"], scoped) if delivered is None else delivered
         else:
             value = ""
         if not isinstance(value, str) or "\0" in value:
