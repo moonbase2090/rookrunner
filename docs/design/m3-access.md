@@ -1,10 +1,17 @@
 # M3 plan: agent and human access
 
-Status: proposed, 2026-10-06. This document is for MB2090's
-sign-off. It is not accepted direction. No code in this pull
-request. Implementation waits until he accepts the answers below.
-Muse reviews this document for gaps. This pull request is not a
-merge.
+Status: proposed, 2026-10-06, amended after the gap review on
+this pull request. This document is for MB2090's sign-off. It is
+not accepted direction. No code in this pull request.
+Implementation waits until he accepts the answers below. This
+pull request is not a merge.
+
+The amendment records the HTML cancel command and its write
+timestamp, the accepted mint risk for any edited workflow, the
+adapter's rejection of a `poll-` submission key, the same-key
+snapshot rule, the existing artifact path test, the
+`status_posts` effect of `run.status`, the installation wording,
+and the adapter-local error tests.
 
 The milestone is the roadmap's M3: an MCP adapter, a local
 dashboard, and bounded evidence retrieval through the protocol the
@@ -113,10 +120,12 @@ repository ids differ, and a pull request with a null head
 repository, runs nothing.
 
 The operator named installation `168290590` for this plan. That
-number is not read from disk. [Secrets](secrets.md) and
-[check runs](check-runs.md) still say the installation and the
-private key are pending, and those documents contain no
-installation id. This pull request does not edit them. The number
+number is not read from disk. The mint reads `installation-id`
+and does not compare the file to this number. [Secrets](secrets.md)
+and [check runs](check-runs.md) still say the installation and
+the private key are pending, and those documents contain no
+installation id. This pull request does not edit them. The
+numbered slice `m3-install-note` does, after sign-off. The number
 does not go into code or into `check.yml`. The private key stays
 in `~/Secrets/github-app/rookrunner-app/`. This document does not
 read that directory and does not start a sign-in.
@@ -177,7 +186,17 @@ recommendation. The agent supplies `submission_key`, `workflow`,
 and `job_id`. The adapter fills `version`, `event`, and the
 omission of `event_name`. The agent cannot pass `event`,
 `event_name`, `ref`, a repository object, a login, a fixture, or
-a credential through the tool.
+a credential through the tool. A `submission_key` that starts
+with `poll-` is rejected by the adapter before it dials. Poll
+builds those keys as `poll-` plus the SHA-256 of the repository,
+event, tested SHA, workflow, and job. The socket still accepts a
+`poll-` key from the CLI or any same-uid client. The tool
+description tells the agent to use a new key after each edit of
+the checkout and to compare snapshot ids. The worker compares
+version, workflow, job, event, image, and `event_name` on a
+repeated key. It does not compare the captured bytes, so the same
+key after an edit returns the original run and the original
+snapshot id.
 
 `describe` returns the worker object, including its `methods` list
 and the `development.fixture` capability. The adapter does not
@@ -197,9 +216,9 @@ The CLI stays the operator's full client. The dashboard is a
 second client for queue, run detail, step list, log pages,
 artifact pages, and cancel. It does not submit, does not call
 `run.status`, and does not start the worker. It shows the run
-record the worker returned. A cancel control displays that record
-after `run.cancel`. It does not show `succeeded` unless the record
-says `succeeded` and `exit_code` is 0.
+record the worker returned. A cancel action displays that record
+after `run.cancel`. The result is `succeeded` only when the
+record's state is `succeeded` and `exit_code` is 0.
 
 The dashboard's first pull request is two runnable options. This
 document does not choose the visual direction. Both options are
@@ -207,12 +226,24 @@ socket clients in the existing Python program. Neither binds a
 port.
 
 1. A terminal view that polls `run.list`, `run.get`, and `run.logs`.
-2. One HTML file the command writes and the operator opens. The
-   file is a snapshot of those reads. The command exits after the
-   write. Nothing listens.
+   Its cancel action sends `run.cancel` and then renders the
+   record the worker returned.
+2. A command that writes one HTML file and exits. The file
+   contains the UTC time of that write and the run state as of
+   that time, and it says the snapshot is stale after the
+   timestamp. The opened file has no control that reaches the
+   socket, so it cannot cancel or refresh. The same command
+   accepts a cancel action: it sends `run.cancel`, then writes
+   the file again with a new timestamp and the record the worker
+   returned. Re-reading state means running the command again.
 
 Question 5 is the choice between them, or a third option he names,
-after that pull request is runnable.
+after that pull request is runnable. Either choice has a cancel
+path that sends `run.cancel` and then renders the worker's
+record. RR-35 and RR-36 ask for browser evidence. This plan's
+evidence is the terminal program and the written file. A browser
+that talks to the worker waits for a listener, which question 4
+leaves out.
 
 ### Auth and identity
 
@@ -234,12 +265,16 @@ agent that does not use MCP.
 
 ## Threat model
 
-The P7 boundaries stay. The repository the operator configured is
-the code that runs. A local Docker run is not a sandbox for
+The P7 boundaries stay. The worker is bound to one repository
+path. A version 1 submit captures the working tree at that path,
+including uncommitted changes to tracked files. The bytes that
+run are that snapshot. A local Docker run is not a sandbox for
 hostile code. Forks run nothing. `pull_request_target` is not
 evaluated. `write` stays rejected. The job token's permission is
-Contents read for installation `168290590`. The post token stays
-on the `poll` and `status` path.
+Contents read for the installation named in `installation-id`.
+The operator names that installation as `168290590`. The mint
+reads the file. The code does not compare the file to that
+number. The post token stays on the `poll` and `status` path.
 
 What M3 adds is two more same-uid clients. The new exposures are
 the ones those clients make easy.
@@ -254,21 +289,29 @@ the default rule. That is a property of the tool parameters. The
 socket still accepts a full event from the CLI or from any
 same-uid process.
 
-**Job token.** Mint does not consult the allowlist or the event.
-A version 1 submit of a job that needs a token, on a worker
-started with `--app-key`, mints a Contents-read token for
-installation `168290590`. The recommended `submit` tool can do
-that for `check.yml`, because that job needs a token and because
-omitting `event_name` does not stop the run. The same mint
-already happens for a CLI submit of that workflow. This plan
-leaves the mint gates as P7 shipped them. Question 2 records the
-rejected alternative.
+**Job token.** Mint does not consult the allowlist, the event, or
+whether the snapshot is dirty. Any edited workflow can mint, not
+only `check.yml`. An agent that can edit the bound checkout and
+submit can add a step that needs a token. On a worker started
+with `--app-key`, that submit mints a Contents-read token for
+the installation named in `installation-id` (the operator names
+it as `168290590`). Omitting `--app-key` on one worker is not a
+boundary: the same uid can open any socket that uid owns. M3
+accepts this risk and leaves the P7 mint gates in place. A dirty
+snapshot still does not post. `run.status` refuses it with
+`STATUS_REFUSED`. Question 2 records a clean-snapshot gate as the
+alternative.
 
 **Advertised methods.** `worker.describe` lists `run.status` and
 `development.fixture`. The `describe` tool returns that list. An
 agent that then opens the socket can call them. Hiding the list
 in the tool result would make the CLI and MCP disagree, and the
-socket would still implement the methods.
+socket would still implement the methods. `run.status` with
+`record` set to the run's terminal state inserts a row into
+`status_posts`. The next poll decision for that run, context, and
+SHA is `skip`, so the GitHub status stays unposted. That write is
+accepted under the single-uid boundary. The adapter has no tool
+that calls `run.status`.
 
 **Artifact bytes.** `artifact.read` returns workspace bytes with
 no mask. The `artifact_read` tool returns those bytes. A secret a
@@ -311,23 +354,34 @@ that cites it.
      `event_name` is omitted, so `on` is not evaluated. The empty
      event does not match the default allowlist. A job that needs
      a token still mints when the worker was started with
-     `--app-key`. That includes `check.yml`.
+     `--app-key`. The same is true of any edited workflow whose
+     plan needs a token, because capture stores the working tree.
    - B. No submit tool. The agent gets the read tools and
      `cancel`. Submit stays the CLI and `poll`.
    - Recommendation: A. RR-30 and P11 include submit. The empty
      event is the same shape as a CLI submit that omits `--event`
-     and `--event-name`. Operators who do not want that mint omit
-     `--app-key` on the worker the agent can reach.
+     and `--event-name`. The mint risk is question 2.
 
-2. **Should mint require a poll-shaped event?**
-   - A. Leave mint on the P7 gates. A caller-supplied submit can
-     mint. The allowlist continues to apply only to file secrets.
+2. **Should mint require a poll-shaped event or a clean snapshot?**
+   - A. Leave mint on the P7 gates. A caller-supplied submit of
+     any workflow that needs a token can mint, including a
+     workflow the agent edited in the bound checkout. The
+     allowlist continues to apply only to file secrets. A dirty
+     snapshot does not post, because `run.status` refuses it.
+     This risk is accepted for M3.
    - B. Mint and file secrets run only when the worker believes
      the submit came from `poll`. That belief would be a field on
      `run.submit`. Any same-uid client can set the same field
      `poll` sets.
+   - C. Mint only when the captured snapshot is clean. A dirty
+     local or MCP submit does not mint. A poll of a clean clone
+     still mints when the other P7 gates pass. This changes P7
+     for the operator's own dirty local submits.
    - Recommendation: A. B does not create a boundary the socket
-     can enforce. This plan does not add the field.
+     can enforce. C is a real gate, and it is a P7 behavior
+     change, so it waits for an explicit choice. This plan does
+     not add the field from B and does not add the clean-snapshot
+     gate.
 
 3. **Should artifact bytes be scanned before MCP or the dashboard returns them?**
    - A. Return the bytes. Say in the tool text and on the
@@ -356,15 +410,19 @@ that cites it.
      options before the visual direction is chosen.
 
 6. **Where is installation `168290590` written down?**
-   - A. This document only. `secrets.md` and `check-runs.md` stay
-     as they are, still saying the installation is pending. A
-     later docs pull request can record the installation there.
-     The private key stays out of the repository.
+   - A. This document records the operator's name for the
+     installation, and it says the mint reads `installation-id`
+     without comparing that file to the number. `secrets.md` and
+     `check-runs.md` stay as they are in this pull request. The
+     numbered slice `m3-install-note` updates those two documents
+     after sign-off. The private key stays out of the repository.
    - B. This pull request also edits those two documents.
    - C. This document omits the number and keeps saying pending.
    - Recommendation: A. The operator named the installation for
      this plan. The other two documents were written while it was
-     pending. One docs file is the scope of this pull request.
+     pending. This pull request stays one file. The follow-up is
+     a numbered slice so the pending wording does not stay
+     unscheduled.
 
 7. **What does a tool return for logs and artifacts?**
    - A. The protocol object, including `data_base64`.
@@ -376,13 +434,18 @@ that cites it.
 8. **Does the dashboard submit?**
    - A. It lists, shows one run, pages logs and artifacts, and
      cancels. Submit stays the CLI, `poll`, and the MCP `submit`
-     tool from question 1.
+     tool from question 1. The terminal option cancels from the
+     view. The HTML option cancels by running the writer command,
+     which then rewrites the file. The opened HTML file has no
+     cancel control.
    - B. The dashboard also submits a version 1 job.
    - Recommendation: A. RR-35 and RR-36 are inspect and cancel.
+     The HTML file is a snapshot with a write timestamp. Its
+     command is the cancel path.
 
 ## Pull requests
 
-This document is the sign-off pull request. The seven below start
+This document is the sign-off pull request. The eight below start
 after the answers are accepted, one at a time, each merged before
 the next branch opens. Each is one independently testable slice.
 The capability version stays 12. A version 11 plan is not
@@ -409,24 +472,38 @@ artifact tests still pass. Ruff still passes.
    table and fails if `submit`, `run.status`, or a fixture tool is
    present. `check.yml` is byte-identical.
 2. **m3-mcp-errors.** Depends on m3-mcp-read. A malformed tool
-   call returns a tool error that includes the worker `data.kind`
-   when the worker answered, and the same stdio session accepts a
-   later `get`. The test builds four outcomes and checks the kind
-   on each: worker socket absent, `CAPABILITY_UNSUPPORTED`, a
-   development run whose state is `failed`, and a run whose state
-   is `lost`. The `lost` record is written through the store the
-   development tests already use, without starting a container.
-   A `failed` run is not reported as `lost`, and a `lost` run is
-   not reported as `succeeded`.
+   call returns a tool error, and the same stdio session accepts
+   a later `get`. When the worker answered, the error includes
+   the worker `data.kind`. The adapter also rejects, before it
+   dials, an unknown tool name, a missing required parameter such
+   as `run_id`, and a cursor that is not a string of 1 to 1024
+   characters. Those three errors use kind `INVALID_PARAMS`,
+   `retryable` false, and the test fails if the adapter opened
+   the socket for them. The test then builds four worker-answered
+   outcomes and checks the kind on each: worker socket absent,
+   `CAPABILITY_UNSUPPORTED`, a development run whose state is
+   `failed`, and a run whose state is `lost`. The `lost` record
+   is written through the store the development tests already
+   use, without starting a container. A `failed` run is not
+   reported as `lost`, and a `lost` run is not reported as
+   `succeeded`. After each adapter-local rejection and after each
+   worker-answered error, a later `get` on the same session
+   succeeds.
 3. **m3-mcp-evidence.** Depends on m3-mcp-read and on question 3
-   staying A. Add `artifacts` and `artifact_read`. A development
-   fixture still returns `CAPABILITY_UNSUPPORTED` for artifacts,
-   and the session stays up. For a workflow run, the artifact page
-   matches the CLI page, including `id`, `path`, `size`, and
-   `digest`. `artifact_read` of a workspace file whose bytes
-   contain a fixed sentinel returns those bytes with the sentinel
-   intact. The test does not add a mask. A path that leaves the
-   attempt workspace still fails as `artifact.read` fails today.
+   staying A. Add `artifacts` and `artifact_read`. The tool takes
+   the artifact id, which is a UUID, and it has no path
+   parameter. A development fixture still returns
+   `CAPABILITY_UNSUPPORTED` for artifacts, and the session stays
+   up. For a workflow run, the artifact page matches the CLI
+   page, including `id`, `path`, `size`, and `digest`.
+   `artifact_read` of a workspace file whose bytes contain a
+   fixed sentinel returns those bytes with the sentinel intact.
+   The test does not add a mask. A path that leaves the attempt
+   workspace is already covered by
+   `test_publish_lists_only_written_files_and_pages_their_bytes`
+   in `tests/test_artifacts.py`: that test plants a row whose
+   path is `../outside` and expects `INTERNAL_ERROR` without the
+   outside bytes. This pull request does not re-plant that row.
    The workflow case uses the same disposable-container setup as
    `tests/test_artifacts.py`.
 4. **m3-mcp-submit.** Depends on m3-mcp-read and on question 1
@@ -435,10 +512,16 @@ artifact tests still pass. Ruff still passes.
    test inspects the request the adapter wrote and fails if
    `event` is anything other than `{}`, if `event_name` is
    present, or if the request contains a key path, a fixture, or
-   `backend`. The same `submission_key` and the same parameters
+   `backend`. A `submission_key` that starts with `poll-` returns
+   a tool error and the test fails if the adapter opened the
+   socket. The same `submission_key` and the same parameters
    return the same `run_id`. The same key with a different
    `job_id` returns `IDEMPOTENCY_CONFLICT` and creates no second
-   run. `cancel` sends version 0 and returns the worker record.
+   run. The same key after a tracked file in the checkout changes
+   returns the original `run_id` and the original snapshot id.
+   The tool description says to use a new key after each edit and
+   to compare snapshot ids. `cancel` sends version 0 and returns
+   the worker record.
    Cancelling a queued run yields `cancelled`. The result is
    `succeeded` only when the record's state is `succeeded` and
    `exit_code` is 0. `allowlist_matches({}, (), (), None)` is
@@ -452,40 +535,64 @@ artifact tests still pass. Ruff still passes.
    socket clients, neither binding a port. Each can show a queued
    run, a `failed` run, a `lost` run, a client that cannot open
    the socket, and a `CAPABILITY_UNSUPPORTED` error. The HTML
-   option writes one file and exits. The terminal option reads
+   command writes one file and exits. The file contains a UTC
+   write timestamp and the run state as of that time, and it says
+   the snapshot is stale after the timestamp. The file contains
+   no control that calls the socket. The terminal option reads
    the same records. This pull request does not delete either
    option and does not choose a typeface, a color, or a layout as
    the product. The test runs each option against fixture records
    in a temporary directory and checks that the four states and
-   the unsupported error appear in the output. The test fails if
-   either program binds a socket that accepts connections.
+   the unsupported error appear in the output. The HTML test
+   checks the timestamp and the state-as-of text. The test fails
+   if either program binds a socket that accepts connections.
 6. **m3-dashboard-inspect.** Depends on m3-dashboard-options, on
    MB2090's recorded choice, and on m3-mcp-evidence for the
    artifact behavior it shows. Implement the chosen option.
    Remove the other option in this pull request. The view shows
    the snapshot id, the state, the steps, a log page, and an
    artifact page, using the socket. A log longer than one page is
-   read with the cursor. Reopening the view shows the same
-   `run_id` and state. The artifact view states that the bytes
-   are not masked. The test drives the view against a worker in a
-   temporary state directory and checks those fields. Keyboard
-   navigation is part of the test when the chosen option is the
-   terminal program. The HTML option's test opens the written file
-   and checks the same fields.
+   read with the cursor. Reopening the terminal view shows the
+   same `run_id` and state. For the HTML option, reopening means
+   running the writer again: the new file has a later timestamp
+   and the same `run_id`, and the previous file is unchanged.
+   The artifact view states that the bytes are not masked. The
+   test drives the chosen option against a worker in a temporary
+   state directory and checks those fields. Keyboard navigation
+   is part of the test when the chosen option is the terminal
+   program. The HTML test reads the written file and checks the
+   same fields, the timestamp, and the staleness sentence.
 7. **m3-dashboard-cancel.** Depends on m3-dashboard-inspect and on
-   question 8 staying A. The cancel control sends `run.cancel`
-   with version 0 and then renders the record the worker returned.
+   question 8 staying A. The chosen option's cancel path sends
+   `run.cancel` with version 0 and then renders the record the
+   worker returned. On the terminal option that path is the view.
+   On the HTML option it is the writer command, which then writes
+   a new file. The opened HTML file still has no cancel control.
    A queued cancel shows `cancelled`. A `lost` run shows `lost`
-   and the cleanup value on the record. The view has no control
-   that submits a run. The test cancels a queued development run
-   and checks the rendered state is `cancelled`. A second test
-   feeds a `lost` record with cleanup `unresolved` and checks the
-   view shows both values and does not show `succeeded`.
+   and the cleanup value on the record. The chosen option has no
+   control that submits a run. The test cancels a queued
+   development run and checks the rendered state is `cancelled`.
+   A second test feeds a `lost` record with cleanup `unresolved`
+   and checks the view shows both values. The rendered result is
+   `succeeded` only when the record's state is `succeeded` and
+   `exit_code` is 0.
+8. **m3-install-note.** Depends on question 6 staying A. Docs
+   only. Update `secrets.md` and `check-runs.md` so they say the
+   operator names the installation as `168290590`, the mint reads
+   `installation-id`, and the code does not compare the file to
+   that number. The private key stays out of the repository.
+   This slice does not read `~/Secrets` and does not change code.
+   `check.yml` is unchanged. The test is the diff: those two
+   documents and no other file.
 
 Pull requests 4 and 7 change if question 1 or question 8 is
 answered B. Pull request 4 is dropped when submit is out. Pull
 request 5's programs change if question 4 is answered B, and that
 answer needs a new threat-model note before the branch opens.
+Pull request 8 is dropped if question 6 is answered C. If
+question 2 is answered C, the clean-snapshot mint gate is its own
+pull request ahead of m3-mcp-submit, and this list gains that
+slice before the branch opens.
 
 ## What this plan leaves as it is
 
@@ -493,9 +600,10 @@ The worker socket stays mode `0600`. The state directory stays
 mode `0700`. The protocol method list stays the list
 `worker.describe` already returns. The capability version stays
 12. `check.yml` stays unchanged. `write` stays rejected. The job
-token stays Contents read for the operator-named installation
-`168290590`, minted only under the P7 gates, revoked when the job
-ends, and absent from the run record. File secrets still follow
+token stays Contents read for the installation named in
+`installation-id` (the operator names it as `168290590`), minted
+only under the P7 gates, revoked when the job ends, and absent
+from the run record. A dirty snapshot still does not post. File secrets still follow
 `allowlist_matches`. `artifact.read` still returns unmasked bytes.
 `poll` and `status` still own the check-run post. No App
 permission is added. No sign-in is started. No file under
