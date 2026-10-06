@@ -1,9 +1,10 @@
 # Static analysis lockdown
 
-Status: proposed, 2026-10-06. This document is for MB2090's
-sign-off. It is not accepted direction. No code in this pull
-request. Implementation waits until he accepts the answers below.
-This pull request does not merge itself.
+Status: accepted, 2026-10-06. MB2090 signed off in
+https://github.com/moonbase2090/rookrunner/pull/81#issuecomment-6025512879.
+The answers are 1A, 2A, 3B, 4A, 5A, 6A, 7A, 8A, and 9A.
+This pull request is docs only. It does not merge itself.
+Implementation pull requests wait until this one has merged.
 
 The model is lunatui's `docs/conventions.md`, `docs/lints.md`, and
 pull request 6 on `moonbase2090/lunatui`: one canonical way for each
@@ -87,13 +88,14 @@ dependency, or a unittest leave `check.yml` byte-identical.
 
 ## Decisions
 
-Each question has a recommendation except the comment question.
-That one is his. Implementation uses the accepted letter. A
-different letter changes the pull requests named at the end.
+Answered on 2026-10-06: 1A, 2A, 3B, 4A, 5A, 6A, 7A, 8A, 9A.
+The letter that was not chosen stays listed as the alternative.
 
 ### 1. Which type checker?
 
-- A. mypy, strict, pinned in the dev group. Recommended.
+Answered: A.
+
+- A. mypy, strict, pinned in the dev group. Accepted.
 - B. pyright, strict, pinned in the dev group.
 - C. `uv check` with a pinned `--ty-version`.
 
@@ -106,10 +108,12 @@ ruff is. The ratchet below is the same for A or B.
 
 ### 2. Which ruff families?
 
+Answered: A.
+
 - A. Enable the families that are already small or that have a
   named per-file policy, and put complexity on a ceiling at
   today's maximum. Leave PT, the whole PL family, repo-wide ANN,
-  and D off. Recommended.
+  and D off. Accepted.
 - B. Enable every family listed in the task, including PT, PL,
   ANN, and D.
 - C. Leave ruff on its default set.
@@ -117,34 +121,35 @@ ruff is. The ratchet below is the same for A or B.
 PT rewrites unittest assertions into pytest form. There are 3693
 of those findings. Unittest stays the test runner, so PT stays
 off. ANN is 4129 missing annotations. Turning it on repo-wide is
-the type-checker migration done twice. D is the comment question.
-The whole PL family includes 90 magic-value findings that would
+the type-checker migration done twice. Docstring lint stays
+off because question 3 is B. The whole PL family includes 90
+magic-value findings that would
 rename protocol numbers. Complexity uses C90 and the argument,
 branch, return, and statement codes PLR0911, PLR0912, PLR0913,
 and PLR0915, not the rest of PL.
 
 ### 3. What comments are allowed?
 
-No recommendation.
+Answered: B.
 
 - A. The lunatui rule, translated: no comments except docstrings
-  on the public surface, plus a short list of forms he approves
-  in this document's successor. The 222 `#` comments in `src`
-  would be deleted or moved. Many of them record a security
-  restriction or a GitHub limit.
+  on the public surface, plus a short list of approved forms.
+  The 222 `#` comments in `src` would be deleted or moved.
+  Many of them record a security restriction or a GitHub limit.
 - B. Explanatory comments stay. Commented-out code stays banned.
-  Docstring lint stays off.
-- C. A rule he writes.
+  Docstring lint stays off. Accepted.
+- C. A rule written later.
 
-The comment check is not scheduled until he answers. ERA can
-land either way, because it flags commented-out code rather than
-prose.
+ERA still lands. It flags commented-out code rather than prose.
+There is no comment scanner and no D-family rollout.
 
 ### 4. Where do repeat mistakes go?
 
+Answered: A.
+
 - A. `docs/lints.md` gains a rule when the same mistake has been
   seen twice, in that pull request or the next one. Every
-  suppression is a row in the same file. Recommended.
+  suppression is a row in the same file. Accepted.
 - B. Reviewers remember.
 
 A suppression without a row fails CI. A row whose suppression is
@@ -153,9 +158,11 @@ and `# type: ignore[code]` in place of `#[expect]`.
 
 ### 5. What runs for security?
 
+Answered: A.
+
 - A. `uv audit --locked` in the check job, a pinned CodeQL
   workflow for Python, and an admin enabling secret scanning and
-  push protection. No Dependabot. Recommended.
+  push protection. No Dependabot. Accepted.
 - B. CodeQL's default setup, `pip-audit` as another dev
   dependency, and Dependabot security updates.
 - C. No new security tooling.
@@ -174,9 +181,11 @@ gate. A person opens the bump.
 
 ### 6. What coverage floor?
 
+Answered: A.
+
 - A. The first coverage pull request measures line coverage and
   sets the floor to that integer. Later pull requests may raise
-  it. Lowering it is a protected change. Recommended.
+  it. Lowering it is a protected change. Accepted.
 - B. Pick a percentage in this document.
 - C. No coverage gate.
 
@@ -188,10 +197,12 @@ allowlist change.
 
 ### 7. How is the dependency allowlist enforced?
 
+Answered: A.
+
 - A. CI fails if `uv.lock` contains a distribution name that is
   not listed, direct or transitive. The runtime list stays
   `pyyaml`. A lockfile change needs sign-off even when the name
-  is already listed. Recommended.
+  is already listed. Accepted.
 - B. Pin direct dependencies and let new transitive
   distributions through.
 - C. Trust the lockfile with no name check.
@@ -206,10 +217,12 @@ the network.
 
 ### 8. What size and boundary limits?
 
+Answered: A.
+
 - A. Files and functions already over the limit are listed and
   may not grow. A new file is at most 400 lines. A new function
   is at most 80 lines. The import graph is baselined, and a new
-  edge fails. Recommended.
+  edge fails. Accepted.
 - B. Fail CI now on every file over 400 lines, which means
   splitting `run.py`, `plan.py`, `worker.py`, and `expr.py`
   before the other checks.
@@ -231,9 +244,11 @@ for the baseline.
 
 ### 9. What protects the config?
 
+Answered: A.
+
 - A. CODEOWNERS plus a sign-off workflow. A pull request that
   changes a protected path fails until it has the label
-  `mb2090-signoff`. Recommended.
+  `mb2090-signoff`. Accepted.
 - B. CODEOWNERS with no label check.
 - C. The label with no CODEOWNERS.
 
@@ -282,7 +297,7 @@ sign-off.
 | Formatting is ruff, line length 100, target py311. | CI, already |
 | Suppression is `# noqa: CODE` or `# type: ignore[code]` with a reason, and a row in `docs/lints.md`. A bare `# noqa` or a bare `# type: ignore` fails. | CI |
 | Subprocess calls that are the engine's process spawn stay in the modules that already own them. A new module does not add one. | CI: S603 and S607 |
-| Comments follow the answer to question 3. | CI only if he picks A |
+| Explanatory comments stay. Commented-out code stays banned. Docstring lint stays off. | CI: ERA. No comment scanner. |
 
 ## Lints file
 
@@ -370,12 +385,7 @@ list until `src` is empty of exemptions. A strict error is
 fixed in the module. A suppression is a typed code, a reason,
 and a row.
 
-mypy config lives in `pyproject.toml`. If he picks pyright, the
-config is `pyrightconfig.json`, and that file is added to
-CODEOWNERS in the same pull request. If he picks ty, the first
-pull request pins `--ty-version`, reports how its strict mode
-differs from mypy strict, and stops if it cannot express the
-per-module ratchet.
+mypy config lives in `pyproject.toml`. The checker is mypy.
 
 The check job gains one command for the type checker. That is
 an intentional `check.yml` edit, with the dogfood note updated
@@ -481,11 +491,11 @@ block it either.
 
 ## Pull requests
 
-This document is the sign-off pull request. It changes no code,
-no lockfile, and no workflow. After the answers are accepted,
-the implementation pull requests are the list below. Each one
-is small, has a Proof section that names the commands it ran
-and their results, and does not carry feature work. A pull
+The answers above are accepted. This pull request changes no
+code, no lockfile, and no workflow. Implementation pull
+requests start only after this pull request has merged. Each
+one is small, has a Proof section that names the commands it
+ran and their results, and does not carry feature work. A pull
 request that touches a protected path waits for the sign-off
 label once that mechanism exists. The agent does not merge.
 
@@ -522,16 +532,12 @@ label once that mechanism exists. The agent does not merge.
     rules.
 14. **CodeQL.** The pinned workflow. `check.yml` unchanged.
 
-If question 3 is A, one further pull request adds the comment
-scanner and deletes or moves the `#` comments it rejects. That
-pull request is not scheduled until he says A. If question 1
-is C, pull request 10 starts with the ty comparison and does
-not delete the exemption ratchet. If question 5 is B, pull
-requests 9 and 14 use `pip-audit` and the CodeQL default setup
-instead, and Dependabot security updates are an admin setting
-plus no auto-merge. If question 8 is B, a split of the four
-large modules comes before pull request 12 and is not part of
-the lockdown's other pull requests.
+Question 3 is B, so there is no comment-scanner pull request.
+Pull request 10 adds mypy. Pull requests 9 and 14 are
+`uv audit --locked` and the pinned CodeQL workflow. Question 8
+is A, so `run.py`, `plan.py`, `worker.py`, and `expr.py` stay
+listed at their current lengths. They are not split ahead of
+pull request 12.
 
 ## What this plan leaves as it is
 
