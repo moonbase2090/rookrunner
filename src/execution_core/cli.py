@@ -450,7 +450,7 @@ def main():
     commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
     commands.add_parser(
         "dashboard",
-        help="terminal view of runs, logs, and artifacts",
+        help="terminal view of runs, logs, artifacts, and cancel",
     )
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"

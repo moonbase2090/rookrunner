@@ -1,7 +1,9 @@
 """Terminal dashboard.
 
 The view reads the worker socket and binds no port. Each action has
-a key and a mouse target. dashboard-html is not a command.
+a key and a mouse target. Cancel sends run.cancel with version 0
+and renders the record the worker returned. dashboard-html is not
+a command.
 """
 
 import base64
@@ -15,16 +17,18 @@ BINDINGS = (
     ("queue", "previous", ("k", "up"), "[previous]"),
     ("queue", "next", ("j", "down"), "[next]"),
     ("queue", "open", ("enter",), "[open]"),
+    ("queue", "cancel", ("c",), "[cancel]"),
     ("queue", "quit", ("q",), "[quit]"),
     ("detail", "previous", ("k", "up"), "[previous]"),
     ("detail", "next", ("j", "down"), "[next]"),
     ("detail", "log-prev", ("p",), "[log-prev]"),
     ("detail", "log-next", ("n",), "[log-next]"),
+    ("detail", "cancel", ("c",), "[cancel]"),
     ("detail", "back", ("b", "escape"), "[back]"),
     ("detail", "quit", ("q",), "[quit]"),
 )
 
-_TARGET = re.compile(r"\[(log-next|log-prev|previous|next|open|quit|back|run|artifact)\]")
+_TARGET = re.compile(r"\[(log-next|log-prev|previous|next|open|quit|back|cancel|run|artifact)\]")
 _KEY_LABEL = {
     "previous": "k or up",
     "next": "j or down",
@@ -33,6 +37,7 @@ _KEY_LABEL = {
     "log-prev": "p",
     "log-next": "n",
     "back": "b or escape",
+    "cancel": "c",
 }
 
 
@@ -122,7 +127,9 @@ class Dashboard:
         self._load_queue()
 
     def press(self, key):
-        if self.quit or self.unavailable:
+        if self.quit:
+            return
+        if self.unavailable and not self._reconnect():
             return
         for screen, action, keys, _token in BINDINGS:
             if screen == self.screen and key in keys:
@@ -130,7 +137,9 @@ class Dashboard:
                 return
 
     def click(self, line):
-        if self.quit or self.unavailable or type(line) is not int:
+        if self.quit or type(line) is not int:
+            return
+        if self.unavailable and not self._reconnect():
             return
         rows = self.render().splitlines()
         if line < 0 or line >= len(rows):
@@ -171,6 +180,8 @@ class Dashboard:
                 self._move_run(-1)
             elif action == "open":
                 self._open()
+            elif action == "cancel":
+                self._cancel()
             elif action == "quit":
                 self.quit = True
             return
@@ -182,6 +193,8 @@ class Dashboard:
             self._log_next()
         elif action == "log-prev":
             self._log_prev()
+        elif action == "cancel":
+            self._cancel()
         elif action == "back":
             self.screen = "queue"
         elif action == "quit":
@@ -192,22 +205,28 @@ class Dashboard:
             f"Run state as of {self.timestamp}.",
             f"This snapshot is stale after {self.timestamp}.",
         ]
-        lines.extend(_controls("queue", ("previous", "next", "open", "quit")))
+        lines.extend(_controls("queue", ("previous", "next", "open", "cancel", "quit")))
         for index, run in enumerate(self.runs):
             mark = ">" if index == self.selected else " "
-            lines.append(f"{mark} [run] {run['run_id']} {run['state']}")
+            lines.append(f"{mark} [run] {run['run_id']} {run['state']} result {_result_name(run)}")
         lines.extend(self.notes)
         return lines
 
     def _detail_lines(self):
         record = self.detail
-        lines = _controls("detail", ("back", "quit", "previous", "next"))
+        lines = _controls("detail", ("back", "quit", "previous", "next", "cancel"))
         if self.log_index > 0:
             lines.extend(_controls("detail", ("log-prev",)))
         if self._can_log_next():
             lines.extend(_controls("detail", ("log-next",)))
         lines.append(f"run {record['run_id']}")
         lines.append(f"state {record['state']}")
+        lines.append(f"result {_result_name(record)}")
+        lines.append(f"exit_code {_shown_exit(record)}")
+        lines.append(f"cleanup {record.get('cleanup')}")
+        error = record.get("error")
+        if isinstance(error, dict) and isinstance(error.get("kind"), str) and error["kind"] != "":
+            lines.append(f"error {error['kind']}")
         snapshot = (record.get("input") or {}).get("snapshot_id")
         lines.append(f"snapshot {snapshot}")
         lines.append("steps")
@@ -247,6 +266,46 @@ class Dashboard:
             return
         self.artifact_index = max(0, min(len(self.artifacts) - 1, index))
         self._read_artifact()
+
+    def _reconnect(self):
+        self.unavailable = False
+        self._load_queue()
+        return not self.unavailable
+
+    def _selected_id(self):
+        if self.screen == "detail" and isinstance(self.detail, dict):
+            run_id = self.detail.get("run_id")
+            if isinstance(run_id, str) and run_id != "":
+                return run_id
+        if not self.runs:
+            return None
+        return self.runs[self.selected]["run_id"]
+
+    def _cancel(self):
+        run_id = self._selected_id()
+        if run_id is None:
+            return
+        reply = self._call("run.cancel", {"version": 0, "run_id": run_id})
+        if reply is None:
+            return
+        result = reply.get("result") if isinstance(reply, dict) else None
+        if not isinstance(reply, dict) or "error" in reply or not isinstance(result, dict):
+            note = _error_line(run_id, reply) if isinstance(reply, dict) else None
+            self.notes.append(note or "cancel worker response was not a protocol result")
+            return
+        self._show_returned(result)
+
+    def _show_returned(self, record):
+        self.detail = record
+        self.screen = "detail"
+        for index, run in enumerate(self.runs):
+            if run.get("run_id") == record.get("run_id"):
+                self.runs[index] = record
+                self.selected = index
+                break
+        self.artifact_index = 0
+        self._fetch_log(None, append=False)
+        self._load_artifacts()
 
     def _open(self):
         if not self.runs:
@@ -376,6 +435,26 @@ class Dashboard:
             self.unavailable = True
             self.screen = "queue"
             return None
+
+
+def _result_name(record):
+    """Succeeded is a result only when the record also exited 0."""
+
+    if record.get("state") == "succeeded" and record.get("exit_code") == 0:
+        return "succeeded"
+    if record.get("state") == "succeeded":
+        return "not succeeded"
+    state = record.get("state")
+    if isinstance(state, str) and state != "":
+        return state
+    return "unknown"
+
+
+def _shown_exit(record):
+    code = record.get("exit_code")
+    if type(code) is int:
+        return str(code)
+    return "none"
 
 
 def _controls(screen, names):
