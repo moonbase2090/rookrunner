@@ -2077,7 +2077,11 @@ def serve(
         api_base=api_base,
     )
     if worker.host_control_warning:
-        print(worker.host_control_warning, file=sys.stderr, flush=True)
+        print(  # noqa: T201  host-control warning on stderr
+            worker.host_control_warning,
+            file=sys.stderr,
+            flush=True,
+        )
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()
