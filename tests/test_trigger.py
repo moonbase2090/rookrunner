@@ -143,7 +143,7 @@ class PatternTests(unittest.TestCase):
         self.assertFalse(triggered(ignored, changed_files=[]))
         window = ["note.txt"] * 3000 + ["app.js"]
         self.assertFalse(triggered(paths, changed_files=window))
-        self.assertTrue(triggered(paths, changed_files=window[:2999] + ["app.js"]))
+        self.assertTrue(triggered(paths, changed_files=[*window[:2999], "app.js"]))
         self.assertFalse(triggered(paths, changed_files=["note.txt"], commit_count=1000))
         self.assertTrue(triggered(paths, changed_files=["note.txt"], commit_count=1001))
         self.assertTrue(triggered(paths, changed_files=["note.txt"], diff_unavailable=True))

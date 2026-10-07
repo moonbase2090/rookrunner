@@ -2207,7 +2207,7 @@ def _iter_concrete(job, parent_path):
     """Yield `(job, step)` for every concrete step under `job`."""
 
     if "call" in job:
-        nested = parent_path + (job["id"],)
+        nested = (*parent_path, job["id"])
         for inner in job["call"]["jobs"]:
             yield from _iter_concrete(inner, nested)
         return
@@ -2225,7 +2225,7 @@ def _write_job_scripts(job_list, path, private, scripts, counter=None):
     if counter is None:
         counter = [0]
     for planned in job_list:
-        planned_path = path + (planned["id"],)
+        planned_path = (*path, planned["id"])
         if "call" in planned:
             _write_job_scripts(planned["call"]["jobs"], planned_path, private, scripts, counter)
             continue
@@ -2419,7 +2419,7 @@ def _clock_value(now):
     if not callable(now):
         return None
     value = now()
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return value
 
@@ -2816,7 +2816,9 @@ def run_job(
                             resolved_inputs = _resolve_call_inputs(
                                 job["call"]["inputs"],
                                 passed_values,
-                                lambda explicit, call_workflow=job["call"]["workflow"]: (
+                                lambda explicit,
+                                call_workflow=job["call"]["workflow"],
+                                cancelled=cancelled: (
                                     _expression_values(
                                         event,
                                         call_workflow,
@@ -2837,7 +2839,7 @@ def run_job(
                             job["call"]["jobs"],
                             job["call"]["workflow"],
                             resolved_inputs,
-                            path + (job["id"],),
+                            (*path, job["id"]),
                             reset_first=True,
                             secret_sink=call_masks,
                         )
@@ -2948,7 +2950,7 @@ def run_job(
                                 cancelled_run = True
                                 break
 
-                    def _fail_text(message):
+                    def _fail_text(message, job=job):
                         nonlocal failed, job_failed
                         text = str(message)[:512]
                         steps = job["steps"]
@@ -3048,7 +3050,7 @@ def run_job(
                                         prior,
                                         owner is not None and owner.cancelled(),
                                         needs,
-                                        scripts[(path + (job["id"],), step["index"])],
+                                        scripts[((*path, job["id"]), step["index"])],
                                         runtime,
                                         commands,
                                         matrix=matrix,
@@ -3095,7 +3097,7 @@ def run_job(
                                         deadline,
                                         prior,
                                         needs,
-                                        scripts[(path + (job["id"],), step["index"])],
+                                        scripts[((*path, job["id"]), step["index"])],
                                         runtime,
                                         commands,
                                         post_index,
@@ -3362,7 +3364,7 @@ def _expression_values(
 
 
 def _event_value(event):
-    if isinstance(event, (dict, list, str, bool)) or event is None:
+    if isinstance(event, dict | list | str | bool) or event is None:
         return event
     if isinstance(event, int) and not isinstance(event, bool):
         return event
@@ -3892,7 +3894,7 @@ def _run_composite(
         stdout_parts.append(
             mask_stored_copy("".join(f"{message}\n" for message in deprecations), runtime.masks)
         )
-    for inner, script_name in zip(step["steps"], script_names):
+    for inner, script_name in zip(step["steps"], script_names, strict=True):
         if deadline - time.monotonic() <= 0:
             raise _JobDeadline(_step_result(step, "failed", None, "", "", "job timed out", job_id))
         base_values = _expression_values(

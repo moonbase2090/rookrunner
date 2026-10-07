@@ -21,7 +21,7 @@ import re
 import stat
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from .commands import mask_prefixes
 from .protocol import canonical, is_integer, strict_json
@@ -385,7 +385,7 @@ def mint_list_token(app_key, state_dir, repository_root, repository, api_base, c
     """Mint one installation token for poll GETs. The caller revokes it."""
 
     if clock is None:
-        clock = datetime.now(timezone.utc)
+        clock = datetime.now(UTC)
     body = list_token_body(repository)
     material = load_app_key(app_key, state_dir, repository_root)
     installation_id = material.installation_id
@@ -482,7 +482,7 @@ def revoke_installation_token(api_base, token):
 def _github_time(moment):
     if moment.tzinfo is None:
         raise StatusError("INVALID_PARAMS", "check time is not valid")
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _post_check(
@@ -618,7 +618,7 @@ def post_check_flow(
     """Mint a token, post the check, then the commit status. Discard the token."""
 
     if clock is None:
-        clock = datetime.now(timezone.utc)
+        clock = datetime.now(UTC)
     posted = AppPost()
     material = load_app_key(app_key, state_dir, repository_root)
     jwt = None

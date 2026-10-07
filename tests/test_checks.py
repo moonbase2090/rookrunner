@@ -15,7 +15,7 @@ import threading
 import time
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from execution_core.checks import check_mapping, check_summary, post_check_flow
@@ -355,7 +355,7 @@ class CliCheckTests(unittest.TestCase):
         self.assertEqual(set(payload), {"iat", "exp", "iss"})
         self.assertEqual(payload["iss"], CLIENT)
         self.assertEqual(payload["exp"] - payload["iat"], 600)
-        now = int(datetime.now(timezone.utc).timestamp())
+        now = int(datetime.now(UTC).timestamp())
         self.assertAlmostEqual(payload["iat"], now - 60, delta=5)
         directory = Path(self.tmp.name) / "jwt"
         directory.mkdir()
@@ -430,7 +430,7 @@ class CliCheckTests(unittest.TestCase):
         self._assert_secret_absent(result, jwt)
 
     def test_a_queued_check_omits_conclusion_and_uses_the_clock(self):
-        moment = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+        moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
         previous = os.environ.get("HOME")
         os.environ["HOME"] = str(self.home)
         try:
@@ -495,7 +495,7 @@ class CliCheckTests(unittest.TestCase):
                 app_key="~/Secrets/github-app/rookrunner-app/private-key.pem",
                 state_dir=self.state,
                 repository_root=self.repo,
-                clock=datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc),
+                clock=datetime(2026, 10, 5, 12, 0, tzinfo=UTC),
             )
         finally:
             if previous is None:

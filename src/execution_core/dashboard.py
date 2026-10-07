@@ -7,7 +7,7 @@ a command.
 """
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import os
 import re
 import sys
@@ -114,7 +114,7 @@ class Dashboard:
         self.selected = 0
         self.runs = []
         self.notes = []
-        self.timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.detail = None
         self.log_pages = []
         self.log_index = 0

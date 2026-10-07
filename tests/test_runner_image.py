@@ -174,7 +174,7 @@ class RunnerImageFlagTests(unittest.TestCase):
             _write(repo, ".github/workflows/test.yml", _workflow(label))
             _commit(repo, "workflow")
             worker = Worker(repo, root / "state", runner_image=DIGEST)
-            worker.execute_queue = lambda: worker.stop.wait()
+            worker.execute_queue = lambda worker=worker: worker.stop.wait()
             worker.start()
             self.addCleanup(worker.close)
             with self.assertRaises(Fault) as raised:

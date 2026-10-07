@@ -1281,7 +1281,7 @@ jobs:
             },
         )
         string_form = plan_workflow(
-            "concurrency: plain\njobs:\n  build:\n    steps:\n      - run: echo hi\n".encode(),
+            b"concurrency: plain\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
             "build",
         )["plan"]
         self.assertEqual(
@@ -1323,7 +1323,7 @@ jobs:
                 self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
         with self.assertRaises(PlanError) as raised:
             plan_workflow(
-                "concurrency:\n  group: ${{ hashFiles('x') }}\njobs:\n  build:\n    steps:\n      - run: echo hi\n".encode(),
+                b"concurrency:\n  group: ${{ hashFiles('x') }}\njobs:\n  build:\n    steps:\n      - run: echo hi\n",
                 "build",
             )
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
@@ -1652,18 +1652,15 @@ jobs:
         self.assertNotIn("services", plan["job"])
         inner = plan["job"]["call"]["jobs"][0]
         self.assertEqual(inner["services"], [{"id": "cache", "image": pin, "env": {"MODE": "on"}}])
-        rejected = (
-            """\
+        rejected = f"""\
 on: push
 jobs:
   call:
     uses: ./.github/workflows/called.yml
     services:
       cache:
-        image: %s
+        image: {pin}
 """
-            % pin
-        )
         error = self.reject(rejected, {".github/workflows/called.yml": called}, "call")
         self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
         self.assertEqual(error.field, "jobs.call.services")

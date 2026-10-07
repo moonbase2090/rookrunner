@@ -982,7 +982,7 @@ def _kind(value):
         return "null"
     if isinstance(value, bool):
         return "bool"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return "number"
     if isinstance(value, str):
         return "string"
@@ -999,7 +999,7 @@ def _truthy(value):
         return False
     if value is True:
         return True
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return value != 0
     if isinstance(value, str):
         return value != ""
@@ -1021,7 +1021,7 @@ def _as_number(value):
             parsed = json.loads(value)
         except json.JSONDecodeError:
             return math.nan
-        if isinstance(parsed, bool) or not isinstance(parsed, (int, float)):
+        if isinstance(parsed, bool) or not isinstance(parsed, int | float):
             return math.nan
         return float(parsed)
     return math.nan

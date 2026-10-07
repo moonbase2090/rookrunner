@@ -94,13 +94,13 @@ def load_job_secrets(repository, names):
 def _tuple(values):
     if values is None:
         return ()
-    if isinstance(values, str) or not isinstance(values, (list, tuple)):
+    if isinstance(values, str) or not isinstance(values, list | tuple):
         raise ValueError("secret repository is not accepted")
     return tuple(values)
 
 
 def _wanted(names):
-    if isinstance(names, str) or not isinstance(names, (list, tuple)):
+    if isinstance(names, str) or not isinstance(names, list | tuple):
         raise SecretError("secret directory is not accepted")
     wanted = []
     for name in names:

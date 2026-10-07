@@ -6,7 +6,7 @@ queued until the test changes it or the 24-hour rule cancels it.
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -158,7 +158,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 class QueueTests(unittest.TestCase):
     def test_twenty_four_hours_cancels_and_one_microsecond_less_does_not(self):
-        clock = datetime(2026, 10, 5, tzinfo=timezone.utc)
+        clock = datetime(2026, 10, 5, tzinfo=UTC)
         self.assertTrue(queue_expired((clock - timedelta(hours=24)).isoformat(), clock))
         self.assertFalse(
             queue_expired(
@@ -509,7 +509,7 @@ class PollTests(unittest.TestCase):
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
         created = self.poll()
         run_id = created["submitted"][0]["run_id"]
-        clock = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
+        clock = datetime(2026, 10, 5, 12, tzinfo=UTC)
         record = self.worker.get(run_id)
         record["accepted_at"] = (clock - timedelta(hours=24) + timedelta(seconds=1)).isoformat()
         with self.worker.guard, self.worker.db:

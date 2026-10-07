@@ -120,7 +120,7 @@ class _NoFetch:
         self._real = subprocess.run
 
     def __call__(self, args, **kwargs):
-        argv = list(args) if isinstance(args, (list, tuple)) else [args]
+        argv = list(args) if isinstance(args, list | tuple) else [args]
         self.calls.append(argv)
         if any(part in {"fetch", "clone", "unshallow"} for part in argv):
             raise AssertionError(argv)

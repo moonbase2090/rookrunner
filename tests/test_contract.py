@@ -263,14 +263,14 @@ class ContractTests(unittest.TestCase):
     def test_cli_json_and_failure_exit(self):
         command = [sys.executable, "-m", "execution_core", "--state", str(self.state)]
         result = subprocess.run(
-            command + ["submit", "--backend", "development", "--key", "cli"], capture_output=True
+            [*command, "submit", "--backend", "development", "--key", "cli"], capture_output=True
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         run_id = json.loads(result.stdout)["result"]["run_id"]
         self.await_state(run_id, {"succeeded"})
-        result = subprocess.run(command + ["get", run_id], capture_output=True)
+        result = subprocess.run([*command, "get", run_id], capture_output=True)
         self.assertEqual(json.loads(result.stdout)["result"]["exit_code"], 0)
-        result = subprocess.run(command + ["get", "nonexistent"], capture_output=True)
+        result = subprocess.run([*command, "get", "nonexistent"], capture_output=True)
         self.assertEqual(result.returncode, 1)
         self.assertEqual(json.loads(result.stdout)["error"]["data"]["kind"], "RUN_NOT_FOUND")
 
