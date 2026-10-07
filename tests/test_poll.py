@@ -7,6 +7,7 @@ queued until the test changes it or the 24-hour rule cancels it.
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import subprocess
@@ -16,6 +17,7 @@ import threading
 import time
 import unittest
 
+from execution_core.checks import list_token_body
 from execution_core.poll import (
     PollError,
     allowlist_matches,
@@ -64,6 +66,18 @@ def _git(repo, *args, check=True):
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        forced = getattr(self.server, "forced_status", None)
+        if forced is not None:
+            self.server.requests.append(
+                {
+                    "method": "GET",
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                    "if_none_match": self.headers.get("If-None-Match"),
+                }
+            )
+            self._send(forced, getattr(self.server, "forced_body", b""), None)
+            return
         path = self.path.split("?", 1)[0]
         if path.endswith("/branches"):
             kind = "branches"
@@ -815,6 +829,81 @@ class PollTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "workflow must be a captured regular file")
         self.assertEqual(self.runs(), 0)
 
+    def test_a_list_token_is_sent_on_gets_and_is_absent_from_state(self):
+        token = "list-token-distinct-from-status"
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        result = poll_once(
+            repository="acme/demo",
+            clone=self.clone,
+            jobs=[JOB],
+            image=IMAGE,
+            credential_file=self.credential,
+            api_base=self.base,
+            state=self.state,
+            caller=self.caller,
+            list_token=token,
+        )
+        gets = [item for item in self.server.requests if item["method"] == "GET"]
+        self.assertGreater(len(gets), 0)
+        self.assertTrue(all(item["authorization"] == "Bearer " + token for item in gets))
+        self.assertNotIn(token.encode(), self.state_bytes())
+        self.assertNotIn(token, json.dumps(result))
+        self.assertEqual(self.posts()[0]["authorization"], "Bearer " + TOKEN)
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_refused_list_does_not_echo_the_list_token(self):
+        token = "list-token-must-stay-unprinted"
+        self.server.forced_status = 403
+        self.server.forced_body = token.encode()
+        with self.assertRaises(PollError) as raised:
+            poll_once(
+                repository="acme/demo",
+                clone=self.clone,
+                jobs=[JOB],
+                image=IMAGE,
+                credential_file=self.credential,
+                api_base=self.base,
+                state=self.state,
+                caller=self.caller,
+                list_token=token,
+            )
+        self.assertEqual(raised.exception.kind, "API_REJECTED")
+        self.assertNotIn(token, str(raised.exception))
+        self.assertEqual(self.runs(), 0)
+
+    def test_the_poll_command_sends_a_minted_list_token_and_revokes_it(self):
+        from execution_core.cli import _run_poll
+
+        token = "minted-list-token"
+        revoked = []
+
+        def mint(*_args):
+            return token
+
+        def revoke(_api_base, value):
+            revoked.append(value)
+            return True
+
+        args = SimpleNamespace(
+            repository="acme/demo",
+            clone=self.clone,
+            job=[JOB],
+            image=IMAGE,
+            credential_file=None,
+            app_key="unused-key-path",
+            api_base=self.base,
+            state=self.state,
+        )
+        result = _run_poll(args, self.caller, mint, revoke)
+        gets = [item for item in self.server.requests if item["method"] == "GET"]
+        self.assertGreater(len(gets), 0)
+        self.assertTrue(all(item["authorization"] == "Bearer " + token for item in gets))
+        self.assertEqual(revoked, [token])
+        self.assertNotIn(token, json.dumps(result))
+        self.assertNotIn(token.encode(), self.state_bytes())
+        self.assertEqual(self.runs(), 0)
+
 
 class AllowlistTests(unittest.TestCase):
     def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
@@ -960,6 +1049,11 @@ class CliPollTests(unittest.TestCase):
                 if worker.poll() is None:
                     worker.terminate()
                 worker.communicate(timeout=5)
+
+
+class ListTokenBodyTests(unittest.TestCase):
+    def test_the_body_names_the_repository_and_omits_permissions(self):
+        self.assertEqual(list_token_body("moonbase2090/lunatui"), {"repositories": ["lunatui"]})
 
 
 if __name__ == "__main__":

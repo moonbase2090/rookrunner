@@ -75,6 +75,14 @@ the tip is stored so the next pass does not retry that commit. A
 workflow that is present and is not a regular file still stops the
 pass, as does any other capture failure.
 
+With `--app-key`, the pass reads the key once before the first list
+and mints an installation token scoped to that repository. The token
+body names the repository and does not set `permissions`, so it
+carries every permission the installation currently grants. GETs in
+that pass send the token. The credential-file path still sends no
+credential on GET. The list token is revoked when the pass ends and
+is not written to state. A post still mints its own token.
+
 The commit status for a pull request is posted on the head SHA,
 `pull_request.head.sha`. GitHub's pull request page shows statuses on
 the commits in the pull request. The head SHA is that commit. The
