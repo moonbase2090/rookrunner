@@ -663,7 +663,7 @@ class PollTests(unittest.TestCase):
         self.server.etags["pulls"] = "pulls-2"
         opened = self.poll()
         self.assertEqual(self.runs(), 1)
-        self.assertEqual(opened["skipped"], [])
+        self.assertEqual(opened["skipped"], [{"reason": "signoff_absent"}])
         event = self.submits[0]["event"]
         self.assertEqual(
             event["repository"],
