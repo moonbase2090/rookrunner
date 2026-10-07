@@ -1,0 +1,15 @@
+[Unit]
+Description=Rookrunner worker
+# The install letter appends that host's image digest on the host.
+# This file has no digest, no key path, and no listen socket.
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/rookrunner/engine
+Environment=PYTHONPATH=/var/lib/rookrunner/engine/src
+ExecStart=/usr/bin/python3 -m execution_core --state /var/lib/rookrunner/state worker --repository /var/lib/rookrunner/clone
+Restart=always
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
