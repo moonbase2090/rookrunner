@@ -96,7 +96,7 @@ class PlanTests(unittest.TestCase):
             {"shell": "sh", "working_directory": "app"},
         )
         self.assertEqual(plan["job"]["env"], {"JOB": "job-value"})
-        self.assertEqual(plan["job"]["timeout_minutes"], DEFAULT_JOB_TIMEOUT_MINUTES)
+        self.assertEqual(plan["job"]["timeout_minutes"], 360)
         self.assertEqual([step["index"] for step in plan["job"]["steps"]], [0, 1])
         first_step, second_step = plan["job"]["steps"]
         self.assertEqual(first_step["id"], "one")
@@ -263,10 +263,11 @@ jobs:
         self.assertLess(len(workflow.encode()), MAX_WORKFLOW_BYTES)
 
     def test_workflow_file_over_500kb_is_a_capability_error(self):
+        self.assertEqual(MAX_WORKFLOW_BYTES, 500 * 1024)
         body = b"on: push\njobs:\n  build:\n    steps:\n      - run: echo ok\n"
         pad = MAX_WORKFLOW_BYTES - len(body)
         exact = body + b"#" + b"x" * (pad - 1)
-        self.assertEqual(len(exact), MAX_WORKFLOW_BYTES)
+        self.assertEqual(len(exact), 500 * 1024)
         planned = plan_workflow(exact, "build")
         self.assertEqual(len(planned["plan"]["job"]["steps"]), 1)
         with self.assertRaises(PlanError) as raised:
@@ -276,22 +277,22 @@ jobs:
         self.assertIn("docs.github.com/en/actions/reference/limits", str(raised.exception))
 
     def test_job_time_bound_is_timeout_minutes(self):
+        self.assertEqual(DEFAULT_JOB_TIMEOUT_MINUTES, 360)
+        self.assertEqual(MAX_JOB_TIMEOUT_MINUTES, 5 * 24 * 60)
+
         def workflow(minutes):
             return f"on: push\njobs:\n  build:\n    timeout-minutes: {minutes}\n    steps:\n      - run: echo ok\n"
 
         short = plan_workflow(workflow(10).encode(), "build")
         self.assertEqual(short["plan"]["job"]["timeout_minutes"], 10)
-        hosted = plan_workflow(workflow(DEFAULT_JOB_TIMEOUT_MINUTES).encode(), "build")
-        self.assertEqual(hosted["plan"]["job"]["timeout_minutes"], DEFAULT_JOB_TIMEOUT_MINUTES)
-        ceiling = plan_workflow(workflow(MAX_JOB_TIMEOUT_MINUTES).encode(), "build")
-        self.assertEqual(ceiling["plan"]["job"]["timeout_minutes"], MAX_JOB_TIMEOUT_MINUTES)
-        above_hosted = plan_workflow(workflow(DEFAULT_JOB_TIMEOUT_MINUTES + 1).encode(), "build")
-        self.assertEqual(
-            above_hosted["plan"]["job"]["timeout_minutes"],
-            DEFAULT_JOB_TIMEOUT_MINUTES + 1,
-        )
+        hosted = plan_workflow(workflow(360).encode(), "build")
+        self.assertEqual(hosted["plan"]["job"]["timeout_minutes"], 360)
+        ceiling = plan_workflow(workflow(5 * 24 * 60).encode(), "build")
+        self.assertEqual(ceiling["plan"]["job"]["timeout_minutes"], 5 * 24 * 60)
+        above_hosted = plan_workflow(workflow(361).encode(), "build")
+        self.assertEqual(above_hosted["plan"]["job"]["timeout_minutes"], 361)
         with self.assertRaises(PlanError) as raised:
-            plan_workflow(workflow(MAX_JOB_TIMEOUT_MINUTES + 1).encode(), "build")
+            plan_workflow(workflow(5 * 24 * 60 + 1).encode(), "build")
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
         self.assertIn("5 day", str(raised.exception))
         self.assertIn("docs.github.com/en/actions/reference/limits", str(raised.exception))
@@ -302,6 +303,7 @@ jobs:
                 self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
 
     def test_step_timeout_minutes_is_recorded_up_to_360(self):
+        self.assertEqual(MAX_STEP_TIMEOUT_MINUTES, 360)
         workflow = """\
 on: push
 jobs:
@@ -321,9 +323,7 @@ jobs:
             "      - timeout-minutes: 1\n", "      - timeout-minutes: 360\n"
         )
         accepted = plan_workflow(longer_than_job.encode(), "build")
-        self.assertEqual(
-            accepted["plan"]["job"]["steps"][0]["timeout_minutes"], MAX_STEP_TIMEOUT_MINUTES
-        )
+        self.assertEqual(accepted["plan"]["job"]["steps"][0]["timeout_minutes"], 360)
         self.assertEqual(accepted["plan"]["job"]["timeout_minutes"], 1)
         above = workflow.replace("      - timeout-minutes: 1\n", "      - timeout-minutes: 361\n")
         with self.assertRaises(PlanError) as raised:
@@ -1263,7 +1263,7 @@ jobs:
       - run: echo hi
 """
         plan = plan_workflow(workflow.encode(), "build")["plan"]
-        self.assertEqual(plan["capability_version"], CAPABILITY_VERSION)
+        self.assertEqual(plan["capability_version"], 12)
         self.assertEqual(
             plan["workflow"]["concurrency"],
             {

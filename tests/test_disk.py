@@ -88,7 +88,7 @@ class DiskUsageTests(unittest.TestCase):
                         str(caught.exception), "disk budget must be a non-negative integer"
                     )
             worker = Worker(directory, state)
-            self.assertEqual(worker.disk_budget, DEFAULT_DISK_BUDGET)
+            self.assertEqual(worker.disk_budget, 10 * 1024 * 1024 * 1024)
             worker = Worker(directory, state, disk_budget=0)
             self.assertEqual(worker.disk_budget, 0)
 
