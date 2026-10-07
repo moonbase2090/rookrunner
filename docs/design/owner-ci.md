@@ -69,6 +69,12 @@ event as the last merge commit on that ref, and `GITHUB_REF` as
 workflow does not run while the pull request has a merge conflict.
 When the merge ref is absent, the pass records that and runs nothing.
 
+A configured workflow that is not a tracked file in the tested commit
+is recorded and skipped. The pass continues with the later refs, and
+the tip is stored so the next pass does not retry that commit. A
+workflow that is present and is not a regular file still stops the
+pass, as does any other capture failure.
+
 The commit status for a pull request is posted on the head SHA,
 `pull_request.head.sha`. GitHub's pull request page shows statuses on
 the commits in the pull request. The head SHA is that commit. The

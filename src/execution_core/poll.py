@@ -20,6 +20,10 @@ Local rules, not GitHub-equivalence claims:
 - A pull request's activity is ``opened`` the first time it is seen
   and ``synchronize`` when its head or merge SHA changes.
 - A missing ``refs/pull/<number>/merge`` is recorded and runs nothing.
+- A selected workflow that is not a tracked file in the tested commit
+  is recorded as skipped and the pass continues. The tip is still
+  stored. A workflow that is not a regular file, and any other capture
+  failure, stops the pass.
 - A fork is recorded and runs nothing. The head and base repository
   ids match only when both are integers and equal. A null head
   repository is a fork. The full name is not the comparison.
@@ -68,6 +72,7 @@ _GET_TIMEOUT_SECONDS = 10
 _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
 _ZERO = "0" * 40
+_WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _REPOSITORY = re.compile(rf"{_NAME.pattern}/{_NAME.pattern}")
@@ -733,7 +738,21 @@ class Pass:
                     params["commit_count"] = commits
                     if commits > COMMIT_PATH_LIMIT:
                         params.pop("changed_files", None)
-            submitted = self.caller("run.submit", params)
+            try:
+                submitted = self.caller("run.submit", params)
+            except PollError as exc:
+                if exc.kind == "INVALID_PARAMS" and str(exc) == _WORKFLOW_ABSENT:
+                    self.result["skipped"].append(
+                        {
+                            "reason": "workflow_absent",
+                            "event": event_name,
+                            "ref": ref,
+                            "workflow": workflow,
+                            "job_id": job_id,
+                        }
+                    )
+                    continue
+                raise
             if submitted.get("triggered") is False and "run_id" not in submitted:
                 self.result["submitted"].append(
                     {"event": event_name, "ref": ref, "triggered": False}
