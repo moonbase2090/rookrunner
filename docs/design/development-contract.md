@@ -171,11 +171,11 @@ files are omitted. Symlinks are not followed. `run.artifacts` pages that
 manifest with the existing list page of 100. `artifact.read` pages bytes with
 the existing 65536-byte log page. GitHub's artifact storage quota depends on
 the plan and the limits page states no per-file or per-job count
-(https://docs.github.com/en/actions/reference/limits). Those bytes stay in
-the attempt workspace under the configured disk budget. This is not an
+(https://docs.github.com/en/actions/reference/limits). The manifest rows stay in the run database. When the run is terminal and
+container cleanup is confirmed, the attempt directory is removed. A later
+`artifact.read` reports that the bytes are not available. This is not an
 upload-artifact zip. NS-46 names selected files in that manifest,
-including files that match the snapshot, and still does not zip. The manifest is retained with the workspace until the
-state directory is removed. Pruning is not implemented.
+including files that match the snapshot, and still does not zip.
 Step `if`, job `if`, and job outputs are evaluated with the documented
 operators, types, and functions used by this subset
 (https://docs.github.com/en/actions/reference/workflows-and-actions/expressions).
@@ -281,15 +281,17 @@ Submission keys are 1–128 characters and scoped to the state directory's stabl
 worker ID. Omitted fixture defaults normalize to explicit defaults. Same key and
 normalized input return the existing run; changed parameters produce
 `IDEMPOTENCY_CONFLICT`. All runs, inputs, logs, and keys are retained indefinitely;
-there is no pruning or key expiry in this prototype. New submissions stop when
-the configured disk budget would be exceeded. That refusal is not pruning, so
-this remains a development service rather than an unattended release.
+there is no key expiry in this prototype. When a run is terminal and container
+cleanup is confirmed, its attempt directory is removed. An unresolved cleanup
+keeps that directory. New submissions stop when the configured disk budget
+would still be exceeded after those finished directories are removed. That
+refusal does not delete runs, keys, snapshots, or an active attempt.
 The retry window is therefore the entire lifetime of the retained worker state,
 including across restarts. No tombstone expiry is needed because no run or key
 can be pruned through the API. Deleting the state directory outside the service
 discards its identity and history; it is not a supported retry/retention operation.
-Workflow artifact bytes stay in the attempt workspace for the life of that
-state directory. Event payloads are still unsupported. Development fixtures
+Workflow artifact manifest rows stay in the run database. The attempt directory
+does not. Event payloads are still unsupported. Development fixtures
 publish no artifacts. The captured fixture and logs are SQLite values committed
 atomically with acceptance/completion, not references to mutable checkout files.
 
@@ -343,13 +345,16 @@ repository on every plan in the storage table
 `10 * 1024 * 1024 * 1024` bytes. GitHub documents 10 GB and does not define
 the byte multiple; this repository uses 1024, matching its 500 KB
 workflow-file limit. GitHub may evict cache entries past a repository cache
-limit. This budget does not. A submission that would exceed it returns
+limit. This budget does not delete snapshots, run records, or an attempt
+whose container cleanup is still unresolved. Before it refuses a submission,
+it removes attempt directories for terminal runs whose cleanup is confirmed.
+A submission that still would exceed it returns
 `STORAGE_FULL`, creates no run, and does not consume the submission key. The
 same key still returns a run that was already accepted. The snapshot captured
 for a refused workflow submission is removed because it is not yet evidence
-of a run. Active runs and their evidence are not deleted. SQLite full errors
+of a run. Active runs and their snapshots are not deleted. SQLite full errors
 still roll back acceptance the same way. Runs and keys stay until the state
-directory is removed; pruning remains later work. The budget is worker
+directory is removed. The budget is worker
 configuration and is not a `worker.describe` limit. GitHub Free artifact
 storage, 500 MB, is an account artifact quota and is not this budget.
 

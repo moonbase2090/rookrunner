@@ -537,6 +537,8 @@ class Worker:
             cleanup="unresolved" if unresolved else "confirmed_no_external_resources",
         )
         self.save(record)
+        if not unresolved:
+            self._release_finished_attempt(record)
 
     def _load_retained(self):
         with self.db:
@@ -773,6 +775,7 @@ class Worker:
             cleanup="confirmed_no_external_resources",
         )
         self.save(current)
+        self._release_finished_attempt(current)
 
     def _select_queued(self, fixture_only):
         """Return the next queued run that is not waiting on its own group."""
@@ -822,6 +825,7 @@ class Worker:
                 )
             record.update(finished_at=now(), cleanup="confirmed_no_external_resources")
             self.save(record)
+            self._release_finished_attempt(record)
 
     def _fail_unclaimed(self, record):
         record.update(
@@ -835,6 +839,7 @@ class Worker:
         )
         with self.db:
             self.save(record)
+        self._release_finished_attempt(record)
 
     def _execute_workflow(self, record, request, lease):
         attempt_root = Path(self.state) / "attempts" / record["attempt_id"]
@@ -1005,6 +1010,7 @@ class Worker:
                     )
                     self.save(current)
                     self._delete_ownership(current.get("attempt_id"))
+                    self._release_finished_attempt(current)
                     return
             # The cancel commit takes the lock after the stop. Wait without
             # holding it so that commit can land before another job starts.
@@ -1072,6 +1078,31 @@ class Worker:
         )
         self.save(current)
         self._delete_ownership(current.get("attempt_id"))
+        self._release_finished_attempt(current)
+
+    def _release_finished_attempt(self, record):
+        """Remove a finished attempt directory. The run record stays.
+
+        An unresolved container cleanup keeps its directory. Snapshots stay.
+        """
+
+        if record.get("state") not in TERMINAL:
+            return
+        if record.get("cleanup") != "confirmed_no_external_resources":
+            return
+        attempt_id = record.get("attempt_id")
+        if not _ATTEMPT_ID.fullmatch(attempt_id or ""):
+            return
+        self._remove_workspace(Path(self.state) / "attempts" / attempt_id)
+
+    def _reclaim_terminal_attempts(self):
+        """Drop finished attempt directories so a later submission can fit."""
+
+        with self.db:
+            rows = self.db.execute("SELECT record FROM runs").fetchall()
+        for (raw,) in rows:
+            record = json.loads(raw)
+            self._release_finished_attempt(record)
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
@@ -1140,6 +1171,7 @@ class Worker:
             self.save(current)
             self.live.pop(current["run_id"], None)
             self._delete_ownership(current.get("attempt_id"))
+            self._release_finished_attempt(current)
             return current
 
     def _commit_lost(self, record, container_name):
@@ -1467,10 +1499,17 @@ class Worker:
             used = usage(self.state)
         except OSError:
             return True
+        if used + incoming <= self.disk_budget:
+            return False
+        self._reclaim_terminal_attempts()
+        try:
+            used = usage(self.state)
+        except OSError:
+            return True
         return used + incoming > self.disk_budget
 
     def _publish_artifacts(self, record, selections=None):
-        """Record files this attempt wrote. The workspace itself is not deleted.
+        """Record files this attempt wrote. A confirmed terminal run then removes the directory.
 
         `selections` None reads `uploads.json` beside the workspace. A missing
         or unusable file means no names. Paths that are no longer regular
@@ -1553,7 +1592,7 @@ class Worker:
                     "submission_key_characters": 128,
                     "json_depth": MAX_JSON_DEPTH,
                 },
-                "retention": "runs and submission keys retained indefinitely; pruning unsupported",
+                "retention": "runs and submission keys retained indefinitely; terminal attempt directories removed",
             }
             if self.node24 is not None:
                 described["node24"] = {

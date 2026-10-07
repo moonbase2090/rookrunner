@@ -303,12 +303,7 @@ jobs:
         self.assertEqual(done["steps"][0]["stdout"], "original\n")
         self.assertEqual(done["steps"][1]["stdout"], canonical(EVENT) + "\n")
         attempt = self.state / "attempts" / done["attempt_id"]
-        self.assertEqual((attempt / "workspace" / "source.txt").read_text(), "original\n")
-        for name in ("home", "runner-temp", "tool-cache"):
-            directory = attempt / name
-            self.assertTrue(directory.is_dir(), name)
-            self.assertFalse(directory.is_symlink())
-            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertFalse(attempt.exists())
         self.assert_no_containers()
         development = self.rpc(
             "run.submit",

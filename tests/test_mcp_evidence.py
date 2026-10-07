@@ -1,11 +1,11 @@
 """Artifact tools on the stdio MCP adapter.
 
 `artifacts` and `artifact_read` forward one socket call each.
-A development fixture stays unsupported. Workflow bytes come back
-unchanged, and a missing file stays an internal error.
+A development fixture stays unsupported. A finished workflow keeps
+its manifest, and reading the removed attempt stays an internal error.
 """
 
-import base64
+import hashlib
 import json
 from pathlib import Path
 import select
@@ -311,13 +311,14 @@ class WorkflowEvidenceTests(unittest.TestCase):
             if artifact["path"] == "out/sentinel.txt"
         )
         self.assertEqual(item["size"], len(SENTINEL))
-        self.assertIn("id", item)
-        self.assertIn("digest", item)
-        page = session.call("artifact_read", {"artifact_id": item["id"]})
-        self.assertIs(page["isError"], False)
-        decoded = base64.b64decode(page["structuredContent"]["data_base64"])
-        self.assertEqual(decoded, SENTINEL)
-        self.assertNotIn(b"***", decoded)
+        self.assertEqual(item["digest"], hashlib.sha256(SENTINEL).hexdigest())
+        self.assertFalse(sentinel_path.exists())
+        missing = session.call("artifact_read", {"artifact_id": item["id"]})
+        self.assertIs(missing["isError"], True)
+        self.assertEqual(missing["structuredContent"]["kind"], "INTERNAL_ERROR")
+        self.assertEqual(
+            missing["structuredContent"]["message"], "artifact bytes are not available"
+        )
         read_cli = subprocess.run(
             [
                 sys.executable,
@@ -332,15 +333,12 @@ class WorkflowEvidenceTests(unittest.TestCase):
             text=True,
             timeout=10,
         )
-        self.assertEqual(read_cli.returncode, 0, read_cli.stderr)
-        self.assertEqual(page["structuredContent"], json.loads(read_cli.stdout)["result"])
-        sentinel_path.unlink()
-        missing = session.call("artifact_read", {"artifact_id": item["id"]})
-        self.assertIs(missing["isError"], True)
-        self.assertEqual(missing["structuredContent"]["kind"], "INTERNAL_ERROR")
-        self.assertEqual(
-            missing["structuredContent"]["message"], "artifact bytes are not available"
-        )
+        self.assertEqual(read_cli.returncode, 1, read_cli.stderr)
+        cli_error = json.loads(read_cli.stdout)["error"]
+        self.assertEqual(cli_error["data"]["kind"], "INTERNAL_ERROR")
+        self.assertEqual(cli_error["message"], "artifact bytes are not available")
+        self.assertNotIn(str(self.state), read_cli.stdout)
+        self.assertNotIn(SENTINEL.decode(), read_cli.stdout)
         follow = session.call("get", {"run_id": record["run_id"]})
         self.assertIs(follow["isError"], False)
         self.assertEqual(follow["structuredContent"]["run_id"], record["run_id"])
