@@ -8,7 +8,7 @@ import sys
 import time
 
 from .checks import mint_list_token, post_check_flow, revoke_installation_token
-from .poll import PollError, poll_once
+from .poll import PollError, accept_place, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
 from .worker import serve
@@ -323,6 +323,55 @@ def _poll_caller(args):
     return ssh_caller(host, remote)
 
 
+def _place_caller_unused(_method, _params):
+    raise PollError("WORKER_ERROR", "worker ssh call failed")
+
+
+def _place_from_json(text):
+    if (
+        not isinstance(text, str)
+        or text == ""
+        or text.startswith("-")
+        or any(character in text for character in "\0\r\n")
+    ):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    try:
+        parsed = strict_json(text)
+    except (ValueError, UnicodeError, RecursionError):
+        raise PollError("INVALID_PARAMS", "place is not accepted") from None
+    if not isinstance(parsed, dict):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    allowed = {"name", "state", "cap", "image", "ssh"}
+    if not {"name", "state", "cap", "image"} <= set(parsed) or set(parsed) - allowed:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    checked = accept_place({**parsed, "caller": _place_caller_unused})
+    if checked["ssh"] is None:
+        checked["caller"] = _worker_caller(checked["state"])
+    else:
+        checked["caller"] = ssh_caller(checked["ssh"], checked["state"])
+    return checked
+
+
+def _places_from_args(args):
+    raw = getattr(args, "place", None)
+    if not raw:
+        return None
+    if (
+        getattr(args, "ssh_host", None) is not None
+        or getattr(args, "remote_state", None) is not None
+    ):
+        raise PollError("INVALID_PARAMS", "place and ssh host are set separately")
+    places = []
+    seen = set()
+    for item in raw:
+        place = _place_from_json(item)
+        if place["name"] in seen:
+            raise PollError("INVALID_PARAMS", "place is not accepted")
+        seen.add(place["name"])
+        places.append(place)
+    return places
+
+
 def _call_stdio(state):
     raw = sys.stdin.buffer.readline(MAX_MESSAGE + 1)
     if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n") or sys.stdin.buffer.read(1):
@@ -344,9 +393,14 @@ def _call_stdio(state):
     sys.exit(1 if "error" in reply else 0)
 
 
-def _run_poll(args, caller, mint, revoke):
+def _run_poll(args, caller, mint, revoke, places=None):
     """Mint a list token when ``--app-key`` is set, run one pass, then revoke."""
 
+    if places is not None and (
+        getattr(args, "ssh_host", None) is not None
+        or getattr(args, "remote_state", None) is not None
+    ):
+        raise PollError("INVALID_PARAMS", "place and ssh host are set separately")
     token = None
     try:
         if args.app_key and not args.credential_file:
@@ -363,6 +417,7 @@ def _run_poll(args, caller, mint, revoke):
             caller=caller,
             list_token=token,
             ssh_host=getattr(args, "ssh_host", None),
+            places=places,
         )
     finally:
         if isinstance(token, str):
@@ -374,11 +429,14 @@ def report_poll(args):
     """Run one pass and exit. A rate-limit stop is a finished pass."""
 
     try:
+        places = _places_from_args(args)
+        caller = None if places is not None else _poll_caller(args)
         result = _run_poll(
             args,
-            _poll_caller(args),
+            caller,
             mint_list_token,
             revoke_installation_token,
+            places,
         )
     except PollError as error:
         print(
@@ -714,6 +772,15 @@ def main():
         "--api-base",
         default=DEFAULT_API_BASE,
         help=f"GitHub API origin (default {DEFAULT_API_BASE})",
+    )
+    poll.add_argument(
+        "--place",
+        action="append",
+        help=(
+            "one worker in placement order, as a JSON object with name, state, "
+            "cap, and image, and an optional ssh. Repeat for each worker. "
+            "Omit it to keep one local socket or one --ssh-host."
+        ),
     )
     poll.add_argument(
         "--ssh-host",

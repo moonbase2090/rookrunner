@@ -37,6 +37,12 @@ Local rules, not GitHub-equivalence claims:
   host is written into ``poll.json`` before submit, and the tested SHA
   is checked out there from this clone. A key recorded for another host
   is left where it is.
+- ``--place`` selects a worker in the given order. The place image
+  matches ``--image`` when that flag is set, and the worker runner image
+  when ``--image`` is omitted. A place that is not ready, full,
+  unreachable, or a different repository is named in the summary. A job
+  with no matching place is left unrecorded. A recorded place stays,
+  including when its run is lost.
 - A queued run is cancelled 24 hours after acceptance and reported as
   ``error``. An older SHA is not cancelled because a newer push arrived.
 - This pass lists branches and open pull requests. It does not list tags.
@@ -59,7 +65,7 @@ import urllib.request
 from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
-from .protocol import canonical, is_integer, strict_json
+from .protocol import MAX_LIST_PAGE, canonical, is_integer, strict_json
 from .status import (
     StatusError,
     github_state,
@@ -86,6 +92,7 @@ _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _REPOSITORY = re.compile(rf"{_NAME.pattern}/{_NAME.pattern}")
 _SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+_IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class PollError(Exception):
@@ -466,6 +473,82 @@ def _fetch_sha(clone, ref):
     return sha
 
 
+def _digest(value):
+    if isinstance(value, str) and _IMAGE_DIGEST.fullmatch(value):
+        return value
+    if isinstance(value, str) and "@sha256:" in value:
+        digest = "sha256:" + value.rsplit("sha256:", 1)[1]
+        if _IMAGE_DIGEST.fullmatch(digest):
+            return digest
+    return None
+
+
+def _place_state_accepted(path):
+    return (
+        isinstance(path, str)
+        and path != ""
+        and not path.startswith("-")
+        and not any(character in path for character in "\0\r\n")
+    )
+
+
+def accept_place(place):
+    """Return one place. ``caller`` talks to that worker and is not invoked here."""
+
+    if not isinstance(place, dict):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    internal = {"skip", "reachable", "connected", "remote_repository", "active"}
+    public = {key: value for key, value in place.items() if key not in internal}
+    allowed = {"name", "ssh", "state", "cap", "image", "caller"}
+    required = {"name", "state", "cap", "image", "caller"}
+    if not required <= set(public) or set(public) - allowed:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    name = public["name"]
+    ssh = public.get("ssh")
+    if not isinstance(name, str) or _SSH_HOST.fullmatch(name) is None:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    if ssh is not None and (not isinstance(ssh, str) or _SSH_HOST.fullmatch(ssh) is None):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    if not _place_state_accepted(public["state"]):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    cap = public["cap"]
+    if type(cap) is not int or not 1 <= cap <= MAX_LIST_PAGE:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    if not isinstance(public["image"], str) or _IMAGE_DIGEST.fullmatch(public["image"]) is None:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    if not callable(public["caller"]):
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    return {
+        "name": name,
+        "ssh": ssh,
+        "state": public["state"],
+        "cap": cap,
+        "image": public["image"],
+        "caller": public["caller"],
+        "skip": None,
+        "reachable": False,
+        "connected": False,
+        "remote_repository": None,
+        "active": 0,
+    }
+
+
+def accept_places(places):
+    """Return the placement order. An empty list or a repeated name is refused."""
+
+    if not isinstance(places, list) or not places:
+        raise PollError("INVALID_PARAMS", "place is not accepted")
+    accepted = []
+    seen = set()
+    for place in places:
+        item = accept_place(place)
+        if item["name"] in seen:
+            raise PollError("INVALID_PARAMS", "place is not accepted")
+        seen.add(item["name"])
+        accepted.append(item)
+    return accepted
+
+
 def _diff(clone, before, after):
     """Return changed paths and commit count, or None when the diff is unavailable."""
 
@@ -510,6 +593,7 @@ class Pass:
         app_key=None,
         list_token=None,
         ssh_host=None,
+        places=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -523,6 +607,7 @@ class Pass:
         self.caller = caller
         self.clock = clock
         self.ssh_host = ssh_host
+        self.places = places
         self.remote_repository = None
         self.budget = _Budget()
         self.state = None
@@ -537,31 +622,46 @@ class Pass:
             raise PollError("INVALID_PARAMS", "one post accepts one credential")
         if not self.app_key and not self.credential_file:
             raise PollError("INVALID_PARAMS", "one post needs one credential")
-        if self.ssh_host is not None:
+        if self.places is not None:
+            self.places = accept_places(self.places)
+            if self.ssh_host is not None:
+                raise PollError("INVALID_PARAMS", "place and ssh host are set separately")
+        elif self.ssh_host is not None:
             _accept_ssh_host(self.ssh_host)
         self._lock()
         try:
-            described = self.caller("worker.describe", {})
-            if self.ssh_host is None:
-                if Path(described["repository"]).resolve() != self.clone.resolve():
-                    raise PollError(
-                        "CLONE_MISMATCH", "dedicated clone must be the worker repository"
+            if self.places is None:
+                described = self.caller("worker.describe", {})
+                if self.ssh_host is None:
+                    if Path(described["repository"]).resolve() != self.clone.resolve():
+                        raise PollError(
+                            "CLONE_MISMATCH", "dedicated clone must be the worker repository"
+                        )
+                else:
+                    remote = _accept_remote_path(described.get("repository"))
+                    origin = _ssh_text(
+                        self.ssh_host, ["git", "-C", remote, "remote", "get-url", "origin"]
                     )
+                    if _origin_repository(origin) != self.repository:
+                        raise PollError(
+                            "CLONE_MISMATCH", "worker repository must be the polled repository"
+                        )
+                    self.remote_repository = remote
             else:
-                remote = _accept_remote_path(described.get("repository"))
-                origin = _ssh_text(
-                    self.ssh_host, ["git", "-C", remote, "remote", "get-url", "origin"]
-                )
-                if _origin_repository(origin) != self.repository:
-                    raise PollError(
-                        "CLONE_MISMATCH", "worker repository must be the polled repository"
-                    )
-                self.remote_repository = remote
+                self._probe_places()
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
-            self._expire_queued()
+            if self.places is None:
+                self._expire_queued()
+            else:
+                self._note_unknown_hosts()
+                self._connect_claimed()
+                self._expire_placed()
             self._branches()
             self._pulls()
-            self._post_terminal()
+            if self.places is None:
+                self._post_terminal()
+            else:
+                self._post_placed()
             self.result["stopped"] = self.budget.stopped
             _save_state(self.state_dir / "poll.json", self.state)
             return self.result
@@ -585,6 +685,171 @@ class Pass:
             return
         os.close(self.lock_fd)
         self.lock_fd = None
+
+    def _probe_places(self):
+        for place in self.places:
+            self._classify(place, force_connect=False)
+
+    def _connect_claimed(self):
+        claimed = {
+            entry.get("host")
+            for entry in self.state["submissions"]
+            if isinstance(entry.get("host"), str)
+        }
+        for place in self.places:
+            if place["name"] in claimed and not place["connected"]:
+                self._classify(place, force_connect=True)
+
+    def _classify(self, place, *, force_connect):
+        if place["connected"]:
+            return
+        if not force_connect and self.image is not None and _digest(self.image) != place["image"]:
+            self._mark(place, "image")
+            return
+        place["connected"] = True
+        try:
+            described = place["caller"]("worker.describe", {})
+            if not isinstance(described, dict):
+                raise PollError("WORKER_ERROR", "worker describe was not an object")
+        except (PollError, OSError):
+            # A down socket is a skipped host. It must not fail the pass.
+            self._mark(place, "unreachable")
+            return
+        place["reachable"] = True
+        mismatched = (
+            described.get("runner_image") != place["image"]
+            if self.image is None
+            else _digest(self.image) != place["image"]
+        )
+        if mismatched:
+            self._mark(place, "image")
+        elif described.get("ready") is not True:
+            self._mark(place, "not_ready")
+        self._remember_repository(place, described.get("repository"))
+        if place["skip"] is not None:
+            return
+        try:
+            place["active"] = self._count_active(place)
+        except (PollError, OSError):
+            place["reachable"] = False
+            self._mark(place, "unreachable")
+            return
+        if place["active"] >= place["cap"]:
+            self._mark(place, "host_full")
+
+    def _remember_repository(self, place, raw):
+        try:
+            remote = _accept_remote_path(raw)
+            if place["ssh"] is not None:
+                origin = _ssh_text(
+                    place["ssh"], ["git", "-C", remote, "remote", "get-url", "origin"]
+                )
+            else:
+                origin = _stdout(_git(remote, "remote", "get-url", "origin"))
+            if _origin_repository(origin) != self.repository:
+                raise PollError("CLONE_MISMATCH", "worker repository must be the polled repository")
+        except PollError:
+            if place["skip"] is None:
+                self._mark(place, "repository")
+            return
+        place["remote_repository"] = remote
+
+    def _count_active(self, place):
+        total = 0
+        for state in ("queued", "running"):
+            listed = place["caller"]("run.list", {"state": state, "limit": place["cap"]})
+            runs = listed.get("runs") if isinstance(listed, dict) else None
+            if not isinstance(runs, list):
+                raise PollError("WORKER_ERROR", "worker run list was not a page")
+            total += len(runs)
+        return total
+
+    def _mark(self, place, reason):
+        if place["skip"] is None or reason == "unreachable":
+            place["skip"] = reason
+        row = {"reason": reason, "host": place["name"]}
+        if row not in self.result["skipped"]:
+            self.result["skipped"].append(row)
+
+    def _note_unknown_hosts(self):
+        names = {place["name"] for place in self.places}
+        seen = []
+        for entry in self.state["submissions"]:
+            host = entry.get("host")
+            if host in names or host in seen:
+                continue
+            seen.append(host)
+            self.result["skipped"].append({"reason": "host_unknown", "host": host})
+
+    def _choose_place(self):
+        for place in self.places:
+            if place["skip"] == "host_full":
+                self._mark(place, "host_full")
+                continue
+            if place["skip"] is not None or not place["reachable"]:
+                continue
+            if place["active"] >= place["cap"]:
+                self._mark(place, "host_full")
+                continue
+            return place
+        return None
+
+    def _place_for(self, name):
+        for place in self.places:
+            if place["name"] == name:
+                return place
+        return None
+
+    def _bind(self, place):
+        self.caller = place["caller"]
+        self.ssh_host = place["ssh"]
+        self.remote_repository = place.get("remote_repository")
+
+    def _place_checkout(self, sha):
+        if self.ssh_host is not None:
+            self._remote_checkout(sha)
+            return
+        remote = self.remote_repository
+        if remote is None or _SHA.fullmatch(sha) is None:
+            raise PollError("GIT_FAILED", "git command failed")
+        try:
+            same = Path(remote).resolve() == self.clone.resolve()
+        except OSError:
+            same = False
+        if same:
+            return
+        pack = _git(
+            self.clone,
+            "pack-objects",
+            "--revs",
+            "--stdout",
+            input_bytes=(sha + "\n").encode(),
+        ).stdout
+        _git(remote, "unpack-objects", "-q", input_bytes=pack)
+        _checkout(remote, sha)
+
+    def _expire_placed(self):
+        for entry in self.state["submissions"]:
+            if self._placed_caller(entry) is None or "run_id" not in entry:
+                continue
+            record = self.caller("run.get", {"run_id": entry["run_id"]})
+            if record["state"] == "queued" and queue_expired(record.get("accepted_at"), self.clock):
+                self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
+
+    def _post_placed(self):
+        for entry in self.state["submissions"]:
+            if self.budget.stopped:
+                return
+            if self._placed_caller(entry) is None or "run_id" not in entry:
+                continue
+            self._post_record(entry)
+
+    def _placed_caller(self, entry):
+        place = self._place_for(entry.get("host"))
+        if place is None or not place.get("reachable"):
+            return None
+        self._bind(place)
+        return place
 
     def _checkpoint(self):
         _save_state(self.state_dir / "poll.json", self.state)
@@ -801,6 +1066,10 @@ class Pass:
     def _submit_jobs(self, event_name, ref, tested, status_sha, event, activity, changed, first):
         """Submit each configured job. Return false when a pending post did not finish."""
 
+        if self.places is not None:
+            return self._submit_placed(
+                event_name, ref, tested, status_sha, event, activity, changed, first
+            )
         for workflow, job_id in self.jobs:
             key = submission_key(self.repository, event_name, tested, workflow, job_id)
             existing = next(
@@ -902,6 +1171,127 @@ class Pass:
             )
         return not self.budget.stopped
 
+    def _submit_placed(self, event_name, ref, tested, status_sha, event, activity, changed, first):
+        """Place each new job. A recorded place is submitted again on that place."""
+
+        for workflow, job_id in self.jobs:
+            key = submission_key(self.repository, event_name, tested, workflow, job_id)
+            existing = next(
+                (item for item in self.state["submissions"] if item.get("key") == key), None
+            )
+            if existing is not None:
+                place = self._place_for(existing.get("host"))
+                if place is None or not place.get("reachable"):
+                    continue
+                if "run_id" in existing:
+                    self._bind(place)
+                    if not existing["pending"]:
+                        if not self._post_pending(existing):
+                            return False
+                        existing["pending"] = True
+                        self._checkpoint()
+                        self.result["submitted"].append(
+                            {
+                                "event": event_name,
+                                "ref": ref,
+                                "run_id": existing["run_id"],
+                                "host": place["name"],
+                            }
+                        )
+                    continue
+                if place.get("skip") not in (None, "host_full"):
+                    continue
+                claimed = existing
+            else:
+                place = self._choose_place()
+                if place is None:
+                    self.result["skipped"].append(
+                        {
+                            "reason": "no_host",
+                            "event": event_name,
+                            "ref": ref,
+                            "workflow": workflow,
+                            "job_id": job_id,
+                        }
+                    )
+                    continue
+                claimed = {
+                    "key": key,
+                    "host": place["name"],
+                    "event": event_name,
+                    "tested_commit": tested,
+                    "status_sha": status_sha,
+                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "pending": False,
+                }
+                self.state["submissions"].append(claimed)
+                self._checkpoint()
+            self._bind(place)
+            params = {
+                "version": 1,
+                "submission_key": key,
+                "workflow": workflow,
+                "job_id": job_id,
+                "event": event,
+                "event_name": event_name,
+            }
+            if self.image is not None:
+                params["image"] = self.image
+            if activity is not None:
+                params["activity_type"] = activity
+            if first or changed is None:
+                params["diff_unavailable"] = True
+            else:
+                files, commits = changed
+                params["changed_files"] = files
+                if event_name == "push":
+                    params["commit_count"] = commits
+                    if commits > COMMIT_PATH_LIMIT:
+                        params.pop("changed_files", None)
+            self._place_checkout(tested)
+            try:
+                submitted = self.caller("run.submit", params)
+            except PollError as exc:
+                if exc.kind == "INVALID_PARAMS" and str(exc) == _WORKFLOW_ABSENT:
+                    if "run_id" not in claimed:
+                        self._drop_unstarted(claimed)
+                    self.result["skipped"].append(
+                        {
+                            "reason": "workflow_absent",
+                            "event": event_name,
+                            "ref": ref,
+                            "workflow": workflow,
+                            "job_id": job_id,
+                        }
+                    )
+                    continue
+                raise
+            if submitted.get("triggered") is False and "run_id" not in submitted:
+                if "run_id" not in claimed:
+                    self._drop_unstarted(claimed)
+                self.result["submitted"].append(
+                    {"event": event_name, "ref": ref, "triggered": False, "host": place["name"]}
+                )
+                continue
+            claimed["run_id"] = submitted["run_id"]
+            place["active"] += 1
+            if place["active"] >= place["cap"]:
+                place["skip"] = "host_full"
+            self._checkpoint()
+            if not self._post_pending(claimed):
+                return False
+            claimed["pending"] = True
+            self._checkpoint()
+            self.result["submitted"].append(
+                {
+                    "event": event_name,
+                    "ref": ref,
+                    "run_id": submitted["run_id"],
+                    "host": place["name"],
+                }
+            )
+        return not self.budget.stopped
+
     def _claims_this_host(self, entry):
         return entry.get("host") == self.ssh_host
 
@@ -947,30 +1337,33 @@ class Pass:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
-            record = self.caller("run.get", {"run_id": entry["run_id"]})
-            mapped = github_state(record["state"], record["exit_code"])
-            if mapped == "pending":
-                continue
-            params = {
-                "run_id": entry["run_id"],
-                "tested_commit": entry["tested_commit"],
-                "status_sha": entry["status_sha"],
-                "context": entry["context"],
-            }
-            if self.app_key:
-                params["checks"] = True
-            decision = self.caller("run.status", params)
-            if decision["action"] == "skip":
-                self.result["statuses"].append(
-                    {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
-                )
-                continue
-            if decision["action"] != "post":
-                raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
-            if self._post(entry, decision["state"], decision if self.app_key else None):
-                self.result["statuses"].append(
-                    {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
-                )
+            self._post_record(entry)
+
+    def _post_record(self, entry):
+        record = self.caller("run.get", {"run_id": entry["run_id"]})
+        mapped = github_state(record["state"], record["exit_code"])
+        if mapped == "pending":
+            return
+        params = {
+            "run_id": entry["run_id"],
+            "tested_commit": entry["tested_commit"],
+            "status_sha": entry["status_sha"],
+            "context": entry["context"],
+        }
+        if self.app_key:
+            params["checks"] = True
+        decision = self.caller("run.status", params)
+        if decision["action"] == "skip":
+            self.result["statuses"].append(
+                {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
+            )
+            return
+        if decision["action"] != "post":
+            raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
+        if self._post(entry, decision["state"], decision if self.app_key else None):
+            self.result["statuses"].append(
+                {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
+            )
 
     def _status_params(self, entry):
         return {
@@ -997,7 +1390,9 @@ class Pass:
             return self._post_app(entry, state, decision)
         described = self.caller("worker.describe", {})
         try:
-            token = read_credential(self.credential_file, self.state_dir, described["repository"])
+            token = read_credential(
+                self.credential_file, self.state_dir, self._credential_repository(described)
+            )
             try:
                 remaining = post_status(
                     self.api_base,
@@ -1046,7 +1441,7 @@ class Pass:
                 post_status_request=decision.get("status_recorded") is not True,
                 app_key=self.app_key,
                 state_dir=self.state_dir,
-                repository_root=described["repository"],
+                repository_root=self._credential_repository(described),
             )
         except StatusError as error:
             if error.kind == "RATE_LIMITED" and error.retryable:
@@ -1066,6 +1461,11 @@ class Pass:
         if posted.status_posted:
             self.budget.observe(posted.status_remaining)
         return True
+
+    def _credential_repository(self, described):
+        if self.ssh_host is not None:
+            return str(self.clone)
+        return described["repository"]
 
     def _record_app(self, entry, state, decision, posted):
         if posted.check_id is None and not posted.status_posted:
@@ -1154,6 +1554,7 @@ def poll_once(
     app_key=None,
     list_token=None,
     ssh_host=None,
+    places=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -1172,4 +1573,5 @@ def poll_once(
         app_key=app_key,
         list_token=list_token,
         ssh_host=ssh_host,
+        places=places,
     ).run()

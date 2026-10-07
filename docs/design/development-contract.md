@@ -401,6 +401,20 @@ of the tested SHA. Objects are sent from the Mac clone through
 key already recorded for a host stays on that host, including when the
 run is lost.
 
+`poll --place` repeats in order. Each value is a JSON object with
+`name`, `state`, `cap`, and `image`, and an optional `ssh`. The name is
+what `poll.json` records as the host. A place without `ssh` uses the
+local socket in `state`. A place with `ssh` uses the same BatchMode
+client as `--ssh-host`. A new job goes to the first place whose image
+matches, whose worker is ready, whose origin names the polled
+repository, and whose queued plus running runs are under `cap`. A place
+that does not match is named in the poll summary. A job with no such
+place is left unrecorded. A key already recorded for a place stays on
+that place. `--place` is not combined with `--ssh-host` or
+`--remote-state`. Omitting `--place` keeps the single-worker path above.
+One invocation is still one repository. The operator runs one invocation
+per repository. Linux hosts still have no poll timer.
+
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
