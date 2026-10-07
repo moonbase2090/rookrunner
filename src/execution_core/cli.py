@@ -1,7 +1,9 @@
 import argparse
 from pathlib import Path
+import re
 import socket
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -14,6 +16,28 @@ from .snapshot import CaptureError, SourceCapture
 
 # Pause while a followed run is still open. This is client pacing, not an Actions limit.
 POLL_SECONDS = 0.2
+# The remote client uses the same socket bound. This covers the ssh process.
+_SSH_CALL_SECONDS = 5
+_SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+
+
+def _parse_worker_reply(raw):
+    if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n"):
+        raise ValueError("invalid or oversized worker response")
+    try:
+        reply = strict_json(raw)
+    except RecursionError:
+        raise ValueError("worker response exceeds JSON nesting limit") from None
+    if (
+        not isinstance(reply, dict)
+        or reply.get("jsonrpc") != "2.0"
+        or type(reply.get("id")) is not int
+        or reply["id"] != 1
+        or set(reply) not in ({"jsonrpc", "id", "result"}, {"jsonrpc", "id", "error"})
+        or not isinstance(reply.get("result", reply.get("error")), dict)
+    ):
+        raise ValueError("invalid worker response envelope")
+    return reply
 
 
 def call(state, method, params):
@@ -28,22 +52,7 @@ def call(state, method, params):
         client.sendall(request)
         with client.makefile("rb") as stream:
             raw = stream.readline(MAX_MESSAGE + 1)
-        if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n"):
-            raise ValueError("invalid or oversized worker response")
-        try:
-            reply = strict_json(raw)
-        except RecursionError:
-            raise ValueError("worker response exceeds JSON nesting limit") from None
-        if (
-            not isinstance(reply, dict)
-            or reply.get("jsonrpc") != "2.0"
-            or type(reply.get("id")) is not int
-            or reply["id"] != 1
-            or set(reply) not in ({"jsonrpc", "id", "result"}, {"jsonrpc", "id", "error"})
-            or not isinstance(reply.get("result", reply.get("error")), dict)
-        ):
-            raise ValueError("invalid worker response envelope")
-        return reply
+        return _parse_worker_reply(raw)
 
 
 def _trigger_flags(args):
@@ -219,16 +228,120 @@ def _print_status_error(error):
     sys.exit(1)
 
 
+def _worker_error(reply):
+    data = reply["error"].get("data") or {}
+    message = reply["error"].get("message") or "worker refused the poll request"
+    raise PollError(data.get("kind") or "WORKER_ERROR", message)
+
+
 def _worker_caller(state):
     def caller(method, params):
         reply = call(state, method, params)
         if "error" in reply:
-            data = reply["error"].get("data") or {}
-            message = reply["error"].get("message") or "worker refused the poll request"
-            raise PollError(data.get("kind") or "WORKER_ERROR", message)
+            _worker_error(reply)
         return reply["result"]
 
     return caller
+
+
+def _ssh_target(host, remote_state):
+    if not isinstance(host, str) or not _SSH_HOST.fullmatch(host):
+        raise PollError("INVALID_PARAMS", "ssh host is not accepted")
+    if (
+        not isinstance(remote_state, str)
+        or remote_state == ""
+        or remote_state.startswith("-")
+        or any(character in remote_state for character in "\0\r\n")
+    ):
+        raise PollError("INVALID_PARAMS", "remote state is not accepted")
+    return host, remote_state
+
+
+def ssh_caller(host, remote_state):
+    """Send worker methods through ssh. The remote command is the local client.
+
+    No listen port is opened. The command is `ssh -o BatchMode=yes` and the
+    remote argv is `python3 -m execution_core --state <dir> call`.
+    """
+
+    host, remote_state = _ssh_target(host, remote_state)
+
+    def caller(method, params):
+        request = (
+            canonical({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n"
+        ).encode()
+        if len(request) > MAX_MESSAGE:
+            raise PollError("INVALID_PARAMS", "request exceeds 1 MiB")
+        command = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            host,
+            "--",
+            "python3",
+            "-m",
+            "execution_core",
+            "--state",
+            remote_state,
+            "call",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                input=request,
+                capture_output=True,
+                timeout=_SSH_CALL_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise PollError("WORKER_ERROR", "worker ssh call timed out") from None
+        except OSError:
+            raise PollError("WORKER_ERROR", "worker ssh call failed") from None
+        stdout = completed.stdout
+        if stdout.count(b"\n") != 1 or not stdout.endswith(b"\n"):
+            raise PollError("WORKER_ERROR", "worker ssh call failed")
+        try:
+            reply = _parse_worker_reply(stdout)
+        except (ValueError, RecursionError, UnicodeError):
+            raise PollError("WORKER_ERROR", "worker ssh call failed") from None
+        if "error" in reply:
+            _worker_error(reply)
+        if completed.returncode != 0:
+            raise PollError("WORKER_ERROR", "worker ssh call failed")
+        return reply["result"]
+
+    return caller
+
+
+def _poll_caller(args):
+    host = args.ssh_host
+    remote = args.remote_state
+    if host is None and remote is None:
+        return _worker_caller(args.state)
+    if host is None or remote is None:
+        raise PollError("INVALID_PARAMS", "ssh host and remote state are set together")
+    return ssh_caller(host, remote)
+
+
+def _call_stdio(state):
+    raw = sys.stdin.buffer.readline(MAX_MESSAGE + 1)
+    if len(raw) > MAX_MESSAGE or not raw.endswith(b"\n") or sys.stdin.buffer.read(1):
+        raise ValueError("invalid or oversized worker request")
+    try:
+        request = strict_json(raw)
+    except RecursionError:
+        raise ValueError("worker request exceeds JSON nesting limit") from None
+    if (
+        not isinstance(request, dict)
+        or request.get("jsonrpc") != "2.0"
+        or type(request.get("id")) is not int
+        or not isinstance(request.get("method"), str)
+        or not isinstance(request.get("params", {}), dict)
+    ):
+        raise ValueError("invalid worker request envelope")
+    reply = call(state, request["method"], request.get("params") or {})
+    print(canonical(reply))
+    sys.exit(1 if "error" in reply else 0)
 
 
 def _run_poll(args, caller, mint, revoke):
@@ -262,7 +375,7 @@ def report_poll(args):
     try:
         result = _run_poll(
             args,
-            _worker_caller(args.state),
+            _poll_caller(args),
             mint_list_token,
             revoke_installation_token,
         )
@@ -601,6 +714,21 @@ def main():
         default=DEFAULT_API_BASE,
         help=f"GitHub API origin (default {DEFAULT_API_BASE})",
     )
+    poll.add_argument(
+        "--ssh-host",
+        help=(
+            "reach the worker with ssh -o BatchMode=yes. "
+            "The remote command is the local client. No listen port is opened."
+        ),
+    )
+    poll.add_argument(
+        "--remote-state",
+        help="worker state directory on the ssh host. Set only with --ssh-host.",
+    )
+    commands.add_parser(
+        "call",
+        help="send one JSON-RPC request from stdin to the local worker socket",
+    )
     args = parser.parse_args()
     if args.command == "poll" and not args.job:
         parser.error("poll requires at least one --job WORKFLOW JOB_ID")
@@ -624,6 +752,9 @@ def main():
             return
         if args.command == "poll":
             report_poll(args)
+            return
+        if args.command == "call":
+            _call_stdio(args.state)
             return
         if args.command == "worker":
             serve(
