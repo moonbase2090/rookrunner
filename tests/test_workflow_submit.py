@@ -420,7 +420,7 @@ class WorkflowSubmitTests(unittest.TestCase):
             "main.yml": "actions/checkout@main",
             "upper.yml": "actions/checkout@V5",
         }
-        for name, (body, field, kind) in rejected.items():
+        for name, (body, _field, _kind) in rejected.items():
             path = self.repo / ".github" / "workflows" / name
             path.write_text(
                 "on: push\njobs:\n  build:\n    steps:\n"

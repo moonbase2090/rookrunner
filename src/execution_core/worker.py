@@ -67,7 +67,7 @@ import sys
 import tempfile
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from . import __version__
 from .actions import (
@@ -163,7 +163,7 @@ _CONCURRENCY_NOTE = (
 
 
 def now():
-    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def cursor(kind, identity, offset):
@@ -852,15 +852,13 @@ class Worker:
                     _error_text(exc)
                     if isinstance(
                         exc,
-                        (
-                            RunError,
-                            AttemptError,
-                            VerifyError,
-                            PlanError,
-                            OSError,
-                            UnicodeError,
-                            ValueError,
-                        ),
+                        RunError
+                        | AttemptError
+                        | VerifyError
+                        | PlanError
+                        | OSError
+                        | UnicodeError
+                        | ValueError,
                     )
                     else "workflow attempt could not be prepared"
                 )

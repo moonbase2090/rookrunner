@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from execution_core.checks import _exchange, sign_app_jwt
@@ -277,7 +277,7 @@ class MintTests(_Home):
         self.assertEqual(canonical(json.loads(request["body"])), request["body"].decode())
 
     def test_the_post_body_stays_checks_and_statuses_without_repositories(self):
-        moment = datetime.now(timezone.utc)
+        moment = datetime.now(UTC)
         jwt = sign_app_jwt(self.pem_bytes, CLIENT, moment)
         self.stub.server.reply = lambda method, path: (
             201,

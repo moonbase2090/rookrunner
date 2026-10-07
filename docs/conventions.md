@@ -26,4 +26,4 @@ Review rows stay with Muse until a check exists.
 | Formatting is ruff, line length 100, target py311. | CI, already. `check.yml` runs `ruff check src tests` and `ruff format --check src tests`. |
 | Suppression is `# noqa: CODE` or `# type: ignore[code]` with a reason, and a row in `docs/lints.md`. A bare `# noqa` or a bare `# type: ignore` fails. | CI (planned) |
 | Subprocess calls that are the engine's process spawn stay in the modules that already own them. A new module does not add one. | CI (planned): S603 and S607 |
-| Explanatory comments stay. Commented-out code stays banned. Docstring lint stays off. | CI (planned): ERA. No comment scanner. |
+| Explanatory comments stay. Commented-out code stays banned. Docstring lint stays off. | CI. Ruff selects ERA. No comment scanner. |

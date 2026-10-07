@@ -43,7 +43,7 @@ class TokenExpiry:
             return None
         if isinstance(minted_at, bool) or isinstance(now, bool):
             return None
-        if not isinstance(minted_at, (int, float)) or not isinstance(now, (int, float)):
+        if not isinstance(minted_at, int | float) or not isinstance(now, int | float):
             return None
         if now - minted_at >= TOKEN_WARNING_AFTER_SECONDS:
             self.warned = True
@@ -122,10 +122,10 @@ def job_needs_token(job):
 def mint_job_token(config, clock=None):
     """Mint one token. A bad repository is refused before the key is read."""
 
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     if clock is None:
-        clock = datetime.now(timezone.utc)
+        clock = datetime.now(UTC)
     repository = require_repository(getattr(config, "github_repository", None))
     material = load_app_key(config.app_key, config.state_dir, config.repository_root)
     jwt = None

@@ -51,7 +51,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
 from .protocol import canonical, is_integer, strict_json
@@ -235,11 +235,11 @@ def allowlist_matches(event, refs, pushers, event_name):
     if _default_push(event, event_name):
         return True
     ref = event.get("ref") if isinstance(event, dict) else None
-    if isinstance(ref, str) and isinstance(refs, (list, tuple)):
+    if isinstance(ref, str) and isinstance(refs, list | tuple):
         if any(item == ref for item in refs):
             return True
     login = _stored_login(event, event_name)
-    if login is None or not isinstance(pushers, (list, tuple)):
+    if login is None or not isinstance(pushers, list | tuple):
         return False
     folded = _ascii_fold(login)
     return any(
@@ -1012,7 +1012,7 @@ def poll_once(
     """Run one pass and return its summary. The caller talks to the worker."""
 
     if clock is None:
-        clock = datetime.now(timezone.utc)
+        clock = datetime.now(UTC)
     return Pass(
         repository=repository,
         clone=clone,

@@ -5,7 +5,7 @@ socket, and a CAPABILITY_UNSUPPORTED error. The HTML command
 writes one file and exits. Neither option binds a listener.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 import json
 import re
@@ -142,10 +142,8 @@ class DashboardOptionTests(unittest.TestCase):
         self.assertNotIn("worker.sock", text)
         stamp = _STAMP.search(text)
         self.assertIsNotNone(stamp)
-        written = datetime.strptime(stamp.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-        self.assertLess(abs((datetime.now(timezone.utc) - written).total_seconds()), 60)
+        written = datetime.strptime(stamp.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        self.assertLess(abs((datetime.now(UTC) - written).total_seconds()), 60)
         self.assertIn(f"This snapshot is stale after {stamp.group(1)}.", text)
 
     def _assert_closed_socket(self, *args):

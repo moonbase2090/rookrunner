@@ -548,7 +548,7 @@ class _Planner:
         return {"plan": plan, "digest": hashlib.sha256(encoded).hexdigest()}
 
     def _root(self, workflow):
-        if not isinstance(workflow, (bytes, bytearray)):
+        if not isinstance(workflow, bytes | bytearray):
             _invalid("workflow must be bytes")
         if len(workflow) > MAX_WORKFLOW_BYTES:
             raise PlanError(
@@ -655,7 +655,7 @@ class _Planner:
             value = self.constructor.construct_object(node, deep=False)
         except yaml.YAMLError:
             _invalid(f"{field}: YAML value is not accepted", field)
-        if value is None or isinstance(value, (str, bool, int)):
+        if value is None or isinstance(value, str | bool | int):
             return value
         if isinstance(value, float) and math.isfinite(value):
             return value

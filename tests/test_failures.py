@@ -485,7 +485,7 @@ class FailureTests(unittest.TestCase):
                     server.listen(1)
                     server.settimeout(5)
 
-                    def respond():
+                    def respond(reply=reply):
                         client, _ = server.accept()
                         with client:
                             client.recv(65536)

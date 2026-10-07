@@ -157,7 +157,7 @@ def _secret_pusher(value):
 def _sequence(values, accept, message):
     if values is None:
         return ()
-    if isinstance(values, str) or not isinstance(values, (list, tuple)):
+    if isinstance(values, str) or not isinstance(values, list | tuple):
         raise ValueError(message)
     return tuple(accept(item) for item in values)
 
@@ -186,7 +186,7 @@ def _rejected(stderr):
 
 def _docker_invoke(args, timeout):
     binary = shutil.which("docker")
-    if binary is None or not isinstance(args, (list, tuple)):
+    if binary is None or not isinstance(args, list | tuple):
         raise OSError("docker missing")
     try:
         completed = subprocess.run(
