@@ -362,6 +362,7 @@ def _run_poll(args, caller, mint, revoke):
             state=args.state,
             caller=caller,
             list_token=token,
+            ssh_host=getattr(args, "ssh_host", None),
         )
     finally:
         if isinstance(token, str):

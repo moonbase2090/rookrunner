@@ -33,6 +33,10 @@ Local rules, not GitHub-equivalence claims:
   repository is a fork. The full name is not the comparison.
 - The submission key is ``poll-`` plus the SHA-256 of the repository,
   event, tested SHA, workflow, and job.
+- An ssh host checks the worker repository ``origin`` owner/name. The
+  host is written into ``poll.json`` before submit, and the tested SHA
+  is checked out there from this clone. A key recorded for another host
+  is left where it is.
 - A queued run is cancelled 24 hours after acceptance and reported as
   ``error``. An older SHA is not cancelled because a newer push arrived.
 - This pass lists branches and open pull requests. It does not list tags.
@@ -81,6 +85,7 @@ _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _REPOSITORY = re.compile(rf"{_NAME.pattern}/{_NAME.pattern}")
+_SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
 
 
 class PollError(Exception):
@@ -360,10 +365,11 @@ def _get_json(api_base, path, etag, token=None):
     }
 
 
-def _git(clone, *args, check=True):
+def _git(clone, *args, check=True, input_bytes=None):
     try:
         result = subprocess.run(
             ["git", "-C", str(clone), *args],
+            input=input_bytes,
             capture_output=True,
             timeout=_GIT_TIMEOUT_SECONDS,
             check=False,
@@ -389,6 +395,65 @@ def _checkout(clone, sha):
     head = _stdout(_git(clone, "rev-parse", "HEAD")).strip()
     if head != sha or _git(clone, "status", "--porcelain").stdout != b"":
         raise PollError("GIT_FAILED", "dedicated clone is not a clean checkout of the fetched SHA")
+
+
+def _accept_ssh_host(host):
+    if not isinstance(host, str) or _SSH_HOST.fullmatch(host) is None:
+        raise PollError("INVALID_PARAMS", "ssh host is not accepted")
+    return host
+
+
+def _accept_remote_path(path):
+    if (
+        not isinstance(path, str)
+        or path == ""
+        or path.startswith("-")
+        or any(character in path for character in "\0\r\n")
+    ):
+        raise PollError("CLONE_MISMATCH", "worker repository is not accepted")
+    return path
+
+
+def _origin_repository(url):
+    if not isinstance(url, str):
+        raise PollError("CLONE_MISMATCH", "worker repository must be the polled repository")
+    text = url.strip()
+    if text.endswith(".git"):
+        text = text[:-4]
+    if text.startswith("git@") and ":" in text.split("/", 1)[0]:
+        text = text.split(":", 1)[1]
+    elif "://" in text:
+        text = urllib.parse.urlsplit(text).path
+    else:
+        raise PollError("CLONE_MISMATCH", "worker repository must be the polled repository")
+    text = text.strip("/")
+    if _REPOSITORY.fullmatch(text) is None:
+        raise PollError("CLONE_MISMATCH", "worker repository must be the polled repository")
+    return text
+
+
+def _ssh_run(host, args, input_bytes=None):
+    command = ["ssh", "-o", "BatchMode=yes", host, "--", *args]
+    try:
+        completed = subprocess.run(
+            command,
+            input=input_bytes,
+            capture_output=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise PollError("GIT_FAILED", "git command failed") from None
+    if completed.returncode != 0:
+        raise PollError("GIT_FAILED", "git command failed")
+    return completed.stdout
+
+
+def _ssh_text(host, args):
+    try:
+        return _ssh_run(host, args).decode("utf-8")
+    except UnicodeError:
+        raise PollError("GIT_FAILED", "git command failed") from None
 
 
 def _fetch_sha(clone, ref):
@@ -444,6 +509,7 @@ class Pass:
         clock,
         app_key=None,
         list_token=None,
+        ssh_host=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -456,6 +522,8 @@ class Pass:
         self.state_dir = Path(state)
         self.caller = caller
         self.clock = clock
+        self.ssh_host = ssh_host
+        self.remote_repository = None
         self.budget = _Budget()
         self.state = None
         self.lock_fd = None
@@ -469,11 +537,26 @@ class Pass:
             raise PollError("INVALID_PARAMS", "one post accepts one credential")
         if not self.app_key and not self.credential_file:
             raise PollError("INVALID_PARAMS", "one post needs one credential")
+        if self.ssh_host is not None:
+            _accept_ssh_host(self.ssh_host)
         self._lock()
         try:
             described = self.caller("worker.describe", {})
-            if Path(described["repository"]).resolve() != self.clone.resolve():
-                raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository")
+            if self.ssh_host is None:
+                if Path(described["repository"]).resolve() != self.clone.resolve():
+                    raise PollError(
+                        "CLONE_MISMATCH", "dedicated clone must be the worker repository"
+                    )
+            else:
+                remote = _accept_remote_path(described.get("repository"))
+                origin = _ssh_text(
+                    self.ssh_host, ["git", "-C", remote, "remote", "get-url", "origin"]
+                )
+                if _origin_repository(origin) != self.repository:
+                    raise PollError(
+                        "CLONE_MISMATCH", "worker repository must be the polled repository"
+                    )
+                self.remote_repository = remote
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
             self._expire_queued()
             self._branches()
@@ -723,7 +806,9 @@ class Pass:
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
             )
-            if existing is not None:
+            if existing is not None and not self._claims_this_host(existing):
+                continue
+            if existing is not None and "run_id" in existing:
                 if not existing["pending"]:
                     if not self._post_pending(existing):
                         return False
@@ -754,10 +839,27 @@ class Pass:
                     params["commit_count"] = commits
                     if commits > COMMIT_PATH_LIMIT:
                         params.pop("changed_files", None)
+            claimed = existing
+            if claimed is None and self.ssh_host is not None:
+                claimed = {
+                    "key": key,
+                    "host": self.ssh_host,
+                    "event": event_name,
+                    "tested_commit": tested,
+                    "status_sha": status_sha,
+                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "pending": False,
+                }
+                self.state["submissions"].append(claimed)
+                self._checkpoint()
+            if self.ssh_host is not None:
+                self._remote_checkout(tested)
             try:
                 submitted = self.caller("run.submit", params)
             except PollError as exc:
                 if exc.kind == "INVALID_PARAMS" and str(exc) == _WORKFLOW_ABSENT:
+                    if claimed is not None and "run_id" not in claimed:
+                        self._drop_unstarted(claimed)
                     self.result["skipped"].append(
                         {
                             "reason": "workflow_absent",
@@ -770,20 +872,26 @@ class Pass:
                     continue
                 raise
             if submitted.get("triggered") is False and "run_id" not in submitted:
+                if claimed is not None and "run_id" not in claimed:
+                    self._drop_unstarted(claimed)
                 self.result["submitted"].append(
                     {"event": event_name, "ref": ref, "triggered": False}
                 )
                 continue
-            entry = {
-                "key": key,
-                "run_id": submitted["run_id"],
-                "event": event_name,
-                "tested_commit": tested,
-                "status_sha": status_sha,
-                "context": f"rookrunner/{Path(workflow).name}/{job_id}",
-                "pending": False,
-            }
-            self.state["submissions"].append(entry)
+            if claimed is None:
+                claimed = {
+                    "key": key,
+                    "run_id": submitted["run_id"],
+                    "event": event_name,
+                    "tested_commit": tested,
+                    "status_sha": status_sha,
+                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "pending": False,
+                }
+                self.state["submissions"].append(claimed)
+            else:
+                claimed["run_id"] = submitted["run_id"]
+            entry = claimed
             self._checkpoint()
             if not self._post_pending(entry):
                 return False
@@ -794,8 +902,41 @@ class Pass:
             )
         return not self.budget.stopped
 
+    def _claims_this_host(self, entry):
+        return entry.get("host") == self.ssh_host
+
+    def _drop_unstarted(self, entry):
+        self.state["submissions"] = [
+            item for item in self.state["submissions"] if item is not entry
+        ]
+        self._checkpoint()
+
+    def _remote_checkout(self, sha):
+        if self.remote_repository is None or _SHA.fullmatch(sha) is None:
+            raise PollError("GIT_FAILED", "git command failed")
+        pack = _git(
+            self.clone,
+            "pack-objects",
+            "--revs",
+            "--stdout",
+            input_bytes=(sha + "\n").encode(),
+        ).stdout
+        remote = self.remote_repository
+        host = self.ssh_host
+        _ssh_run(host, ["git", "-C", remote, "unpack-objects", "-q"], input_bytes=pack)
+        _ssh_run(host, ["git", "-C", remote, "checkout", "--detach", "--force", "--quiet", sha])
+        _ssh_run(host, ["git", "-C", remote, "clean", "-fd", "--quiet"])
+        head = _ssh_text(host, ["git", "-C", remote, "rev-parse", "HEAD"]).strip()
+        porcelain = _ssh_run(host, ["git", "-C", remote, "status", "--porcelain"])
+        if head != sha or porcelain != b"":
+            raise PollError(
+                "GIT_FAILED", "dedicated clone is not a clean checkout of the fetched SHA"
+            )
+
     def _expire_queued(self):
         for entry in self.state["submissions"]:
+            if not self._claims_this_host(entry) or "run_id" not in entry:
+                continue
             record = self.caller("run.get", {"run_id": entry["run_id"]})
             if record["state"] == "queued" and queue_expired(record.get("accepted_at"), self.clock):
                 self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
@@ -804,6 +945,8 @@ class Pass:
         for entry in self.state["submissions"]:
             if self.budget.stopped:
                 return
+            if not self._claims_this_host(entry) or "run_id" not in entry:
+                continue
             record = self.caller("run.get", {"run_id": entry["run_id"]})
             mapped = github_state(record["state"], record["exit_code"])
             if mapped == "pending":
@@ -1010,6 +1153,7 @@ def poll_once(
     clock=None,
     app_key=None,
     list_token=None,
+    ssh_host=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -1027,4 +1171,5 @@ def poll_once(
         clock=clock,
         app_key=app_key,
         list_token=list_token,
+        ssh_host=ssh_host,
     ).run()

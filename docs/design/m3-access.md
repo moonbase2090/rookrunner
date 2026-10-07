@@ -223,7 +223,10 @@ is aimed at a different state directory.
 
 `poll` refuses with `CLONE_MISMATCH` unless its clone is that
 worker repository, and it then runs `git checkout --detach
---force` of the fetched SHA or the pull-request merge commit. A
+--force` of the fetched SHA or the pull-request merge commit.
+`poll --ssh-host` checks the worker repository `origin` owner/name
+and checks that repository out at the tested SHA before submit.
+Objects come from the Mac clone over `ssh -o BatchMode=yes`. A
 version 1 submit has no ref parameter. It captures the working
 tree that is present. Pointing the adapter at the poll worker
 captures that checkout, which may be another branch tip or a
