@@ -174,6 +174,7 @@ class InspectTests(unittest.TestCase):
             )
         stored = call(self.state, "run.get", {"run_id": record["run_id"]})["result"]
         self.assertEqual(stored["state"], "succeeded")
+        self.assertFalse((self.state / "attempts" / attempt_id).exists())
         return stored
 
     def _open_workflow(self, board):
@@ -244,13 +245,21 @@ class InspectTests(unittest.TestCase):
         left.press("j")
         right.click(_line(right, "[next]"))
         self._same(left, right)
-        self.assertIn(OTHER.decode(), left.render())
+        selected = next(
+            line for line in left.render().splitlines() if line.startswith("> [artifact]")
+        )
+        self.assertIn("out/b-other.txt", selected)
+        self.assertNotIn(OTHER.decode(), left.render())
         self.assertNotIn(SENTINEL.decode(), left.render())
 
         left.press("k")
         right.click(_line(right, "[previous]"))
         self._same(left, right)
-        self.assertIn(SENTINEL.decode(), left.render())
+        selected = next(
+            line for line in left.render().splitlines() if line.startswith("> [artifact]")
+        )
+        self.assertIn("out/a-sentinel.txt", selected)
+        self.assertIn("artifact bytes are not available", left.render())
 
         left.press("down")
         right.press("j")
@@ -306,10 +315,12 @@ class InspectTests(unittest.TestCase):
         self.assertIn("1 echo hi succeeded", text)
         self.assertIn("bytes are not masked", text)
         self.assertIn("out/a-sentinel.txt", text)
+        self.assertIn("artifact bytes are not available", text)
+        self.assertNotIn(SENTINEL.decode(), text)
+        self.assertNotIn(OTHER.decode(), text)
         if first_page:
             self.assertIn("LOG-HEAD", text)
             self.assertNotIn("LOG-TAIL", text)
-            self.assertIn(SENTINEL.decode(), text)
         else:
             self.assertIn("LOG-TAIL", text)
             self.assertNotIn("LOG-HEAD", text)

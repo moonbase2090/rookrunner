@@ -107,7 +107,7 @@ class DiskBudgetTests(unittest.TestCase):
                 self.assertNotIn("disk_budget", described["result"]["limits"])
                 self.assertEqual(
                     described["result"]["retention"],
-                    "runs and submission keys retained indefinitely; pruning unsupported",
+                    "runs and submission keys retained indefinitely; terminal attempt directories removed",
                 )
                 evidence = state / "snapshots" / "kept"
                 evidence.parent.mkdir(mode=0o700)
@@ -331,6 +331,143 @@ class DiskBudgetTests(unittest.TestCase):
                 )
                 worker._remove_workspace(home.parent)
                 self.assertFalse(home.parent.exists())
+            finally:
+                worker.close()
+
+    def test_finishing_a_run_removes_its_attempt_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = _submit(worker, "finished", output="kept-log\n")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                attempt_id = "22222222-2222-4222-8222-222222222222"
+                attempt = state / "attempts" / attempt_id
+                marker = attempt / "workspace" / "blob"
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b"finished-bytes")
+                record.update(state="running", started_at=now(), attempt_id=attempt_id)
+                with worker.db:
+                    worker.save(record)
+                worker._finish_fixture(record, request)
+                stored = worker.get(record["run_id"])
+                self.assertEqual(stored["state"], "succeeded")
+                self.assertEqual(stored["exit_code"], 0)
+                self.assertEqual(
+                    worker.db.execute(
+                        "SELECT log FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0],
+                    b"kept-log\n",
+                )
+                self.assertFalse(attempt.exists())
+                self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 1)
+            finally:
+                worker.close()
+
+    def test_full_budget_reclaims_a_finished_attempt_and_keeps_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = _submit(worker, "finished", output="kept-log\n")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                attempt_id = "22222222-2222-4222-8222-222222222222"
+                attempt = state / "attempts" / attempt_id
+                marker = attempt / "workspace" / "blob"
+                marker.parent.mkdir(parents=True)
+                marker.write_bytes(b"q" * 65536)
+                record.update(state="running", started_at=now(), attempt_id=attempt_id)
+                with worker.db:
+                    worker.save(record)
+                worker._finish_fixture(record, request)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_bytes(b"q" * 65536)
+                live = _submit(worker, "live")
+                live_id = "44444444-4444-4444-8444-444444444444"
+                live_dir = state / "attempts" / live_id
+                live_file = live_dir / "workspace" / "live"
+                live_file.parent.mkdir(parents=True)
+                live_file.write_bytes(b"live-bytes")
+                live["result"].update(state="running", started_at=now(), attempt_id=live_id)
+                with worker.db:
+                    worker.save(live["result"])
+                evidence = state / "snapshots" / "kept-snap"
+                evidence.parent.mkdir(mode=0o700, exist_ok=True)
+                evidence.write_bytes(b"evidence")
+                worker.disk_budget = usage(state) - 1
+                nxt = _submit(worker, "next")
+                self.assertNotIn("error", nxt)
+                self.assertEqual(nxt["result"]["state"], "queued")
+                self.assertFalse(attempt.exists())
+                self.assertEqual(live_file.read_bytes(), b"live-bytes")
+                self.assertEqual(evidence.read_bytes(), b"evidence")
+                self.assertEqual(worker.get(record["run_id"])["state"], "succeeded")
+                self.assertEqual(
+                    worker.db.execute(
+                        "SELECT log FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0],
+                    b"kept-log\n",
+                )
+                self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 3)
+                self.assertIsNotNone(
+                    worker.db.execute(
+                        "SELECT 1 FROM runs WHERE submission_key=?", ("finished",)
+                    ).fetchone()
+                )
+            finally:
+                worker.close()
+
+    def test_unresolved_attempt_is_kept_when_the_budget_is_full(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = _submit(worker, "lost")
+                record = accepted["result"]
+                attempt_id = "33333333-3333-4333-8333-333333333333"
+                attempt = state / "attempts" / attempt_id
+                blob = attempt / "workspace" / "blob"
+                blob.parent.mkdir(parents=True)
+                blob.write_bytes(b"u" * 65536)
+                record.update(
+                    state="lost",
+                    started_at=now(),
+                    finished_at=now(),
+                    attempt_id=attempt_id,
+                    cleanup="unresolved",
+                    error={
+                        "kind": "WORKER_INTERRUPTED",
+                        "message": "owned container cleanup was not confirmed",
+                    },
+                )
+                with worker.db:
+                    worker.save(record)
+                worker.disk_budget = usage(state) - 1
+                refused = _submit(worker, "next")
+                self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
+                self.assertEqual(blob.read_bytes(), b"u" * 65536)
+                self.assertEqual(worker.get(record["run_id"])["cleanup"], "unresolved")
+                self.assertIsNone(
+                    worker.db.execute(
+                        "SELECT 1 FROM runs WHERE submission_key=?", ("next",)
+                    ).fetchone()
+                )
             finally:
                 worker.close()
 

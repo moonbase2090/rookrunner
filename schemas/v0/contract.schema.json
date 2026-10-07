@@ -1413,7 +1413,7 @@
           "additionalProperties": false
         },
         "retention": {
-          "const": "runs and submission keys retained indefinitely; pruning unsupported"
+          "const": "runs and submission keys retained indefinitely; terminal attempt directories removed"
         },
         "node24": {
           "type": "object",

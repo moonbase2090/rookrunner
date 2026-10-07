@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 from pathlib import Path
@@ -177,21 +176,13 @@ class ArtifactManifestTests(unittest.TestCase):
                 self.assertNotIn("secret-bytes", json.dumps(listed))
                 self.assertNotIn("secret.txt", json.dumps(listed))
                 self.assertNotIn("not-an-artifact", json.dumps(listed))
-                blob = bytearray()
-                offset = 0
-                ended = False
-                while not ended:
-                    page = worker.response(
-                        _request(
-                            "artifact.read",
-                            {"artifact_id": listed[0]["id"], "offset": offset, "limit": 20},
-                        )
-                    )
-                    validate_response("artifact.read", page)
-                    blob.extend(base64.b64decode(page["result"]["data_base64"]))
-                    offset = page["result"]["next_offset"]
-                    ended = page["result"]["end_of_stream"]
-                self.assertEqual(bytes(blob), payload)
+                self.assertFalse(attempt.exists())
+                gone = worker.response(_request("artifact.read", {"artifact_id": listed[0]["id"]}))
+                validate_response("artifact.read", gone)
+                self.assertEqual(gone["error"]["data"]["kind"], "INTERNAL_ERROR")
+                self.assertEqual(gone["error"]["message"], "artifact bytes are not available")
+                self.assertNotIn(str(attempt), json.dumps(gone))
+                self.assertNotIn("secret-bytes", json.dumps(gone))
                 planted = str(uuid.uuid4())
                 worker.db.execute(
                     "INSERT INTO artifacts(id, run_id, path, size, digest) VALUES (?, ?, ?, ?, ?)",
@@ -254,10 +245,11 @@ class ArtifactManifestTests(unittest.TestCase):
                 self.assertEqual(lost["state"], "lost")
                 reply = again.response(_request("run.artifacts", {"run_id": record["run_id"]}))
                 validate_response("run.artifacts", reply)
-                self.assertEqual(
-                    [item["path"] for item in reply["result"]["artifacts"]], ["out/from-run.txt"]
-                )
-                self.assertTrue((workspace / "out" / "from-run.txt").is_file())
+                listed = reply["result"]["artifacts"]
+                self.assertEqual([item["path"] for item in listed], ["out/from-run.txt"])
+                self.assertEqual(listed[0]["digest"], hashlib.sha256(b"kept").hexdigest())
+                self.assertFalse(workspace.exists())
+                self.assertEqual(lost["cleanup"], "confirmed_no_external_resources")
             finally:
                 again.close()
 
