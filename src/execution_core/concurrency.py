@@ -139,9 +139,11 @@ def _values(event, event_name, workflow_label, *, job_level):
     """
 
     github = {}
-    if isinstance(event, dict | list | str | bool) or event is None:
-        github["event"] = event
-    elif isinstance(event, int) and not isinstance(event, bool):
+    if (
+        isinstance(event, dict | list | str | bool)
+        or event is None
+        or (isinstance(event, int) and not isinstance(event, bool))
+    ):
         github["event"] = event
     if isinstance(event, dict):
         ref = event.get("ref")

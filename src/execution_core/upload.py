@@ -5,6 +5,7 @@ copy bytes, zip them, or open a network connection. The finish scan reads
 the bytes. Symlinks are not followed.
 """
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -89,9 +90,7 @@ def _glob_match(segments, parts):
         for part_index in range(1, part_count + 1):
             if segment == "**":
                 ok[index][part_index] = ok[index - 1][part_index] or ok[index][part_index - 1]
-            elif segment == "*":
-                ok[index][part_index] = ok[index - 1][part_index - 1]
-            elif segment == parts[part_index - 1]:
+            elif segment == "*" or segment == parts[part_index - 1]:
                 ok[index][part_index] = ok[index - 1][part_index - 1]
     return ok[pattern_count][part_count]
 
@@ -311,10 +310,8 @@ class UploadBook:
             if fd is not None:
                 os.close(fd)
             if temporary is not None:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temporary)
-                except OSError:
-                    pass
 
 
 def load_uploads(path):

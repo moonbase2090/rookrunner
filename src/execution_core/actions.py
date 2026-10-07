@@ -204,56 +204,51 @@ def tree_digest(root):
 
 
 def _extract_tar(payload, prefix, destination):
-    try:
-        archive = tarfile.open(fileobj=io.BytesIO(payload), mode="r:")
-    except (tarfile.TarError, OSError) as exc:
-        raise ActionUnavailable("action repository could not be fetched") from exc
     head = "" if prefix == "" else prefix.rstrip("/") + "/"
     try:
-        for member in archive.getmembers():
-            name = member.name.replace("\\", "/")
-            while name.startswith("./"):
-                name = name[2:]
-            if prefix == "":
-                relative = name
-            elif name == prefix.rstrip("/"):
-                continue
-            elif name.startswith(head):
-                relative = name[len(head) :]
-            else:
-                raise ActionUnavailable("action path is not in the fetched commit")
-            if relative == "" or relative.endswith("/"):
-                continue
-            path = PurePosixPath(relative)
-            if path.is_absolute() or ".." in path.parts or "." in path.parts:
-                raise ActionUnavailable("action tree is not accepted")
-            target = destination.joinpath(*path.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if member.issym():
-                if _link_escapes(relative, member.linkname or ""):
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+            for member in archive.getmembers():
+                name = member.name.replace("\\", "/")
+                while name.startswith("./"):
+                    name = name[2:]
+                if prefix == "":
+                    relative = name
+                elif name == prefix.rstrip("/"):
+                    continue
+                elif name.startswith(head):
+                    relative = name[len(head) :]
+                else:
+                    raise ActionUnavailable("action path is not in the fetched commit")
+                if relative == "" or relative.endswith("/"):
+                    continue
+                path = PurePosixPath(relative)
+                if path.is_absolute() or ".." in path.parts or "." in path.parts:
                     raise ActionUnavailable("action tree is not accepted")
-                os.symlink(member.linkname, target)
-                continue
-            if member.isdir():
-                target.mkdir(mode=0o700, exist_ok=True)
-                continue
-            if not member.isfile():
-                raise ActionUnavailable("action tree is not accepted")
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise ActionUnavailable("action tree is not accepted")
-            data = extracted.read()
-            mode = 0o755 if member.mode & 0o111 else 0o644
-            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-            try:
-                os.write(fd, data)
-            finally:
-                os.close(fd)
-            os.chmod(target, mode)
+                target = destination.joinpath(*path.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if member.issym():
+                    if _link_escapes(relative, member.linkname or ""):
+                        raise ActionUnavailable("action tree is not accepted")
+                    os.symlink(member.linkname, target)
+                    continue
+                if member.isdir():
+                    target.mkdir(mode=0o700, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    raise ActionUnavailable("action tree is not accepted")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ActionUnavailable("action tree is not accepted")
+                data = extracted.read()
+                mode = 0o755 if member.mode & 0o111 else 0o644
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+                try:
+                    os.write(fd, data)
+                finally:
+                    os.close(fd)
+                os.chmod(target, mode)
     except (tarfile.TarError, OSError) as exc:
         raise ActionUnavailable("action repository could not be fetched") from exc
-    finally:
-        archive.close()
 
 
 def _copy_tree(source, destination):

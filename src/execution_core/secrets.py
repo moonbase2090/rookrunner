@@ -5,6 +5,7 @@ read only when ``--secrets`` is set and the allowlist matches. This module
 does not mint a token and does not read the GitHub App key.
 """
 
+import contextlib
 import os
 from pathlib import Path
 import re
@@ -85,10 +86,8 @@ def load_job_secrets(repository, names):
         return _read_repo(parent, wanted)
     finally:
         for fd in reversed(fds):
-            try:
+            with contextlib.suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
 
 
 def _tuple(values):
@@ -118,10 +117,7 @@ def _wanted(names):
 def _open_dir(parent, name, *, require_mode):
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
-        if parent is None:
-            fd = os.open(name, flags)
-        else:
-            fd = os.open(name, flags, dir_fd=parent)
+        fd = os.open(name, flags) if parent is None else os.open(name, flags, dir_fd=parent)
     except OSError:
         raise SecretError("secret directory is not accepted") from None
     try:

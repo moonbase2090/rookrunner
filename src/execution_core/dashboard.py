@@ -7,6 +7,7 @@ a command.
 """
 
 import base64
+import contextlib
 from datetime import datetime, UTC
 import os
 import re
@@ -60,10 +61,8 @@ def decode_input(data, flush=False):
             if piece in (b"\r", b"\n"):
                 events.append(("key", "enter"))
             else:
-                try:
+                with contextlib.suppress(UnicodeDecodeError):
                     events.append(("key", piece.decode("ascii")))
-                except UnicodeDecodeError:
-                    pass
             index += 1
             continue
         if data.startswith(b"\x1b[<", index):

@@ -116,15 +116,14 @@ def _pull_request(config, event, activity_type, changed_files, diff_unavailable)
     )
     if activity_type not in types:
         return False
-    if "branches" in config or "branches-ignore" in config:
-        if not _name_filter(
-            config,
-            "pull_request",
-            "branches",
-            "branches-ignore",
-            _base_ref(event),
-        ):
-            return False
+    if ("branches" in config or "branches-ignore" in config) and not _name_filter(
+        config,
+        "pull_request",
+        "branches",
+        "branches-ignore",
+        _base_ref(event),
+    ):
+        return False
     return _paths(
         config,
         "pull_request",
