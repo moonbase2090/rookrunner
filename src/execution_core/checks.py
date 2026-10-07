@@ -13,6 +13,7 @@ https://docs.github.com/en/rest/commits/statuses
 """
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -354,10 +355,8 @@ def _call(url, method, body, token, label):
     except urllib.error.HTTPError as error:
         code = error.code
         headers = error.headers
-        try:
+        with contextlib.suppress(OSError):
             error.read(64)
-        except OSError:
-            pass
         if _rate_limited(code, headers):
             raise StatusError(
                 "RATE_LIMITED", "GitHub rate limit was not retried", retryable=True
@@ -469,10 +468,8 @@ def revoke_installation_token(api_base, token):
     except StatusError:
         return False
     except urllib.error.HTTPError as error:
-        try:
+        with contextlib.suppress(OSError):
             error.read(64)
-        except OSError:
-            pass
         return False
     except (urllib.error.URLError, TimeoutError, OSError):
         return False

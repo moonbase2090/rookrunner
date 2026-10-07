@@ -289,11 +289,11 @@ class ConcurrencySubmitTests(unittest.TestCase):
             with self.worker.db:
                 self.worker.save(current)
             try:
-                with patch.object(ActionStore, "commit", side_effect=OSError("commit failed")):
-                    with self.assertRaises(OSError):
-                        self.worker.dispatch(
-                            "run.submit", self._params("commit-b", "refs/heads/main")
-                        )
+                with (
+                    patch.object(ActionStore, "commit", side_effect=OSError("commit failed")),
+                    self.assertRaises(OSError),
+                ):
+                    self.worker.dispatch("run.submit", self._params("commit-b", "refs/heads/main"))
                 self.assertEqual(self.worker._pending_concurrency_cancels, [])
                 self.assertEqual(self.worker.get(first["run_id"])["state"], "running")
                 queued = [

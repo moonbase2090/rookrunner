@@ -61,9 +61,7 @@ def contents_read_granted(permissions):
 
     if permissions is None or permissions == "read-all":
         return True
-    if isinstance(permissions, dict) and permissions.get("contents") == "read":
-        return True
-    return False
+    return bool(isinstance(permissions, dict) and permissions.get("contents") == "read")
 
 
 def resolved_permissions(job, workflow):
@@ -106,17 +104,11 @@ def job_needs_token(job):
                     continue
                 if exact_job_token_reference(item.get("default")) == "GITHUB_TOKEN":
                     return True
-        for inner in step.get("steps") or []:
-            if walk(inner):
-                return True
-        return False
+        return any(walk(inner) for inner in step.get("steps") or [])
 
     if not isinstance(job, dict):
         return False
-    for step in job.get("steps") or []:
-        if walk(step):
-            return True
-    return False
+    return any(walk(step) for step in job.get("steps") or [])
 
 
 def mint_job_token(config, clock=None):

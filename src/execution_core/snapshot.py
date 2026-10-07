@@ -10,7 +10,7 @@ or a copied repository directory. A sibling git.json records only the
 sanitized allow-list. The caller must use a private, trusted state root.
 """
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import errno
 import hashlib
 import os
@@ -311,10 +311,8 @@ class SourceCapture:
         self.repository = Path(repository).resolve(strict=True)
         self.state = Path(state).absolute()
         self.excluded_state = None
-        try:
+        with suppress(ValueError):
             self.excluded_state = self.state.resolve().relative_to(self.repository).as_posix()
-        except ValueError:
-            pass
         if self.excluded_state == ".":
             reject("SOURCE_INVALID", "state directory cannot be the repository root")
 

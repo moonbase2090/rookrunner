@@ -479,22 +479,25 @@ class FailureTests(unittest.TestCase):
             b'{"jsonrpc":"2.0","id":1,"result":{},"id":2}\n',
         ]
         for reply in replies:
-            with self.subTest(reply=reply), tempfile.TemporaryDirectory() as directory:
-                with socket.socket(socket.AF_UNIX) as server:
-                    server.bind(str(Path(directory) / "worker.sock"))
-                    server.listen(1)
-                    server.settimeout(5)
+            with (
+                self.subTest(reply=reply),
+                tempfile.TemporaryDirectory() as directory,
+                socket.socket(socket.AF_UNIX) as server,
+            ):
+                server.bind(str(Path(directory) / "worker.sock"))
+                server.listen(1)
+                server.settimeout(5)
 
-                    def respond(reply=reply):
-                        client, _ = server.accept()
-                        with client:
-                            client.recv(65536)
-                            client.sendall(reply)
+                def respond(reply=reply):
+                    client, _ = server.accept()
+                    with client:
+                        client.recv(65536)
+                        client.sendall(reply)
 
-                    thread = threading.Thread(target=respond)
-                    thread.start()
-                    try:
-                        with self.assertRaises(ValueError):
-                            call(directory, "worker.describe", {})
-                    finally:
-                        thread.join(timeout=5)
+                thread = threading.Thread(target=respond)
+                thread.start()
+                try:
+                    with self.assertRaises(ValueError):
+                        call(directory, "worker.describe", {})
+                finally:
+                    thread.join(timeout=5)

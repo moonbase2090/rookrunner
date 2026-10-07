@@ -189,6 +189,7 @@ unresolved attempt. A timed-out `docker exec` does not keep partial stdout
 or stderr.
 """
 
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -839,9 +840,11 @@ def _accept_upload(step):
                     _setup("plan is not accepted")
             elif not isinstance(value, str) or "\0" in value:
                 _setup("plan is not accepted")
-    elif set(raw) != {"sarif_file"} or not isinstance(raw["sarif_file"], str):
-        _setup("plan is not accepted")
-    elif "\0" in raw["sarif_file"]:
+    elif (
+        set(raw) != {"sarif_file"}
+        or not isinstance(raw["sarif_file"], str)
+        or "\0" in raw["sarif_file"]
+    ):
         _setup("plan is not accepted")
     _env_layer(step.get("env"))
     for key in ("id", "name", "shell", "working_directory", "if"):
@@ -978,10 +981,7 @@ def _shell_command(shell, bash_ok, script):
         prefix = ["bash", "-e"] if bash_ok else ["sh", "-e"]
         return [*prefix, script]
     if shell == "bash":
-        if bash_ok:
-            prefix = ["bash", "--noprofile", "--norc", "-eo", "pipefail"]
-        else:
-            prefix = ["sh", "-e"]
+        prefix = ["bash", "--noprofile", "--norc", "-eo", "pipefail"] if bash_ok else ["sh", "-e"]
         return [*prefix, script]
     if shell == "sh":
         return ["sh", "-e", script]
@@ -1308,10 +1308,8 @@ def _socket_share(docker, image, deadline):
         if code != 0:
             _setup("container setup failed")
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             _invoke(docker, ["volume", "rm", name], 30)
-        except Exception:
-            pass
         raise
     return name, text
 
@@ -1991,9 +1989,7 @@ class ContainerLease:
                 return False
             if _network_exists(docker, _owned_network_name(name)):
                 return False
-        if network and _network_exists(docker, network):
-            return False
-        return True
+        return not (network and _network_exists(docker, network))
 
     def stop(self):
         _phase, name, docker, _cancel = self.snapshot()
@@ -3203,10 +3199,8 @@ def run_job(
         shutil.rmtree(private, ignore_errors=True)
         shutil.rmtree(commands, ignore_errors=True)
         if socket_volume is not None:
-            try:
+            with contextlib.suppress(RunError, _Timeout):
                 _invoke(docker_bin, ["volume", "rm", socket_volume], 30)
-            except (RunError, _Timeout):
-                pass
         if owner is not None:
             owner.closed()
     if failure is not None:
@@ -3634,7 +3628,7 @@ def _run_upload(step, workspace, values, job_id, runtime=None):
         if archive is False:
             artifact_name = PurePosixPath(found[0]).name
         else:
-            artifact_name = rendered["name"] if "name" in rendered else "artifact"
+            artifact_name = rendered.get("name", "artifact")
         book.add(label, artifact_name, found)
     except UploadError as exc:
         return _upload_failure(step, job_id, f"{exc}\n")

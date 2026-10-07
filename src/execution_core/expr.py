@@ -837,9 +837,7 @@ def _tokenize(source):
 
 def _bad_number(text):
     body = text[1:] if text.startswith("-") else text
-    if len(body) > 1 and body[0] == "0" and body[1] not in ".eExX":
-        return True
-    return False
+    return bool(len(body) > 1 and body[0] == "0" and body[1] not in ".eExX")
 
 
 def _number(text):
@@ -1134,7 +1132,7 @@ def _index(value, key):
             return value[str(key)]
         return ""
     if isinstance(value, list):
-        if isinstance(key, bool) or isinstance(key, float):
+        if isinstance(key, bool | float):
             if isinstance(key, float) and math.isfinite(key) and key.is_integer() and key >= 0:
                 key = int(key)
             else:
@@ -1750,10 +1748,7 @@ class _RunLexer:
         return None
 
     def _consume_heredocs(self, pending):
-        for delimiter, strip_tabs in pending:
-            if not self._consume_one(delimiter, strip_tabs):
-                return False
-        return True
+        return all(self._consume_one(delimiter, strip_tabs) for delimiter, strip_tabs in pending)
 
     def _consume_one(self, delimiter, strip_tabs):
         body_start = self.i

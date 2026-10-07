@@ -438,10 +438,7 @@ def _excluded(combo, rules):
     https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
     """
 
-    for rule in rules:
-        if all(_lookup(combo, key) == value for key, value in rule.items()):
-            return True
-    return False
+    return any(all(_lookup(combo, key) == value for key, value in rule.items()) for rule in rules)
 
 
 def _is_original(key, original_names):
@@ -1758,9 +1755,7 @@ class _Planner:
             or text.startswith("/")
         ):
             _unsupported(field)
-        if text.startswith("./"):
-            raw = text[2:]
-        elif text.startswith("$/"):
+        if text.startswith("./") or text.startswith("$/"):
             raw = text[2:]
         else:
             _unsupported(field)

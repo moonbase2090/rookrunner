@@ -123,9 +123,11 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual((keep / "keep.txt").read_text(), "keep\n")
 
         partial = self.attempts / "partial"
-        with patch("execution_core.attempt.os.symlink", side_effect=OSError("injected")):
-            with self.assertRaises(AttemptError) as raised:
-                materialize_attempt(self.snapshot, self.digest, partial)
+        with (
+            patch("execution_core.attempt.os.symlink", side_effect=OSError("injected")),
+            self.assertRaises(AttemptError) as raised,
+        ):
+            materialize_attempt(self.snapshot, self.digest, partial)
         self.assertEqual(raised.exception.kind, "ATTEMPT_FAILED")
         self.assertFalse(partial.exists())
         self.assertFalse(partial.is_symlink())
@@ -363,9 +365,11 @@ class AttemptTests(unittest.TestCase):
     def test_read_tree_failure_removes_the_workspace(self):
         failed = subprocess.CompletedProcess(args=["git"], returncode=1, stdout=b"", stderr=b"no")
         workspace = self.attempts / "read-tree"
-        with patch("execution_core.attempt.subprocess.run", return_value=failed):
-            with self.assertRaises(AttemptError) as raised:
-                materialize_attempt(self.snapshot, self.digest, workspace)
+        with (
+            patch("execution_core.attempt.subprocess.run", return_value=failed),
+            self.assertRaises(AttemptError) as raised,
+        ):
+            materialize_attempt(self.snapshot, self.digest, workspace)
         self.assertEqual(raised.exception.kind, "ATTEMPT_FAILED")
         self.assertFalse(workspace.exists())
         verify_snapshot(self.snapshot, self.digest)

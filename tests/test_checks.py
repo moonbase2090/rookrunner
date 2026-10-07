@@ -52,9 +52,7 @@ class _Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         if self.path.endswith("/access_tokens"):
             kind = "token"
-        elif self.path.endswith("/check-runs"):
-            kind = "check"
-        elif "/check-runs/" in self.path:
+        elif self.path.endswith("/check-runs") or "/check-runs/" in self.path:
             kind = "check"
         else:
             kind = "status"

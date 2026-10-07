@@ -293,9 +293,7 @@ def _store(stored, name, value, accept):
 def _accept_env(name):
     if not ENV_NAME.fullmatch(name):
         return False
-    if name in _IGNORED_NAMES or name.startswith(_IGNORED_PREFIXES):
-        return False
-    return True
+    return not (name in _IGNORED_NAMES or name.startswith(_IGNORED_PREFIXES))
 
 
 def _accept_output(name):

@@ -8,6 +8,7 @@ https://docs.github.com/en/rest/commits/statuses
 https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 """
 
+import contextlib
 import os
 from pathlib import Path
 import re
@@ -194,10 +195,8 @@ def post_status(api_base, repository, sha, state, context, token):
     except urllib.error.HTTPError as error:
         code = error.code
         headers = error.headers
-        try:
+        with contextlib.suppress(OSError):
             error.read(64)
-        except OSError:
-            pass
         if _rate_limited(code, headers):
             raise StatusError(
                 "RATE_LIMITED", "GitHub rate limit was not retried", retryable=True

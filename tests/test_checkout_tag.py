@@ -313,19 +313,21 @@ class CheckoutTagTests(unittest.TestCase):
         (repo / "source.txt").write_text("dirty-bytes\n")
         capture = SourceCapture(repo, state)
         guard = _NoFetch()
-        with patch("execution_core.snapshot.subprocess.run", guard):
-            with capture.prepare(".github/workflows/test.yml") as prepared:
-                planned = plan_snapshot(prepared.path, "build")
-                self.assertTrue(plan_needs_history(planned["plan"]))
-                self.assertEqual(planned["plan"]["capability_version"], 12)
-                step = planned["plan"]["job"]["steps"][0]
-                self.assertEqual(
-                    step["with"],
-                    {"fetch-depth": 0, "clean": False, "persist-credentials": False},
-                )
-                _accept_jobs(planned["plan"]["jobs"])
-                prepared.add_history()
-                captured = prepared.publish()
+        with (
+            patch("execution_core.snapshot.subprocess.run", guard),
+            capture.prepare(".github/workflows/test.yml") as prepared,
+        ):
+            planned = plan_snapshot(prepared.path, "build")
+            self.assertTrue(plan_needs_history(planned["plan"]))
+            self.assertEqual(planned["plan"]["capability_version"], 12)
+            step = planned["plan"]["job"]["steps"][0]
+            self.assertEqual(
+                step["with"],
+                {"fetch-depth": 0, "clean": False, "persist-credentials": False},
+            )
+            _accept_jobs(planned["plan"]["jobs"])
+            prepared.add_history()
+            captured = prepared.publish()
         self.assertIn("rev-list", guard.commands)
         self.assertIn("cat-file", guard.commands)
         self.assertNotIn("fetch", guard.commands)
@@ -496,9 +498,11 @@ jobs:
         self.assertEqual(list(snaps.iterdir()), [])
         _write(repo, "workflow.yml", _workflow("actions/checkout@v4.2.2"))
         _git(repo, "add", "workflow.yml")
-        with self.assertRaises(PlanError) as planned_error:
-            with capture.prepare("workflow.yml") as prepared:
-                plan_snapshot(prepared.path, "build")
+        with (
+            self.assertRaises(PlanError) as planned_error,
+            capture.prepare("workflow.yml") as prepared,
+        ):
+            plan_snapshot(prepared.path, "build")
         self.assertEqual(planned_error.exception.kind, "CAPABILITY_UNSUPPORTED")
         self.assertEqual(list(snaps.iterdir()), [])
 
@@ -533,13 +537,13 @@ jobs:
         state = self.root / "shallow-state"
         capture = SourceCapture(cloned, state)
         guard = _NoFetch()
-        with patch("execution_core.snapshot.subprocess.run", guard):
-            with self.assertRaises(CaptureError) as raised:
-                with capture.prepare(".github/workflows/test.yml") as prepared:
-                    self.assertTrue(
-                        plan_needs_history(plan_snapshot(prepared.path, "build")["plan"])
-                    )
-                    prepared.add_history()
+        with (
+            patch("execution_core.snapshot.subprocess.run", guard),
+            self.assertRaises(CaptureError) as raised,
+            capture.prepare(".github/workflows/test.yml") as prepared,
+        ):
+            self.assertTrue(plan_needs_history(plan_snapshot(prepared.path, "build")["plan"]))
+            prepared.add_history()
         self.assertEqual(raised.exception.kind, "SOURCE_INVALID")
         self.assertNotIn("fetch", guard.commands)
         self.assertNotIn("unshallow", guard.commands)
@@ -632,8 +636,10 @@ jobs:
         _git(repo, "add", ".")
         _commit(repo, "fixture")
         capture = SourceCapture(repo, state)
-        with self.assertRaises(PlanError) as raised:
-            with capture.prepare(".github/workflows/test.yml") as prepared:
-                plan_snapshot(prepared.path, "build")
+        with (
+            self.assertRaises(PlanError) as raised,
+            capture.prepare(".github/workflows/test.yml") as prepared,
+        ):
+            plan_snapshot(prepared.path, "build")
         self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
         self.assertEqual(list((state / "snapshots").iterdir()), [])

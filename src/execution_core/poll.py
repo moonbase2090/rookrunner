@@ -42,6 +42,7 @@ https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 https://docs.github.com/en/rest/commits/statuses
 """
 
+import contextlib
 import fcntl
 import hashlib
 import os
@@ -235,9 +236,12 @@ def allowlist_matches(event, refs, pushers, event_name):
     if _default_push(event, event_name):
         return True
     ref = event.get("ref") if isinstance(event, dict) else None
-    if isinstance(ref, str) and isinstance(refs, list | tuple):
-        if any(item == ref for item in refs):
-            return True
+    if (
+        isinstance(ref, str)
+        and isinstance(refs, list | tuple)
+        and any(item == ref for item in refs)
+    ):
+        return True
     login = _stored_login(event, event_name)
     if login is None or not isinstance(pushers, list | tuple):
         return False
@@ -313,10 +317,8 @@ def _get_json(api_base, path, etag, token=None):
     except urllib.error.HTTPError as error:
         code = error.code
         headers = error.headers
-        try:
+        with contextlib.suppress(OSError):
             error.read(256)
-        except OSError:
-            pass
         if code == 304:
             return {
                 "modified": False,

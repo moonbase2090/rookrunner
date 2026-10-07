@@ -1,3 +1,4 @@
+import contextlib
 import sqlite3
 import subprocess
 import sys
@@ -300,10 +301,8 @@ class SubmitTriggerTests(unittest.TestCase):
 
     def tearDown(self):
         for run_id in self.runs:
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 call(self.state, "run.cancel", {"version": 0, "run_id": run_id})
-            except (OSError, ValueError):
-                pass
         for process in self.processes:
             if process.poll() is None:
                 process.terminate()

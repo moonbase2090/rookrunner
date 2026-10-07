@@ -85,9 +85,11 @@ class FlagTests(_HomeTest):
         self.assertFalse((self.home / "Secrets").exists())
 
     def test_app_key_accepts_only_the_home_path_and_does_not_open_it(self):
-        with patch("builtins.open", side_effect=AssertionError("opened")):
-            with patch("os.open", side_effect=AssertionError("opened")):
-                accepted = accept_app_key(APP_KEY)
+        with (
+            patch("builtins.open", side_effect=AssertionError("opened")),
+            patch("os.open", side_effect=AssertionError("opened")),
+        ):
+            accepted = accept_app_key(APP_KEY)
         self.assertEqual(accepted, self.key_path())
         self.assertFalse(Path(accepted).exists())
         worker = self.worker(app_key=self.key_path())
@@ -177,13 +179,15 @@ class FlagTests(_HomeTest):
         self.assertIs(worker.secrets, True)
         self.assertEqual(worker.app_key, self.key_path())
         self.assertIsNotNone(worker.host_control_warning)
-        with patch("execution_core.socket_lock.probe_secrets_unshared", return_value=False):
-            with self.assertRaises(ValueError) as caught:
-                self.worker(
-                    docker_socket=True,
-                    app_key=APP_KEY,
-                    runner_image=IMAGE,
-                )
+        with (
+            patch("execution_core.socket_lock.probe_secrets_unshared", return_value=False),
+            self.assertRaises(ValueError) as caught,
+        ):
+            self.worker(
+                docker_socket=True,
+                app_key=APP_KEY,
+                runner_image=IMAGE,
+            )
         text = str(caught.exception)
         self.assertIn("worker --docker-socket", text)
         self.assertIn("worker --app-key", text)

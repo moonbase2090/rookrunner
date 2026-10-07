@@ -8,7 +8,7 @@ commit. HEAD is still the synthesized commit. A failure removes the partial
 workspace.
 """
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import errno
 import hashlib
 import os
@@ -438,10 +438,8 @@ def _read_store(objects, algorithm, base_commit):
 
 
 def _ensure_dir(parent_fd, name):
-    try:
+    with suppress(FileExistsError):
         os.mkdir(name, 0o700, dir_fd=parent_fd)
-    except FileExistsError:
-        pass
     descriptor = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
     os.fchmod(descriptor, 0o700)
     return descriptor
@@ -558,12 +556,14 @@ def _fill(snapshot_dir, workspace, entries):
     workspace_fd = _open_dir(workspace)
     try:
         for entry in entries:
-            with _parent(files_fd, entry["path"], create=False) as (src_parent, leaf):
-                with _parent(workspace_fd, entry["path"], create=True) as (dst_parent, dst_leaf):
-                    if entry["kind"] == "symlink":
-                        _copy_link(src_parent, dst_parent, leaf, entry)
-                    else:
-                        _copy_file(src_parent, dst_parent, dst_leaf, entry)
+            with (
+                _parent(files_fd, entry["path"], create=False) as (src_parent, leaf),
+                _parent(workspace_fd, entry["path"], create=True) as (dst_parent, dst_leaf),
+            ):
+                if entry["kind"] == "symlink":
+                    _copy_link(src_parent, dst_parent, leaf, entry)
+                else:
+                    _copy_file(src_parent, dst_parent, dst_leaf, entry)
         os.fsync(workspace_fd)
     finally:
         os.close(files_fd)
