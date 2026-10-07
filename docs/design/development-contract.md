@@ -387,6 +387,13 @@ those envelopes. A protocol error exits 1. `get` and `logs` stay one-shot:
 they still exit zero when the protocol call succeeds, including when the run
 failed.
 
+`poll --ssh-host HOST --remote-state DIR` sends the same worker methods through
+`ssh -o BatchMode=yes`. The remote command is `python3 -m execution_core
+--state DIR call`, and that command talks only to the Unix socket in `DIR`.
+No listen port is opened. The Mac poll state stays `--state`. Omitting both
+ssh flags keeps the local socket. Setting only one of them refuses the pass.
+`call` reads one JSON-RPC request from stdin and prints one reply.
+
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
