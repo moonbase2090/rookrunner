@@ -226,8 +226,12 @@ worker repository, and it then runs `git checkout --detach
 --force` of the fetched SHA or the pull-request merge commit.
 `poll --ssh-host` checks the worker repository `origin` owner/name
 and checks that repository out at the tested SHA before submit.
-Objects come from the Mac clone over `ssh -o BatchMode=yes`. A
-version 1 submit has no ref parameter. It captures the working
+Objects come from the Mac clone over `ssh -o BatchMode=yes`.
+`poll --place` chooses among configured workers in the order given.
+Each place names the image digest it runs. A new job is recorded on
+the first ready place under its cap whose image matches. A recorded
+place is not changed when that place is full, not ready, or absent
+from a later configuration. A version 1 submit has no ref parameter. It captures the working
 tree that is present. Pointing the adapter at the poll worker
 captures that checkout, which may be another branch tip or a
 merge commit, and a capture that sees files change during that
