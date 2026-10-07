@@ -31,6 +31,12 @@ Local rules, not GitHub-equivalence claims:
 - A fork is recorded and runs nothing. The head and base repository
   ids match only when both are integers and equal. A null head
   repository is a fork. The full name is not the comparison.
+- A repository with ``.github/CODEOWNERS`` at the pull base or head
+  gets a ``rookrunner/signoff`` status on the head SHA. Patterns are
+  the union of the two blobs. A protected path without
+  ``mb2090-signoff`` is a failure. No CODEOWNERS blob is skipped and
+  recorded. The pass does not apply the label and does not run
+  ``signoff.yml``.
 - The submission key is ``poll-`` plus the SHA-256 of the repository,
   event, tested SHA, workflow, and job.
 - An ssh host checks the worker repository ``origin`` owner/name. The
@@ -55,6 +61,7 @@ https://docs.github.com/en/rest/commits/statuses
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -88,6 +95,8 @@ _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
+_SIGNOFF_CONTEXT = "rookrunner/signoff"
+_GATE = None
 _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _REPOSITORY = re.compile(rf"{_NAME.pattern}/{_NAME.pattern}")
@@ -577,6 +586,80 @@ def _diff(clone, before, after):
     return names, commits
 
 
+def _signoff_gate():
+    """Load the repository sign-off script. It does not import this package."""
+
+    global _GATE
+    if _GATE is not None:
+        return _GATE
+    path = Path(__file__).resolve().parents[2] / ".github" / "signoff.py"
+    spec = importlib.util.spec_from_file_location("_rookrunner_signoff_gate", path)
+    if spec is None or spec.loader is None:
+        raise PollError("INVALID_PARAMS", "sign-off gate could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _GATE = module
+    return module
+
+
+def _codeowners_blob(clone, sha):
+    """Return the CODEOWNERS text, or None when that commit has no such file."""
+
+    result = _git(clone, "show", f"{sha}:.github/CODEOWNERS", check=False)
+    if result.returncode == 0:
+        try:
+            return result.stdout.decode("utf-8")
+        except UnicodeError:
+            raise PollError("GIT_FAILED", "git command failed") from None
+    err = result.stderr.decode("utf-8", "replace")
+    if "does not exist" in err or "exists on disk, but not" in err:
+        return None
+    raise PollError("GIT_FAILED", "git command failed")
+
+
+def _signoff_paths(clone, base, head):
+    """Return both sides of a rename. Too many paths is a git failure."""
+
+    result = _git(
+        clone,
+        "diff",
+        "--name-status",
+        "--find-renames",
+        base,
+        head,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise PollError("GIT_FAILED", "git command failed")
+    paths = []
+    for line in _stdout(result).splitlines():
+        parts = line.split("\t")
+        for path in parts[1:]:
+            if path != "" and path not in paths:
+                paths.append(path)
+    if len(paths) > MAX_CHANGED_FILES:
+        raise PollError("GIT_FAILED", "git command failed")
+    return paths
+
+
+def _signoff_labels(item):
+    """Label names from the pulls list. A missing field is unlabeled."""
+
+    if "labels" not in item:
+        return []
+    labels = item.get("labels")
+    if not isinstance(labels, list):
+        raise PollError("API_REJECTED", "GitHub pull request list is not usable")
+    names = []
+    for label in labels:
+        if not isinstance(label, dict):
+            continue
+        name = label.get("name")
+        if isinstance(name, str):
+            names.append(name)
+    return names
+
+
 class Pass:
     def __init__(
         self,
@@ -613,6 +696,8 @@ class Pass:
         self.state = None
         self.lock_fd = None
         self.repository_body = None
+        self.signoff_seen = False
+        self.signoff_present = False
         self.result = {"stopped": False, "submitted": [], "statuses": [], "skipped": []}
 
     def run(self):
@@ -935,6 +1020,8 @@ class Pass:
                 raise PollError("API_REJECTED", "GitHub pull request list is not usable")
             if not self._pull(item):
                 return
+        if self.signoff_seen and not self.signoff_present:
+            self.result["skipped"].append({"reason": "signoff_absent"})
         self.state["etags"]["pulls"] = etag
         self._checkpoint()
 
@@ -1005,8 +1092,8 @@ class Pass:
             self._record_fork(number, head_sha, full_name)
             return True
         seen = self.state["pulls"].get(str(number))
-        if seen and seen.get("head") == head_sha and seen.get("base") == base_sha:
-            return True
+        if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
+            return self._signoff(number, head_sha, base_sha, item)
         ref = f"refs/pull/{number}/merge"
         merge = _fetch_sha(self.clone, ref)
         if merge is None:
@@ -1041,13 +1128,149 @@ class Pass:
             "number": number,
             "pull_request": pull_request,
         }
-        if not self._submit_jobs(
+        submitted = self._submit_jobs(
             "pull_request", ref, merge, head_sha, event, activity, changed, False
-        ):
+        )
+        if submitted:
+            self.state["pulls"][str(number)] = {
+                "head": head_sha,
+                "base": base_sha,
+                "merge": merge,
+            }
+            self._checkpoint()
+        if not self._signoff(number, head_sha, base_sha, item):
             return False
-        self.state["pulls"][str(number)] = {"head": head_sha, "base": base_sha, "merge": merge}
+        return submitted
+
+    def _signoff(self, number, head_sha, base_sha, item):
+        """Post rookrunner/signoff from the two CODEOWNERS blobs and the label."""
+
+        if self.budget.stopped:
+            return False
+        names = _signoff_labels(item)
+        head_text = _codeowners_blob(self.clone, head_sha)
+        base_text = _codeowners_blob(self.clone, base_sha)
+        self.signoff_seen = True
+        if head_text is None and base_text is None:
+            return True
+        self.signoff_present = True
+        gate = _signoff_gate()
+        labeled = gate.LABEL in names
+        patterns = []
+        if head_text is not None:
+            patterns.extend(gate.parse_patterns(head_text))
+        if base_text is not None:
+            patterns.extend(gate.parse_patterns(base_text))
+        changed = _signoff_paths(self.clone, base_sha, head_sha)
+        code, hits = gate.decision(changed, patterns, names)
+        state = "failure" if code == 1 else "success"
+        if code == 1:
+            summary = "protected path changed without the sign-off label"
+        elif hits:
+            summary = "sign-off label present"
+        else:
+            summary = "no protected path changed"
+        key = str(number)
+        signoffs = self.state.get("signoffs")
+        stored = signoffs.get(key) if isinstance(signoffs, dict) else None
+        if (
+            isinstance(stored, dict)
+            and stored.get("head") == head_sha
+            and stored.get("base") == base_sha
+            and stored.get("labeled") == labeled
+            and stored.get("state") == state
+        ):
+            return True
+        posted, check_id = self._post_signoff(number, head_sha, state, summary, stored)
+        if not posted:
+            return False
+        record = {"head": head_sha, "base": base_sha, "labeled": labeled, "state": state}
+        if check_id is not None:
+            record["check_run_id"] = check_id
+        if not isinstance(self.state.get("signoffs"), dict):
+            self.state["signoffs"] = {}
+        self.state["signoffs"][key] = record
         self._checkpoint()
+        self.result["statuses"].append(
+            {
+                "context": _SIGNOFF_CONTEXT,
+                "state": state,
+                "action": "posted",
+                "sha": head_sha,
+            }
+        )
         return True
+
+    def _post_signoff(self, number, sha, state, summary, stored):
+        """Post the sign-off status. There is no worker run to record."""
+
+        if self.budget.stopped:
+            return False, None
+        described = self.caller("worker.describe", {})
+        root = self._credential_repository(described)
+        if self.app_key:
+            return self._post_signoff_app(number, sha, state, summary, stored, root)
+        try:
+            token = read_credential(self.credential_file, self.state_dir, root)
+            try:
+                remaining = post_status(
+                    self.api_base,
+                    self.repository,
+                    sha,
+                    state,
+                    _SIGNOFF_CONTEXT,
+                    token,
+                )
+            finally:
+                token = None
+        except StatusError as error:
+            if error.kind == "RATE_LIMITED" and error.retryable:
+                self.budget.stopped = True
+                return False, None
+            raise
+        self.budget.observe(remaining)
+        return True, None
+
+    def _post_signoff_app(self, number, sha, state, summary, stored, root):
+        check_run_id = None
+        if isinstance(stored, dict) and is_integer(stored.get("check_run_id")):
+            check_run_id = int(stored["check_run_id"])
+        conclusion = "success" if state == "success" else "failure"
+        try:
+            posted = post_check_flow(
+                api_base=self.api_base,
+                repository=self.repository,
+                sha=sha,
+                context=_SIGNOFF_CONTEXT,
+                run_id=f"signoff-{number}",
+                check_status="completed",
+                check_conclusion=conclusion,
+                check_summary_text=summary,
+                check_run_id=check_run_id,
+                status_state=state,
+                post_status_request=True,
+                app_key=self.app_key,
+                state_dir=self.state_dir,
+                repository_root=root,
+                clock=self.clock,
+            )
+        except StatusError as error:
+            if error.kind == "RATE_LIMITED" and error.retryable:
+                self.budget.stopped = True
+                return False, None
+            raise
+        if (
+            posted.error is not None
+            and posted.error.kind == "RATE_LIMITED"
+            and posted.error.retryable
+        ):
+            self.budget.stopped = True
+            return False, None
+        if posted.error is not None:
+            raise posted.error
+        if posted.status_posted:
+            self.budget.observe(posted.status_remaining)
+        return True, posted.check_id
 
     def _record_fork(self, number, head_sha, full_name):
         row = {"number": number, "head_sha": head_sha, "repository": full_name}
