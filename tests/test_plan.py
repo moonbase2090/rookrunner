@@ -2284,6 +2284,26 @@ jobs:
                 self.assertEqual(error.field, "jobs.build.steps.0.uses")
 
 
+DOCUMENTED_SCOPES = {
+    "actions",
+    "artifact-metadata",
+    "attestations",
+    "checks",
+    "code-quality",
+    "contents",
+    "deployments",
+    "discussions",
+    "id-token",
+    "issues",
+    "packages",
+    "pages",
+    "pull-requests",
+    "security-events",
+    "statuses",
+    "vulnerability-alerts",
+}
+
+
 class PermissionsPlanTests(unittest.TestCase):
     def plan(self, workflow, job_id="build"):
         return plan_workflow(workflow.encode(), job_id)["plan"]
@@ -2294,27 +2314,7 @@ class PermissionsPlanTests(unittest.TestCase):
         return raised.exception
 
     def test_scope_list_matches_the_syntax_page(self):
-        self.assertEqual(
-            PERMISSION_SCOPES,
-            {
-                "actions",
-                "artifact-metadata",
-                "attestations",
-                "checks",
-                "code-quality",
-                "contents",
-                "deployments",
-                "discussions",
-                "id-token",
-                "issues",
-                "packages",
-                "pages",
-                "pull-requests",
-                "security-events",
-                "statuses",
-                "vulnerability-alerts",
-            },
-        )
+        self.assertEqual(PERMISSION_SCOPES, DOCUMENTED_SCOPES)
 
     def test_contents_read_is_recorded_at_each_level(self):
         workflow = """\
@@ -2347,12 +2347,12 @@ jobs:
 
     def test_every_documented_scope_accepts_read_or_none(self):
         lines = ["permissions:"]
-        for index, scope in enumerate(sorted(PERMISSION_SCOPES)):
+        for index, scope in enumerate(sorted(DOCUMENTED_SCOPES)):
             lines.append(f"  {scope}: {'read' if index % 2 == 0 else 'none'}")
         lines.append("on: push\njobs:\n  build:\n    steps:\n      - run: echo hi\n")
         plan = self.plan("\n".join(lines))
         recorded = plan["workflow"]["permissions"]
-        self.assertEqual(set(recorded), set(PERMISSION_SCOPES))
+        self.assertEqual(set(recorded), set(DOCUMENTED_SCOPES))
         self.assertTrue(set(recorded.values()) <= {"read", "none"})
 
     def test_omitted_permissions_leave_the_plan_unchanged(self):

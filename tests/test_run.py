@@ -392,7 +392,11 @@ def _plan(workflow_text):
 
 class OutputLimitTests(unittest.TestCase):
     def test_secret_and_oversize_outputs_are_not_copied(self):
-        huge = "a" * ((_OUTPUT_JOB_BYTES // 2) + 1)
+        job_limit = 1024 * 1024
+        run_limit = 50 * 1024 * 1024
+        self.assertEqual(_OUTPUT_JOB_BYTES, job_limit)
+        self.assertEqual(_OUTPUT_RUN_BYTES, run_limit)
+        huge = "a" * ((job_limit // 2) + 1)
         produced, used = _job_outputs(
             {
                 "outputs": {
@@ -414,10 +418,22 @@ class OutputLimitTests(unittest.TestCase):
         self.assertNotIn("big", produced)
         self.assertNotIn("obj", produced)
         self.assertNotIn("super-secret-value", produced.values())
-        self.assertLessEqual(used, _OUTPUT_JOB_BYTES)
-        blocked, same = _job_outputs({"outputs": {"kind": "'local'"}}, {}, _OUTPUT_RUN_BYTES)
+        self.assertLessEqual(used, job_limit)
+        exact = "e" * (job_limit // 2)
+        fit, fit_used = _job_outputs({"outputs": {"fit": "'" + exact + "'"}}, {}, 0)
+        self.assertEqual(fit["fit"], exact)
+        self.assertEqual(fit_used, job_limit)
+        over = "o" * ((job_limit // 2) + 1)
+        dropped, dropped_used = _job_outputs({"outputs": {"over": "'" + over + "'"}}, {}, 0)
+        self.assertNotIn("over", dropped)
+        self.assertEqual(dropped_used, 0)
+        room = run_limit - 2
+        accepted, after = _job_outputs({"outputs": {"kind": "'x'"}}, {}, room)
+        self.assertEqual(accepted, {"kind": "x"})
+        self.assertEqual(after, run_limit)
+        blocked, same = _job_outputs({"outputs": {"kind": "'local'"}}, {}, run_limit)
         self.assertEqual(blocked, {})
-        self.assertEqual(same, _OUTPUT_RUN_BYTES)
+        self.assertEqual(same, run_limit)
 
 
 class CallInputTests(unittest.TestCase):
