@@ -296,6 +296,8 @@ class PollTests(unittest.TestCase):
         first = self.poll()
         self.assertFalse(first["stopped"])
         self.assertEqual(self.runs(), 1)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("host", saved["submissions"][0])
         self.assertEqual(self.submits[0]["event"]["before"], "0" * 40)
         self.assertIs(self.submits[0]["diff_unavailable"], True)
         self.assertEqual(len(self.posts()), 1)

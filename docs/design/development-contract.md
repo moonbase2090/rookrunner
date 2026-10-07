@@ -388,6 +388,13 @@ failed.
 No listen port is opened. The Mac poll state stays `--state`. Omitting both
 ssh flags keeps the local socket. Setting only one of them refuses the pass.
 `call` reads one JSON-RPC request from stdin and prints one reply.
+When `--ssh-host` is set, the worker repository `origin` must name the
+polled owner/name. Before `run.submit`, that host is written into
+`poll.json` and the worker repository becomes a clean detached checkout
+of the tested SHA. Objects are sent from the Mac clone through
+`ssh -o BatchMode=yes`. The host does not fetch from GitHub. A submission
+key already recorded for a host stays on that host, including when the
+run is lost.
 
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
