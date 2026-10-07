@@ -123,13 +123,14 @@ class SecretFileTests(unittest.TestCase):
         self.assertNotIn("value", message)
 
     def test_oversize_and_exact_limit(self):
-        exact = b"e" * MAX_SECRET_BYTES
+        limit = 48 * 1024
+        exact = b"e" * limit
         with_newline = exact + b"\n"
         self._use({"EXACT": exact, "NEWLINE": with_newline})
         loaded = load_job_secrets("owner/demo", ["EXACT", "NEWLINE"])
-        self.assertEqual(loaded["EXACT"], "e" * MAX_SECRET_BYTES)
-        self.assertEqual(len(loaded["NEWLINE"]), MAX_SECRET_BYTES)
-        home, repo = self._use({"BIG": b"b" * (MAX_SECRET_BYTES + 2)})
+        self.assertEqual(loaded["EXACT"], "e" * limit)
+        self.assertEqual(len(loaded["NEWLINE"]), limit)
+        home, repo = self._use({"BIG": b"b" * (limit + 2)})
         with self.assertRaises(SecretError) as raised:
             load_job_secrets("owner/demo", ["BIG"])
         message = str(raised.exception)
