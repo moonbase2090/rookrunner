@@ -2,7 +2,8 @@
 
 Status: the install procedure is recorded. User linger stays off.
 This pull request does not run a command on Vertex and does not
-install the unit.
+install the unit. The command list is
+[Vertex install](vertex-install.md).
 
 Vertex uses the same unit as any other host,
 [deploy/rookrunner-worker.service](../../deploy/rookrunner-worker.service).
