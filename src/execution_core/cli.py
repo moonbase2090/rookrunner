@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import time
 
-from .checks import post_check_flow
+from .checks import mint_list_token, post_check_flow, revoke_installation_token
 from .poll import PollError, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
@@ -231,11 +231,14 @@ def _worker_caller(state):
     return caller
 
 
-def report_poll(args):
-    """Run one pass and exit. A rate-limit stop is a finished pass."""
+def _run_poll(args, caller, mint, revoke):
+    """Mint a list token when ``--app-key`` is set, run one pass, then revoke."""
 
+    token = None
     try:
-        result = poll_once(
+        if args.app_key and not args.credential_file:
+            token = mint(args.app_key, args.state, args.clone, args.repository, args.api_base)
+        return poll_once(
             repository=args.repository,
             clone=args.clone,
             jobs=args.job,
@@ -244,7 +247,24 @@ def report_poll(args):
             app_key=args.app_key,
             api_base=args.api_base,
             state=args.state,
-            caller=_worker_caller(args.state),
+            caller=caller,
+            list_token=token,
+        )
+    finally:
+        if isinstance(token, str):
+            revoke(args.api_base, token)
+        token = None
+
+
+def report_poll(args):
+    """Run one pass and exit. A rate-limit stop is a finished pass."""
+
+    try:
+        result = _run_poll(
+            args,
+            _worker_caller(args.state),
+            mint_list_token,
+            revoke_installation_token,
         )
     except PollError as error:
         print(
@@ -254,7 +274,8 @@ def report_poll(args):
         sys.exit(1)
     except StatusError as error:
         _print_status_error(error)
-    print(canonical(result))
+    else:
+        print(canonical(result))
 
 
 def report_status(args):

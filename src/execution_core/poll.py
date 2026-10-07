@@ -5,9 +5,13 @@ branch heads and open pull requests, fetches into the dedicated clone,
 submits each new SHA, and posts commit statuses. It then exits. It is
 not a resident service, a listener, or a runner registration.
 
-List requests are conditional and do not send a credential. The token
-file is read only when a status is posted on the NS-40 path. With
-``--app-key``, the key is read only when that post is about to be sent.
+List requests are conditional. On the credential-file path they send
+no credential, and that file is read only when a status is posted.
+With ``--app-key``, the key is read once to mint an installation
+token for the GETs in the pass, and again when a post is about to be
+sent. That list token is scoped to the repository, carries the
+permissions the installation currently grants, and is revoked when
+the pass ends. It is not written to state.
 A response whose rate-limit header reports nothing remaining is
 not applied, and the pass makes no further HTTP request. The next pass
 starts from the last saved checkpoint.
@@ -278,8 +282,12 @@ def _remaining_stop(code, headers):
     return header_remaining(headers) == 0
 
 
-def _get_json(api_base, path, etag):
-    """GET one list. No credential is sent. 304 returns a null body."""
+def _get_json(api_base, path, etag, token=None):
+    """GET one list. 304 returns a null body.
+
+    ``token`` is the installation token for an ``--app-key`` pass.
+    The credential-file path passes none.
+    """
 
     # status_url validates the origin. The SHA is discarded with the path.
     origin = status_url(api_base, "owner/name", "ab" * 20).rsplit("/repos/", 1)[0]
@@ -288,6 +296,10 @@ def _get_json(api_base, path, etag):
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("User-Agent", "rookrunner")
     request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if token is not None:
+        if not isinstance(token, str) or token == "" or any(char.isspace() for char in token):
+            raise PollError("INVALID_PARAMS", "list token is not usable")
+        request.add_header("Authorization", "Bearer " + token)
     if etag:
         request.add_header("If-None-Match", etag)
     opener = urllib.request.build_opener(_RefuseRedirect)
@@ -429,6 +441,7 @@ class Pass:
         caller,
         clock,
         app_key=None,
+        list_token=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -436,6 +449,7 @@ class Pass:
         self.image = image
         self.credential_file = credential_file
         self.app_key = app_key
+        self.list_token = list_token
         self.api_base = api_base
         self.state_dir = Path(state)
         self.caller = caller
@@ -499,7 +513,7 @@ class Pass:
 
         if self.budget.stopped:
             return None
-        got = _get_json(self.api_base, path, None)
+        got = _get_json(self.api_base, path, None, self.list_token)
         self.budget.observe(got["remaining"])
         if got.get("exhausted") or self.budget.stopped:
             self.budget.stopped = True
@@ -531,7 +545,7 @@ class Pass:
 
         if self.budget.stopped:
             return None
-        listed = _get_json(self.api_base, path, self.state["etags"].get(kind))
+        listed = _get_json(self.api_base, path, self.state["etags"].get(kind), self.list_token)
         self.budget.observe(listed["remaining"])
         if listed.get("exhausted") or (listed["modified"] and self.budget.stopped):
             self.budget.stopped = True
@@ -993,6 +1007,7 @@ def poll_once(
     caller,
     clock=None,
     app_key=None,
+    list_token=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -1009,4 +1024,5 @@ def poll_once(
         caller=caller,
         clock=clock,
         app_key=app_key,
+        list_token=list_token,
     ).run()

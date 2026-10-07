@@ -1,11 +1,10 @@
 """One check run and one commit status for one run.
 
-The operator passes the App private-key path. This module reads that
-key only when a post is about to be sent. It signs one JWT, exchanges
-it for an installation token, posts the check run, then posts the
-commit status with the same token. The token is not cached and is
-discarded before the call returns. Nothing here writes the key, the
-JWT, or the token to disk.
+The operator passes the App private-key path. A poll pass reads that
+key once to mint a list token, and a post reads it again to mint the
+check-run token. Each call signs one JWT, exchanges it for an
+installation token, and discards the token before the call returns.
+Nothing here writes the key, the JWT, or the token to disk.
 
 https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
 https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app
@@ -369,6 +368,38 @@ def _call(url, method, body, token, label):
     if code not in {200, 201} or len(raw) > _MAX_RESPONSE:
         raise StatusError(kind, f"GitHub {label} request failed with HTTP {code}")
     return code, raw
+
+
+def list_token_body(repository):
+    """Return the installation-token body for one poll repository.
+
+    Permissions are omitted. GitHub then grants every permission the
+    installation currently has, including one added after this release.
+    """
+
+    full = require_repository(repository)
+    return {"repositories": [full.split("/", 1)[1]]}
+
+
+def mint_list_token(app_key, state_dir, repository_root, repository, api_base, clock=None):
+    """Mint one installation token for poll GETs. The caller revokes it."""
+
+    if clock is None:
+        clock = datetime.now(timezone.utc)
+    body = list_token_body(repository)
+    material = load_app_key(app_key, state_dir, repository_root)
+    installation_id = material.installation_id
+    jwt = None
+    try:
+        try:
+            jwt = sign_app_jwt(bytes(material.pem), material.client_id, clock)
+        except ValueError:
+            raise StatusError("APP_KEY_UNREADABLE", _PEM_MESSAGE) from None
+        material.clear()
+        return post_installation_token(api_base, installation_id, jwt, body)
+    finally:
+        jwt = None
+        material.clear()
 
 
 def post_installation_token(api_base, installation_id, jwt, payload):
