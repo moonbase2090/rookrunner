@@ -40,9 +40,11 @@ added only in the unit copied onto that host.
 The Nexus install letter creates `/var/lib/rookrunner/engine`,
 `/var/lib/rookrunner/state`, and `/var/lib/rookrunner/clone`, copies
 this file into the user unit directory, and appends that host's
-image digest to `ExecStart`. The Vertex install letter uses the
-same unit, turns on user linger, and records Vertex's own image
-digest. Linger on Vertex stays off until that letter.
+image digest to `ExecStart`. The Vertex install uses the
+same unit. [Vertex worker](vertex-worker.md) records
+`sudo loginctl enable-linger "$USER"` for the service user and
+records Vertex's own image digest on the host copy. Linger stays
+off until that command is run on the host.
 
 The poller stays a Mac launchd agent. Linux hosts still have no
 poll timer. Capability version stays 12.
