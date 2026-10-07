@@ -19,8 +19,8 @@ Review rows stay with Muse until a check exists.
 | A test Git identity is `Fixture` and `fixture@example.invalid`. | Review |
 | A test does not read `~/Secrets` and does not contact `api.github.com`. `HOME` is a temp directory only when the test touches a key path. | CI (planned) for the two banned strings |
 | Runtime dependencies are `pyyaml` only. Workflow YAML uses a `SafeLoader` subclass. `yaml.load`, `yaml.unsafe_load`, and `CLoader` stay unused. | CI (planned) |
-| User-facing JSON is `protocol.canonical`, printed from `cli.py`. | CI (planned): T20, with `cli.py` as the listed print site |
-| The worker may print the host-control warning to stderr. That call is one row in `docs/lints.md`. | CI (planned) |
+| User-facing JSON is `protocol.canonical`, printed from `cli.py`. | CI: T20, with `cli.py` as the listed print site |
+| The worker may print the host-control warning to stderr. That call is one row in `docs/lints.md`. | CI |
 | Socket mode stays `0600`. The state directory stays `0700`. | Review, already covered by tests |
 | The capability version stays 12 until a signed-off pull request changes it. `write` stays rejected. | Review |
 | Formatting is ruff, line length 100, target py311. | CI, already. `check.yml` runs `ruff check src tests` and `ruff format --check src tests`. |
