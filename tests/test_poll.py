@@ -743,6 +743,78 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
         self.assertEqual(self.submits[0]["event"]["commits"], [{"author": {"login": "octocat"}}])
 
+    def _commit_all(self, message):
+        _git(self.seed, "add", "-A")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            message,
+        )
+
+    def test_a_missing_workflow_file_is_skipped_and_later_branches_still_submit(self):
+        main = self._tip()
+        _git(self.seed, "checkout", "-b", "bare")
+        (self.seed / ".github/workflows/check.yml").unlink()
+        self._commit_all("drop workflow")
+        _git(self.seed, "push", "origin", "bare")
+        _git(self.seed, "checkout", "main")
+        bare = self._tip("refs/heads/bare")
+        self.server.branches = [
+            {"name": "bare", "commit": {"sha": bare}},
+            {"name": "main", "commit": {"sha": main}},
+        ]
+        result = self.poll()
+        self.assertEqual(
+            result["skipped"],
+            [
+                {
+                    "reason": "workflow_absent",
+                    "event": "push",
+                    "ref": "refs/heads/bare",
+                    "workflow": JOB[0],
+                    "job_id": JOB[1],
+                }
+            ],
+        )
+        self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
+        self.assertIn("run_id", result["submitted"][0])
+        self.assertEqual(self.runs(), 1)
+        self.server.etags["branches"] = "branches-2"
+        self.submits.clear()
+        again = self.poll()
+        self.assertEqual(again["skipped"], [])
+        self.assertEqual(again["submitted"], [])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_workflow_file_that_is_not_regular_still_stops_the_pass(self):
+        main = self._tip()
+        _git(self.seed, "checkout", "-b", "linked")
+        _git(self.seed, "config", "core.symlinks", "true")
+        workflow = self.seed / ".github/workflows/check.yml"
+        workflow.unlink()
+        (self.seed / ".github/workflows/target.txt").write_text("not a workflow\n")
+        workflow.symlink_to("target.txt")
+        self._commit_all("link workflow")
+        mode = _git(self.seed, "ls-files", "-s", ".github/workflows/check.yml").stdout.split()[0]
+        self.assertEqual(mode, "120000")
+        _git(self.seed, "push", "origin", "linked")
+        _git(self.seed, "checkout", "main")
+        linked = self._tip("refs/heads/linked")
+        self.server.branches = [
+            {"name": "linked", "commit": {"sha": linked}},
+            {"name": "main", "commit": {"sha": main}},
+        ]
+        with self.assertRaises(PollError) as raised:
+            self.poll()
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertEqual(str(raised.exception), "workflow must be a captured regular file")
+        self.assertEqual(self.runs(), 0)
+
 
 class AllowlistTests(unittest.TestCase):
     def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
