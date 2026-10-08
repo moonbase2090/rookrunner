@@ -472,6 +472,8 @@ class RunUploadTests(unittest.TestCase):
             self.assertEqual(many.records, [])
 
     def test_empty_match_names_and_paths(self):
+        empty_line = "No files were found for the artifact.\n"
+        self.assertEqual(NO_FILES_LINE, empty_line)
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
             workspace.mkdir()
@@ -479,7 +481,7 @@ class RunUploadTests(unittest.TestCase):
             warn = self.run_step(workspace, self.files_step(path="missing.txt"), warned)
             self.assertEqual(warn["status"], "succeeded")
             self.assertEqual(warn["exit_code"], 0)
-            self.assertEqual(warn["stdout"], NO_FILES_LINE)
+            self.assertEqual(warn["stdout"], empty_line)
             self.assertEqual(warned.records, [])
             ignored = UploadBook()
             ignore = self.run_step(
@@ -534,6 +536,8 @@ class RunUploadTests(unittest.TestCase):
             self.assertEqual(book.records, [{"name": "coverage", "paths": ["out/a.txt"]}])
 
     def test_sarif_and_expression_path(self):
+        sarif_name = "codeql-sarif"
+        self.assertEqual(SARIF_NAME, sarif_name)
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
             workspace.mkdir()
@@ -562,12 +566,12 @@ class RunUploadTests(unittest.TestCase):
             self.assertEqual(
                 book.records,
                 [
-                    {"name": SARIF_NAME, "paths": ["results.sarif"]},
+                    {"name": sarif_name, "paths": ["results.sarif"]},
                     {"name": "coverage", "paths": ["out/a.txt"]},
                 ],
             )
             clash = self.run_step(
-                workspace, self.files_step(name=SARIF_NAME, path="out/a.txt"), book
+                workspace, self.files_step(name=sarif_name, path="out/a.txt"), book
             )
             self.assertEqual(clash["stderr"], "artifact name is already used\n")
 
