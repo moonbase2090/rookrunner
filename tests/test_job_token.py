@@ -437,10 +437,14 @@ class RevokeTests(_Home):
 
 class ExpiryTests(unittest.TestCase):
     def test_one_warning_at_55_minutes_and_the_text_has_no_token(self):
+        self.assertEqual(TOKEN_WARNING_AFTER_SECONDS, 55 * 60)
         expiry = TokenExpiry()
-        self.assertIsNone(expiry.observe(0, TOKEN_WARNING_AFTER_SECONDS - 1))
-        self.assertEqual(expiry.observe(0, TOKEN_WARNING_AFTER_SECONDS), TOKEN_EXPIRY_WARNING)
-        self.assertIsNone(expiry.observe(0, TOKEN_WARNING_AFTER_SECONDS + 30))
+        self.assertIsNone(expiry.observe(0, 55 * 60 - 1))
+        self.assertEqual(
+            expiry.observe(0, 55 * 60),
+            "job token expires one hour after mint",
+        )
+        self.assertIsNone(expiry.observe(0, 55 * 60 + 30))
         self.assertEqual(TOKEN_EXPIRY_WARNING, "job token expires one hour after mint")
         self.assertNotIn("ghs_", TOKEN_EXPIRY_WARNING)
 

@@ -245,10 +245,11 @@ class ContractTests(unittest.TestCase):
         self.assertNotEqual(unsafe.returncode, 0)
 
     def test_malformed_and_oversized_transport(self):
+        self.assertEqual(MAX_MESSAGE, 1024 * 1024)
         cases = (
             (b"{broken\n", "PARSE_ERROR", -32700),
             (b"[]\n", "INVALID_REQUEST", -32600),
-            (b"x" * MAX_MESSAGE + b"\n", "INVALID_REQUEST", -32600),
+            (b"x" * (1024 * 1024) + b"\n", "INVALID_REQUEST", -32600),
         )
         for raw, kind, code in cases:
             with socket.socket(socket.AF_UNIX) as connection:
@@ -281,8 +282,8 @@ class ContractTests(unittest.TestCase):
             connection.sendall(raw)
             connection.shutdown(socket.SHUT_WR)
             with connection.makefile("rb") as stream:
-                wire = stream.readline(MAX_MESSAGE + 1)
-        self.assertLessEqual(len(wire), MAX_MESSAGE)
+                wire = stream.readline(1024 * 1024 + 1)
+        self.assertLessEqual(len(wire), 1024 * 1024)
         reply = json.loads(wire)
         validator("Response").validate(reply)
         return reply
@@ -332,8 +333,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
 
     def test_exact_frame_boundary_and_missing_newline(self):
+        self.assertEqual(MAX_MESSAGE, 1024 * 1024)
         request = b'{"jsonrpc":"2.0","id":1,"method":"worker.describe"}'
-        boundary = request + b" " * (MAX_MESSAGE - len(request) - 1) + b"\n"
+        boundary = request + b" " * (1024 * 1024 - len(request) - 1) + b"\n"
         self.assertIn("result", self.raw_rpc(boundary))
         self.assert_fault(self.raw_rpc(boundary[:-1] + b" \n"), "INVALID_REQUEST", -32600)
         self.assert_fault(self.raw_rpc(request), "INVALID_REQUEST", -32600)
