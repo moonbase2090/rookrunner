@@ -38,7 +38,12 @@ Local rules, not GitHub-equivalence claims:
   recorded. The pass does not apply the label and does not run
   ``signoff.yml``.
 - The submission key is ``poll-`` plus the SHA-256 of the repository,
-  event, tested SHA, workflow, and job.
+  event, tested SHA, workflow, and job. A schedule run also hashes the
+  due minute and the cron. Leaving that part off keeps the key the same.
+- A schedule is read from workflow files on the default-branch tip.
+  The first time a workflow is seen, the latest due minute is stored
+  and nothing is submitted. A later pass submits at most that newest
+  due minute, then stores it. The check context ends in ``/schedule``.
 - An ssh host checks the worker repository ``origin`` owner/name. The
   host is written into ``poll.json`` before submit, and the tested SHA
   is checked out there from this clone. A key recorded for another host
@@ -72,7 +77,9 @@ import urllib.request
 from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
-from .protocol import MAX_LIST_PAGE, canonical, is_integer, strict_json
+from .cron import cron_matches, parse_cron, schedule_decision
+from .plan import PlanError, workflow_on
+from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
 from .status import (
     StatusError,
     github_state,
@@ -81,7 +88,7 @@ from .status import (
     read_credential,
     status_url,
 )
-from .trigger import COMMIT_PATH_LIMIT, MAX_CHANGED_FILES
+from .trigger import COMMIT_PATH_LIMIT, MAX_CHANGED_FILES, schedule_expressions
 
 # Self-hosted job queue time.
 # https://docs.github.com/en/actions/reference/limits
@@ -133,11 +140,37 @@ def queue_expired(accepted_at, clock):
     return clock - accepted >= QUEUE_LIMIT
 
 
-def submission_key(repository, event, sha, workflow, job):
-    """Key built from the repository, event, tested SHA, workflow, and job."""
+def submission_key(repository, event, sha, workflow, job, tick=None):
+    """Key built from the repository, event, tested SHA, workflow, and job.
 
-    material = "\0".join((repository, event, sha, workflow, job)).encode()
+    ``tick`` is appended only when the caller passes one. A schedule run
+    passes the due minute and the cron. Push and pull-request keys omit it,
+    and those keys stay the same as before.
+    """
+
+    parts = (repository, event, sha, workflow, job)
+    if tick is not None:
+        parts = (*parts, tick)
+    material = "\0".join(parts).encode()
     return "poll-" + hashlib.sha256(material).hexdigest()
+
+
+def _job_context(workflow, job_id, suffix):
+    return f"rookrunner/{Path(workflow).name}/{job_id}{suffix}"
+
+
+def _schedule_cursor(value):
+    """Return a UTC minute from stored poll state, or None when it is absent."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        return None
+    return moment
 
 
 def _integer_id(value):
@@ -226,8 +259,10 @@ def _stored_login(event, event_name):
     return None
 
 
-def _default_push(event, event_name):
-    if event_name != "push" or not isinstance(event, dict):
+def _default_branch_run(event, event_name):
+    """Return whether this push or schedule is on the default branch."""
+
+    if event_name not in ("push", "schedule") or not isinstance(event, dict):
         return False
     ref = event.get("ref")
     repository = event.get("repository")
@@ -243,18 +278,19 @@ def allowlist_matches(event, refs, pushers, event_name):
     """Return whether this stored event may receive file-backed secrets.
 
     ``refs`` and ``pushers`` are the operator lists. With both empty, the
-    only match is a push whose ``ref`` is ``refs/heads/`` plus
-    ``repository.default_branch``. A listed ref matches that ``ref``
-    exactly. A listed login matches the actor login with ASCII case
-    folding. The default push stays a match when a list is non-empty.
-    For a push, the login is the last commit's ``author.login`` when that
-    field is a non-empty string. For a pull request, the login is
-    ``pull_request.user.login`` on the same condition. A missing login
-    does not match a pusher entry. An event that lacks these fields does
-    not match the default rule. This does not read a secret.
+    only matches are a push or a schedule event whose ``ref`` is
+    ``refs/heads/`` plus ``repository.default_branch``. A listed ref
+    matches that ``ref`` exactly. A listed login matches the actor login
+    with ASCII case folding. That default-branch push or schedule stays a
+    match when a list is non-empty. For a push, the login is the last
+    commit's ``author.login`` when that field is a non-empty string. For
+    a pull request, the login is ``pull_request.user.login`` on the same
+    condition. A schedule event has no actor login. A missing login does
+    not match a pusher entry. An event that lacks these fields does not
+    match the default rule. This does not read a secret.
     """
 
-    if _default_push(event, event_name):
+    if _default_branch_run(event, event_name):
         return True
     ref = event.get("ref") if isinstance(event, dict) else None
     if (
@@ -743,6 +779,7 @@ class Pass:
                 self._expire_placed()
             self._branches()
             self._pulls()
+            self._schedules()
             if self.places is None:
                 self._post_terminal()
             else:
@@ -964,6 +1001,9 @@ class Pass:
         if body is None:
             return None
         self.repository_body = body
+        branch = body.get("default_branch")
+        if isinstance(branch, str) and branch != "":
+            self.state["default_branch"] = branch
         return body
 
     def _commit_body(self, sha):
@@ -1023,6 +1063,122 @@ class Pass:
         if self.signoff_seen and not self.signoff_present:
             self.result["skipped"].append({"reason": "signoff_absent"})
         self.state["etags"]["pulls"] = etag
+        self._checkpoint()
+
+    def _schedules(self):
+        """Submit at most one due minute per workflow on the default-branch tip.
+
+        The workflow bytes are read from that tip. The clone is detached
+        there only when a run is submitted, so a pull-request checkout
+        earlier in this pass is not the tree the scheduled run captures.
+        The cursor is stored after a successful submit. A crash before that
+        store retries the same submission key. A pass with no stored branch
+        tip does not request the repository object.
+        """
+
+        if self.budget.stopped:
+            return
+        tips = self.state.get("tips")
+        if not isinstance(tips, dict) or not tips:
+            return
+        branch = self.state.get("default_branch")
+        repo = self.repository_body
+        if not isinstance(branch, str) or branch == "":
+            repo = self._repository_body()
+            if repo is None:
+                return
+            branch = repo.get("default_branch")
+        if not isinstance(branch, str) or branch == "":
+            return
+        ref = "refs/heads/" + branch
+        tip = tips.get(ref)
+        if not isinstance(tip, str):
+            return
+        seen = []
+        for workflow, _job_id in self.jobs:
+            if workflow not in seen:
+                seen.append(workflow)
+        for workflow in seen:
+            if self.budget.stopped or not self._schedule_workflow(workflow, ref, tip, repo):
+                return
+
+    def _schedule_workflow(self, workflow, ref, tip, repo):
+        blob = self._workflow_bytes(workflow, tip)
+        if blob is None:
+            return True
+        try:
+            on = workflow_on(blob)
+        except PlanError as exc:
+            raise PollError("INVALID_PARAMS", str(exc)) from exc
+        try:
+            expressions = schedule_expressions(on)
+        except Fault as exc:
+            raise PollError(exc.kind, str(exc)) from exc
+        if not expressions:
+            return True
+        schedules = self.state.get("schedules")
+        stored = schedules.get(workflow) if isinstance(schedules, dict) else None
+        previous = _schedule_cursor(stored)
+        fire_at, cursor = schedule_decision(expressions, previous, self.clock)
+        if fire_at is None:
+            self._store_schedule(workflow, cursor)
+            return True
+        if repo is None:
+            repo = self._repository_body()
+            if repo is None:
+                return False
+        _checkout(self.clone, tip)
+        matching = [text for text in expressions if cron_matches(parse_cron(text), fire_at)]
+        for cron_text in matching:
+            event = {
+                "ref": ref,
+                "repository": _event_repository(self.repository, repo),
+                "schedule": cron_text,
+            }
+            tick = fire_at.isoformat() + "\0" + cron_text
+            if not self._submit_jobs(
+                "schedule",
+                ref,
+                tip,
+                tip,
+                event,
+                None,
+                None,
+                True,
+                only=workflow,
+                tick=tick,
+                context_suffix="/schedule",
+            ):
+                return False
+        self._store_schedule(workflow, cursor)
+        return True
+
+    def _workflow_bytes(self, workflow, tip):
+        if not isinstance(tip, str) or _SHA.fullmatch(tip) is None:
+            raise PollError("GIT_FAILED", "git command failed")
+        if (
+            not isinstance(workflow, str)
+            or workflow == ""
+            or workflow.startswith(("/", "-"))
+            or ".." in Path(workflow).parts
+        ):
+            raise PollError("INVALID_PARAMS", "workflow path is not accepted")
+        result = _git(self.clone, "show", f"{tip}:{workflow}", check=False)
+        if result.returncode != 0:
+            return None
+        return result.stdout
+
+    def _store_schedule(self, workflow, cursor):
+        if cursor is None:
+            return
+        text = cursor.isoformat()
+        schedules = self.state.get("schedules")
+        if not isinstance(schedules, dict):
+            schedules = {}
+            self.state["schedules"] = schedules
+        if schedules.get(workflow) == text:
+            return
+        schedules[workflow] = text
         self._checkpoint()
 
     def _push(self, ref, sha):
@@ -1286,15 +1442,40 @@ class Pass:
             self.result["skipped"].append({"reason": "merge_ref_absent", "number": number})
             self._checkpoint()
 
-    def _submit_jobs(self, event_name, ref, tested, status_sha, event, activity, changed, first):
+    def _submit_jobs(
+        self,
+        event_name,
+        ref,
+        tested,
+        status_sha,
+        event,
+        activity,
+        changed,
+        first,
+        only=None,
+        tick=None,
+        context_suffix="",
+    ):
         """Submit each configured job. Return false when a pending post did not finish."""
 
         if self.places is not None:
             return self._submit_placed(
-                event_name, ref, tested, status_sha, event, activity, changed, first
+                event_name,
+                ref,
+                tested,
+                status_sha,
+                event,
+                activity,
+                changed,
+                first,
+                only,
+                tick,
+                context_suffix,
             )
-        for workflow, job_id in self.jobs:
-            key = submission_key(self.repository, event_name, tested, workflow, job_id)
+        jobs = self.jobs if only is None else [item for item in self.jobs if item[0] == only]
+        for workflow, job_id in jobs:
+            key = submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
             )
@@ -1339,7 +1520,7 @@ class Pass:
                     "event": event_name,
                     "tested_commit": tested,
                     "status_sha": status_sha,
-                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "context": context,
                     "pending": False,
                 }
                 self.state["submissions"].append(claimed)
@@ -1377,7 +1558,7 @@ class Pass:
                     "event": event_name,
                     "tested_commit": tested,
                     "status_sha": status_sha,
-                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "context": context,
                     "pending": False,
                 }
                 self.state["submissions"].append(claimed)
@@ -1394,11 +1575,26 @@ class Pass:
             )
         return not self.budget.stopped
 
-    def _submit_placed(self, event_name, ref, tested, status_sha, event, activity, changed, first):
+    def _submit_placed(
+        self,
+        event_name,
+        ref,
+        tested,
+        status_sha,
+        event,
+        activity,
+        changed,
+        first,
+        only=None,
+        tick=None,
+        context_suffix="",
+    ):
         """Place each new job. A recorded place is submitted again on that place."""
 
-        for workflow, job_id in self.jobs:
-            key = submission_key(self.repository, event_name, tested, workflow, job_id)
+        jobs = self.jobs if only is None else [item for item in self.jobs if item[0] == only]
+        for workflow, job_id in jobs:
+            key = submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
             )
@@ -1444,7 +1640,7 @@ class Pass:
                     "event": event_name,
                     "tested_commit": tested,
                     "status_sha": status_sha,
-                    "context": f"rookrunner/{Path(workflow).name}/{job_id}",
+                    "context": context,
                     "pending": False,
                 }
                 self.state["submissions"].append(claimed)

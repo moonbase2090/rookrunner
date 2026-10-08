@@ -44,6 +44,17 @@ jobs:
       - run: echo hi
 """
 JOB = (".github/workflows/check.yml", "check")
+SCHEDULE = """\
+name: check
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+"""
 
 
 def _request(method, params):
@@ -176,6 +187,20 @@ class QueueTests(unittest.TestCase):
         )
         self.assertTrue(first.startswith("poll-"))
         self.assertLessEqual(len(first), 128)
+        self.assertEqual(
+            first, submission_key("acme/demo", "push", "ab" * 20, JOB[0], JOB[1], None)
+        )
+        self.assertNotEqual(
+            first,
+            submission_key(
+                "acme/demo",
+                "push",
+                "ab" * 20,
+                JOB[0],
+                JOB[1],
+                "2026-10-08T12:15:00+00:00",
+            ),
+        )
 
 
 class PollTests(unittest.TestCase):
@@ -905,6 +930,113 @@ class PollTests(unittest.TestCase):
         self.assertNotIn(token, json.dumps(result))
         self.assertNotIn(token.encode(), self.state_bytes())
         self.assertEqual(self.runs(), 0)
+
+    def test_a_schedule_baselines_then_fires_once_on_the_default_tip(self):
+        self._write(SCHEDULE)
+        _git(self.seed, "push", "origin", "main")
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        baseline = self.poll(clock=datetime(2026, 10, 8, 12, 2, tzinfo=UTC))
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            [item for item in baseline["submitted"] if item.get("event") == "schedule"],
+            [],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["schedules"][JOB[0]], "2026-10-08T12:00:00+00:00")
+        self.assertEqual(saved["tips"]["refs/heads/main"], tip)
+
+        feature = self.seed / "feature.txt"
+        feature.write_text("feature\n")
+        _git(self.seed, "checkout", "-b", "feature")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "feature",
+        )
+        _git(self.seed, "push", "origin", "feature")
+        head = _git(self.seed, "rev-parse", "feature").stdout.strip()
+        _git(self.seed, "checkout", "main")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            "feature",
+            "-m",
+            "merge",
+        )
+        _git(self.seed, "push", "origin", "HEAD:refs/pull/7/merge")
+        self.server.pulls = [
+            {
+                "number": 7,
+                "head": {
+                    "sha": head,
+                    "ref": "feature",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        self.server.etags["pulls"] = "pulls-2"
+        self.server.requests.clear()
+        self.submits.clear()
+        fired = self.poll(clock=datetime(2026, 10, 8, 12, 17, tzinfo=UTC))
+        self.assertTrue(
+            any(item.get("if_none_match") == "branches-1" for item in self.server.requests)
+        )
+        self.assertEqual(self.runs(), 1)
+        schedule = [item for item in self.submits if item.get("event_name") == "schedule"]
+        self.assertEqual(len(schedule), 1)
+        self.assertEqual(schedule[0]["event"]["schedule"], "*/5 * * * *")
+        self.assertEqual(schedule[0]["event"]["ref"], "refs/heads/main")
+        self.assertNotIn("commits", schedule[0]["event"])
+        self.assertEqual(
+            [json.loads(item["body"]) for item in self.posts()],
+            [{"context": "rookrunner/check.yml/check/schedule", "state": "pending"}],
+        )
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + tip))
+        run_id = next(
+            item["run_id"] for item in fired["submitted"] if item.get("event") == "schedule"
+        )
+        manifest = json.loads(
+            (
+                self.state
+                / "snapshots"
+                / self.worker.get(run_id)["input"]["snapshot_id"]
+                / "manifest.json"
+            ).read_text()
+        )
+        self.assertEqual(manifest["base_commit"], tip)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["schedules"][JOB[0]], "2026-10-08T12:15:00+00:00")
+        tick = "2026-10-08T12:15:00+00:00\0*/5 * * * *"
+        keyed = submission_key("acme/demo", "schedule", tip, JOB[0], JOB[1], tick)
+        self.assertEqual(saved["submissions"][0]["key"], keyed)
+        self.assertNotEqual(keyed, submission_key("acme/demo", "schedule", tip, JOB[0], JOB[1]))
+        self.assertEqual(saved["submissions"][0]["context"], "rookrunner/check.yml/check/schedule")
+
+        self.submits.clear()
+        again = self.poll(clock=datetime(2026, 10, 8, 12, 17, tzinfo=UTC))
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(self.submits, [])
+        self.assertEqual(
+            [item for item in again["submitted"] if item.get("event") == "schedule"],
+            [],
+        )
 
 
 class AllowlistTests(unittest.TestCase):

@@ -509,3 +509,33 @@ class SubmitTriggerTests(unittest.TestCase):
             diff_unavailable=True,
         )
         self.assertEqual(unavailable["result"]["state"], "queued")
+
+    def test_schedule_submit_matches_only_the_listed_cron(self):
+        self.write_workflow(
+            "on:\n  schedule:\n    - cron: '*/5 * * * *'\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+        )
+        missed = self.submit(
+            submission_key="other-cron",
+            event_name="schedule",
+            event={"schedule": "0 0 * * *", "ref": "refs/heads/main"},
+        )
+        self.assertEqual(missed["result"], {"triggered": False})
+        self.assertEqual(self.rows("other-cron"), 0)
+        matched = self.submit(
+            submission_key="listed-cron",
+            event_name="schedule",
+            event={"schedule": "*/5 * * * *", "ref": "refs/heads/main"},
+        )
+        self.assertEqual(matched["result"]["state"], "queued")
+        self.assertEqual(self.rows("listed-cron"), 1)
+
+    def test_a_bad_schedule_rejects_a_push_submit(self):
+        self.write_workflow(
+            "on:\n  push:\n  schedule:\n    - cron: '60 * * * *'\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+        )
+        reply = self.submit(submission_key="bad-cron", event_name="push")
+        self.assertEqual(reply["error"]["data"]["kind"], "INVALID_PARAMS")
+        self.assertIn("on.schedule cron is not accepted", reply["error"]["message"])
+        self.assertEqual(self.rows("bad-cron"), 0)

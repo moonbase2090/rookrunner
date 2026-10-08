@@ -1,4 +1,4 @@
-"""Decide whether a push or pull request matches a workflow's `on`.
+"""Decide whether a push, pull request, or schedule matches a workflow's `on`.
 
 The pattern rules are the workflow syntax filter cheat sheet. `*` does not
 match `/`. `**/` matches zero or more directories. `?` and `+` quantify the
@@ -11,6 +11,7 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-t
 
 import re
 
+from .cron import parse_cron
 from .protocol import invalid
 
 # A match past this prefix of the caller-supplied diff does not count.
@@ -26,6 +27,28 @@ DEFAULT_PULL_REQUEST_TYPES = ("opened", "synchronize", "reopened")
 _RANGE = (("a", "z"), ("A", "Z"), ("0", "9"))
 
 
+def schedule_expressions(on):
+    """Return the cron strings listed under ``on.schedule``.
+
+    A workflow with no schedule key returns an empty list. A schedule
+    value that is not a list of ``{cron: "<five fields>"}`` entries is
+    ``INVALID_PARAMS``, as is a cron this parser rejects.
+    """
+
+    if not isinstance(on, dict) or "schedule" not in on:
+        return []
+    value = on["schedule"]
+    if not isinstance(value, list) or not value:
+        invalid("on.schedule cron is not accepted")
+    found = []
+    for item in value:
+        if not isinstance(item, dict):
+            invalid("on.schedule cron is not accepted")
+        parse_cron(item.get("cron"))
+        found.append(item["cron"])
+    return found
+
+
 def submission_triggered(
     on,
     event_name,
@@ -39,8 +62,17 @@ def submission_triggered(
 
     More than 1,000 commits on a push, or an unavailable diff, skips path
     filters only. Branch, tag, and activity-type filters still apply.
+    A schedule event matches when ``event.schedule`` is one of the cron
+    strings under ``on.schedule``. Any other event name still matches,
+    after a present schedule has been checked for a usable cron.
     """
 
+    expressions = schedule_expressions(on)
+    if event_name == "schedule":
+        if not isinstance(event, dict):
+            return False
+        listed = event.get("schedule")
+        return isinstance(listed, str) and listed in expressions
     if event_name not in ("push", "pull_request"):
         return True
     config = _config(on, event_name)
