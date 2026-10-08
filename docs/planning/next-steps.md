@@ -476,12 +476,13 @@ bytes, the same 1024-based reading it uses for the documented 500 KB
 workflow-file limit. The budget covers the state directory: the database,
 snapshots, and attempt workspaces. A submission that would exceed it returns
 `STORAGE_FULL`, creates no run, and does not consume the submission key. The
-same key still returns a run that was already accepted. Active runs and their
-evidence stay. GitHub evicts cache entries past its limit; this budget does
-not. An operator can pass `--disk-budget-bytes`. The configured value is not
+same key still returns a run that was already accepted. Active runs and
+unresolved cleanups stay. Finished run folders older than 90 days, or older
+than the newest 100, are removed. When a submission still would not fit, the
+oldest finished folders are removed first. Run records and submission keys
+stay. An operator can pass `--disk-budget-bytes`. The configured value is not
 capped at 10 GB. SQLite reporting the database full still rolls back
-acceptance without consuming the key. Runs and keys are still retained
-indefinitely. Pruning is not implemented. Artifact storage is a separate
+acceptance without consuming the key. Artifact storage is a separate
 account quota and is not this budget.
 
 Acceptance criteria:
@@ -489,8 +490,11 @@ Acceptance criteria:
 - A configured budget covers state, snapshots, and attempt workspaces. A
   submission that would exceed it returns `STORAGE_FULL`, creates no run,
   and does not consume the submission key.
-- Active runs and their evidence are not deleted to make room. The
-  development backend's existing full-disk rollback test still passes.
+- Active runs and unresolved cleanups are not deleted to make room. A
+  finished snapshot older than 90 days, beyond the newest 100, or oldest
+  when the budget still would not fit, is removed. Its run record and
+  submission key stay. The development backend's existing full-disk
+  rollback test still passes.
 
 **NS-12. Publish an artifact manifest for the subset.**
 

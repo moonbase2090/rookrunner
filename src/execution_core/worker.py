@@ -81,7 +81,12 @@ from .artifacts import ArtifactError, file_identity, named_manifest, read_bytes
 from .upload import load_uploads
 from .attempt import AttemptError, materialize_attempt
 from .concurrency import decide, eligible, resolve_groups
-from .disk import DEFAULT_DISK_BUDGET, usage
+from .disk import (
+    DEFAULT_DISK_BUDGET,
+    FINISHED_RUN_FOLDER_COUNT,
+    FINISHED_RUN_FOLDER_SECONDS,
+    usage,
+)
 from .expr import ExprError
 from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
@@ -164,6 +169,18 @@ _CONCURRENCY_NOTE = (
 
 def now():
     return datetime.now(UTC).isoformat(timespec="microseconds")
+
+
+def _finished_stamp(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return None
+    return stamp
 
 
 def cursor(kind, identity, offset):
@@ -501,6 +518,7 @@ class Worker:
                     identity = record.get("attempt_id") or record["run_id"]
                     self.retained[identity] = name
         self._load_retained()
+        self._prune_finished_run_folders(0)
 
     def _release_running(self, record):
         kind = (record.get("input") or {}).get("kind")
@@ -1104,6 +1122,71 @@ class Worker:
             record = json.loads(raw)
             self._release_finished_attempt(record)
 
+    def _folder_protected(self, record):
+        if record.get("state") not in TERMINAL:
+            return True
+        return record.get("cleanup") != "confirmed_no_external_resources"
+
+    def _folder_names(self, records):
+        snapshots = set()
+        attempts = set()
+        for record in records:
+            snapshot_id = (record.get("input") or {}).get("snapshot_id")
+            if isinstance(snapshot_id, str) and _ATTEMPT_ID.fullmatch(snapshot_id):
+                snapshots.add(snapshot_id)
+            attempt_id = record.get("attempt_id")
+            if isinstance(attempt_id, str) and _ATTEMPT_ID.fullmatch(attempt_id):
+                attempts.add(attempt_id)
+        return snapshots, attempts
+
+    def _delete_finished_folders(self, records, drop_ids):
+        kept = [record for record in records if record.get("run_id") not in drop_ids]
+        dropped = [record for record in records if record.get("run_id") in drop_ids]
+        keep_snapshots, keep_attempts = self._folder_names(kept)
+        drop_snapshots, drop_attempts = self._folder_names(dropped)
+        for name in drop_snapshots - keep_snapshots:
+            self._drop_snapshot(name)
+        for name in drop_attempts - keep_attempts:
+            self._remove_workspace(Path(self.state) / "attempts" / name)
+
+    def _prune_finished_run_folders(self, incoming):
+        """Remove finished run folders. In-flight runs and their folders stay.
+
+        A finished folder is past retention at 90 days or beyond the newest
+        100. When the disk budget still would not fit `incoming`, the oldest
+        remaining finished folders go first. Run records and keys stay.
+        """
+
+        records = self._records()
+        eligible = []
+        for record in records:
+            stamp = _finished_stamp(record.get("finished_at"))
+            if self._folder_protected(record) or stamp is None:
+                continue
+            eligible.append((stamp, record))
+        eligible.sort(key=lambda item: item[0])
+        current = datetime.now(UTC)
+        newest = {record["run_id"] for _stamp, record in eligible[-FINISHED_RUN_FOLDER_COUNT:]}
+        drop_ids = set()
+        keep = []
+        for stamp, record in eligible:
+            age = (current - stamp).total_seconds()
+            expired = age >= FINISHED_RUN_FOLDER_SECONDS or record["run_id"] not in newest
+            if expired:
+                drop_ids.add(record["run_id"])
+            else:
+                keep.append(record)
+        self._delete_finished_folders(records, drop_ids)
+        for record in keep:
+            try:
+                used = usage(self.state)
+            except OSError:
+                return
+            if used + incoming <= self.disk_budget:
+                return
+            drop_ids.add(record["run_id"])
+            self._delete_finished_folders(records, drop_ids)
+
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
         try:
@@ -1496,12 +1579,11 @@ class Worker:
 
     def _over_budget(self, incoming):
         try:
-            used = usage(self.state)
+            usage(self.state)
         except OSError:
             return True
-        if used + incoming <= self.disk_budget:
-            return False
         self._reclaim_terminal_attempts()
+        self._prune_finished_run_folders(incoming)
         try:
             used = usage(self.state)
         except OSError:

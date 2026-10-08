@@ -280,12 +280,13 @@ This invalid fixture cannot create work:
 Submission keys are 1–128 characters and scoped to the state directory's stable
 worker ID. Omitted fixture defaults normalize to explicit defaults. Same key and
 normalized input return the existing run; changed parameters produce
-`IDEMPOTENCY_CONFLICT`. All runs, inputs, logs, and keys are retained indefinitely;
+`IDEMPOTENCY_CONFLICT`. Run records, inputs, logs, and keys are retained;
 there is no key expiry in this prototype. When a run is terminal and container
 cleanup is confirmed, its attempt directory is removed. An unresolved cleanup
-keeps that directory. New submissions stop when the configured disk budget
-would still be exceeded after those finished directories are removed. That
-refusal does not delete runs, keys, snapshots, or an active attempt.
+keeps that directory. Finished snapshot folders older than 90 days, or beyond
+the newest 100, are removed. New submissions stop when the configured disk
+budget would still be exceeded after the oldest finished folders are removed.
+That refusal does not delete runs, keys, or an in-flight attempt.
 The retry window is therefore the entire lifetime of the retained worker state,
 including across restarts. No tombstone expiry is needed because no run or key
 can be pruned through the API. Deleting the state directory outside the service
@@ -345,9 +346,11 @@ repository on every plan in the storage table
 `10 * 1024 * 1024 * 1024` bytes. GitHub documents 10 GB and does not define
 the byte multiple; this repository uses 1024, matching its 500 KB
 workflow-file limit. GitHub may evict cache entries past a repository cache
-limit. This budget does not delete snapshots, run records, or an attempt
-whose container cleanup is still unresolved. Before it refuses a submission,
-it removes attempt directories for terminal runs whose cleanup is confirmed.
+limit. This budget does not delete run records or an attempt whose container
+cleanup is still unresolved. Before it refuses a submission, it removes
+attempt directories for terminal runs whose cleanup is confirmed, then
+finished snapshot folders past 90 days or the newest 100, oldest first while
+the budget still would not fit.
 A submission that still would exceed it returns
 `STORAGE_FULL`, creates no run, and does not consume the submission key. The
 same key still returns a run that was already accepted. The snapshot captured
