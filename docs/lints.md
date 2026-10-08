@@ -4,8 +4,9 @@ Status: skeleton, accepted with the static analysis plan on
 2026-10-06. The source is `docs/design/static-analysis.md`.
 
 Three tables. The pull request that changes a table updates it
-here. Ruff extends its default selection with ERA, PGH, RUF, B,
-UP, SIM, and T20. The `cli.py` T20 row is a ruff per-file ignore.
+here. Ruff selects E4, E7, E9, F, ERA, PGH, RUF, B, UP, SIM,
+and T20. The selection is explicit so a newer Ruff default does not
+add rules. The `cli.py` T20 row is a ruff per-file ignore.
 The other suppression rows are not ruff per-file ignores yet.
 
 On `bbc0cb8b17522cebfb2b212da54243d7d4a3f434`, `src` and `tests`
@@ -50,7 +51,7 @@ ignore.
 
 | Check | Runs | Rejects |
 | --- | --- | --- |
-| Ruff | `check.yml` runs `ruff check src tests` and `ruff format --check src tests` | Default ruff findings on `src` and `tests`, plus ERA, PGH, RUF, B, UP, SIM, and T20, and format drift. Line length is 100. Target is py311. |
+| Ruff | `check.yml` runs `ruff check src tests` and `ruff format --check src tests` | E4, E7, E9, F, ERA, PGH, RUF, B, UP, SIM, and T20 on `src` and `tests`, and format drift. Line length is 100. Target is py311. |
 | Unit tests | `check.yml` runs `PYTHONPATH=src python -m unittest discover -s tests` | A failing test. |
 
 Checks marked CI (planned) in `docs/conventions.md` are absent

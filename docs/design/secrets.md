@@ -160,10 +160,12 @@ For a push, a non-empty commit `author.login` is stored as the tip
 commit's `author.login`. For a pull request, a non-empty
 `user.login` is stored on the pull request. `allowlist_matches` is
 a pure function of that event, the ref list, the pusher list, and
-the event name. With both lists empty, the only match is a push
-whose ref is `refs/heads/` plus `repository.default_branch`. A
-listed ref matches exactly. A listed login matches with ASCII case
-folding. The default push stays a match when a list is non-empty.
+the event name. With both lists empty, the only matches are a push
+or a schedule event whose ref is `refs/heads/` plus
+`repository.default_branch`. A listed ref matches exactly. A listed
+login matches with ASCII case folding. The default-branch push or
+schedule stays a match when a list is non-empty. A schedule event
+has no actor login.
 A missing login does not match a pusher entry. A local submit that
 does not carry those fields does not match the default rule. No
 secret is read and no token is minted.
@@ -589,10 +591,11 @@ The allowlist is `worker --secret-ref` and `worker --secret-pusher`.
 Each flag may be repeated. A ref entry is a full ref, such as
 `refs/heads/main`. A pusher entry is a GitHub login, compared
 ASCII-case-insensitively. A ref is compared exactly. With both
-lists empty, the only match is a `push` event whose ref is
-`refs/heads/` plus `event.repository.default_branch`. Adding a ref
-or a pusher adds a match. The default push stays a match. Omitting
-`--secrets` is how the operator turns file secrets off.
+lists empty, the only matches are a `push` or a `schedule` event
+whose ref is `refs/heads/` plus `event.repository.default_branch`.
+Adding a ref or a pusher adds a match. The default-branch push or
+schedule stays a match. A schedule event has no actor login.
+Omitting `--secrets` is how the operator turns file secrets off.
 
 `poll` copies `repository.id`, `repository.default_branch`, and the
 actor login into the event it already stores. For a push, the login

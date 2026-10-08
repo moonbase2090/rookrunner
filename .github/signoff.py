@@ -149,14 +149,14 @@ def paths_from_diff(text: str) -> list[str]:
 def report(changed: list[str], patterns: list[str], labels: list[str]) -> int:
     code, hits = decision(changed, patterns, labels)
     if code != 0:
-        print("protected paths changed without mb2090-signoff:")
+        print("protected paths changed without mb2090-signoff:")  # noqa: T201
         for path in hits:
-            print(path)
+            print(path)  # noqa: T201
         return 1
     if hits:
-        print("sign-off label present")
+        print("sign-off label present")  # noqa: T201
     else:
-        print("no protected path changed")
+        print("no protected path changed")  # noqa: T201
     return 0
 
 

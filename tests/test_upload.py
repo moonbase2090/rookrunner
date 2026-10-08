@@ -732,7 +732,7 @@ class PublishTests(unittest.TestCase):
 
     def test_publish_names_selected_files_and_fails_a_missing_one(self):
         with tempfile.TemporaryDirectory() as directory:
-            worker, record, workspace = self.prepare(directory)
+            worker, record, _workspace = self.prepare(directory)
             try:
                 uploads = [
                     {
@@ -771,7 +771,7 @@ class PublishTests(unittest.TestCase):
 
     def test_cancel_and_an_earlier_failure_stay(self):
         with tempfile.TemporaryDirectory() as directory:
-            worker, record, workspace = self.prepare(directory)
+            worker, record, _workspace = self.prepare(directory)
             try:
                 outcome = {
                     "status": "cancelled",
