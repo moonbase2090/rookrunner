@@ -1382,6 +1382,7 @@ class Worker:
                     if p.get("event_name") in (
                         "push",
                         "pull_request",
+                        "schedule",
                     ) and not self._event_triggered(p, prepared.path):
                         return {"triggered": False}
                 except Fault:

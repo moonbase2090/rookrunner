@@ -50,6 +50,39 @@ The poll interval is the operator's schedule. It is not a number in
 this engine. A pass follows GitHub's rate-limit response headers and
 stops when nothing remains. The next pass resumes.
 
+### Schedule
+
+A workflow file on the default-branch tip can list `on.schedule` as a
+list of `{cron: "..."}` entries. Each cron is five fields, evaluated in
+UTC. When both the day-of-month and the day-of-week are restricted, the
+minute matches if either field matches. A literal `*` is the only
+unrestricted field. `7` and `SUN` are Sunday. An unusable cron is
+rejected and the workflow does not run. A `timezone` key, and any key
+other than `cron`, is rejected. Evaluation stays in UTC.
+
+The poll stores the last considered minute for each workflow. The first
+time a workflow is seen, that minute is stored and the workflow does
+not run. A later poll runs a minute only when it is newer than the
+stored minute and at or before the poll's clock. Several missed minutes
+produce one run, at the newest of them. The same minute is not run
+again after a restart. The due minute and the tip SHA are stored before
+submit. A lost reply retries that SHA, including after the default
+branch moves, and only then considers a later minute. The clone is
+checked out at the stored SHA before that run is submitted, so a
+pull-request checkout earlier in the pass is not the tree the scheduled
+run captures.
+
+`github.event_name` is `schedule`. `github.event.schedule` is the cron
+text that matched. `github.event.ref` is `refs/heads/` plus the
+repository's default branch. File-backed secrets use the same rule as a
+push to that ref. The check context is
+`rookrunner/<workflow file>/<job>/schedule`, so it does not replace the
+push check on the same commit.
+
+A due minute runs on the first poll at or after that minute. The owner
+poll is every 5 minutes, so a shorter cron still runs at most once per
+poll.
+
 ## Source
 
 Each configured repository has one dedicated clone. A run captures a
