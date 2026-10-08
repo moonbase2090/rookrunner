@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, UTC
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,12 @@ from unittest.mock import patch
 
 from execution_core.attempt import AttemptError
 from execution_core.cli import call
-from execution_core.disk import DEFAULT_DISK_BUDGET, usage
+from execution_core.disk import (
+    DEFAULT_DISK_BUDGET,
+    FINISHED_RUN_FOLDER_COUNT,
+    FINISHED_RUN_FOLDER_SECONDS,
+    usage,
+)
 from execution_core.protocol import canonical
 from execution_core.run import ContainerLease
 from execution_core.worker import Worker, now
@@ -589,3 +595,169 @@ class DiskBudgetTests(unittest.TestCase):
         reply = worker.response(canonical(body).encode())
         validate_response("run.submit", reply)
         return reply
+
+
+def _stamp(seconds_ago):
+    return (datetime.now(UTC) - timedelta(seconds=seconds_ago)).isoformat()
+
+
+def _snapshot(state, payload):
+    name = str(uuid.uuid4())
+    path = state / "snapshots" / name
+    path.mkdir(parents=True)
+    (path / "marker").write_bytes(payload)
+    return name, path
+
+
+def _store(worker, key, state_name, snapshot_id, finished_at, cleanup):
+    run_id = str(uuid.uuid4())
+    record = {
+        "run_id": run_id,
+        "submission_key": key,
+        "state": state_name,
+        "exit_code": 0 if state_name == "succeeded" else None,
+        "input": {"kind": "workflow_job", "snapshot_id": snapshot_id},
+        "finished_at": finished_at,
+        "attempt_id": None,
+        "cleanup": cleanup,
+    }
+    with worker.db:
+        worker.db.execute(
+            "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+            (run_id, key, "{}", canonical(record), b""),
+        )
+    return run_id
+
+
+class FinishedFolderTests(unittest.TestCase):
+    def _worker(self, directory):
+        state = Path(directory) / "state"
+        worker = Worker(directory, state)
+        worker.execute_queue = lambda: worker.stop.wait()
+        worker.start()
+        return worker, state
+
+    def test_a_finished_folder_past_ninety_days_is_removed_and_the_run_stays(self):
+        self.assertEqual(FINISHED_RUN_FOLDER_SECONDS, 90 * 24 * 60 * 60)
+        limit = 90 * 24 * 60 * 60
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                old_name, old_path = _snapshot(state, b"old")
+                young_name, young_path = _snapshot(state, b"young")
+                held_name, held_path = _snapshot(state, b"held")
+                live_name, live_path = _snapshot(state, b"live")
+                _store(
+                    worker,
+                    "old",
+                    "succeeded",
+                    old_name,
+                    _stamp(limit + 1),
+                    "confirmed_no_external_resources",
+                )
+                _store(
+                    worker,
+                    "young",
+                    "succeeded",
+                    young_name,
+                    _stamp(limit - 1),
+                    "confirmed_no_external_resources",
+                )
+                _store(
+                    worker,
+                    "held",
+                    "lost",
+                    held_name,
+                    _stamp(limit + 1),
+                    "unresolved",
+                )
+                _store(worker, "live", "queued", live_name, None, "not_started")
+                worker.close()
+                again = Worker(directory, state)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertFalse(old_path.exists())
+                    self.assertTrue(young_path.exists())
+                    self.assertTrue(held_path.exists())
+                    self.assertTrue(live_path.exists())
+                    self.assertEqual(again.db.execute("SELECT count(*) FROM runs").fetchone()[0], 4)
+                    kept = again.db.execute(
+                        "SELECT 1 FROM runs WHERE submission_key=?", ("old",)
+                    ).fetchone()
+                    self.assertIsNotNone(kept)
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_the_oldest_finished_folder_past_one_hundred_is_removed(self):
+        self.assertEqual(FINISHED_RUN_FOLDER_COUNT, 100)
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                paths = []
+                for index in range(101):
+                    name, path = _snapshot(state, b"f")
+                    paths.append(path)
+                    _store(
+                        worker,
+                        f"run-{index}",
+                        "succeeded",
+                        name,
+                        _stamp(1000 - index),
+                        "confirmed_no_external_resources",
+                    )
+                live_name, live_path = _snapshot(state, b"live")
+                _store(worker, "live", "queued", live_name, None, "not_started")
+                worker.close()
+                again = Worker(directory, state)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertFalse(paths[0].exists())
+                    self.assertTrue(paths[1].exists())
+                    self.assertTrue(paths[100].exists())
+                    self.assertTrue(live_path.exists())
+                    self.assertEqual(
+                        again.db.execute("SELECT count(*) FROM runs").fetchone()[0], 102
+                    )
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_disk_pressure_removes_the_oldest_finished_folder_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                old_name, old_path = _snapshot(state, b"o" * 4000)
+                new_name, new_path = _snapshot(state, b"n" * 4000)
+                run_name, run_path = _snapshot(state, b"r" * 4000)
+                _store(
+                    worker,
+                    "old",
+                    "succeeded",
+                    old_name,
+                    _stamp(1000),
+                    "confirmed_no_external_resources",
+                )
+                _store(
+                    worker,
+                    "new",
+                    "succeeded",
+                    new_name,
+                    _stamp(10),
+                    "confirmed_no_external_resources",
+                )
+                _store(worker, "running", "running", run_name, None, "not_started")
+                worker.disk_budget = usage(state) - 1000
+                self.assertFalse(worker._over_budget(0))
+                self.assertFalse(old_path.exists())
+                self.assertTrue(new_path.exists())
+                self.assertTrue(run_path.exists())
+                self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 3)
+            finally:
+                worker.close()

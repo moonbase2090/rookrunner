@@ -8,12 +8,17 @@ limit. GitHub does not define a 1000- or 1024-based byte count.
 https://docs.github.com/en/actions/reference/limits
 
 A repository administrator can raise GitHub's cache limit, and GitHub evicts
-cache entries past it. This budget does not evict. Active runs and their
-snapshots and attempt workspaces stay, and a new submission that would exceed
-the budget is refused. An operator can set a different byte count. GitHub
-Free artifact storage (500 MB) is an account artifact quota, not this
-per-repository state budget. Artifacts are not implemented here.
+cache entries past it. This budget removes finished run folders when they are
+past the retention age or count, oldest first when a new submission still
+would not fit. In-flight runs and unresolved cleanups stay. Run records and
+submission keys stay. A submission that still would not fit is refused. An
+operator can set a different byte count. GitHub Free artifact storage
+(500 MB) is an account artifact quota, not this per-repository state budget.
+Artifacts are not implemented here.
 https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#usage-limits-and-eviction-policy
+
+GitHub retains workflow artifacts and logs for 90 days by default.
+https://docs.github.com/en/actions/reference/limits
 """
 
 import os
@@ -21,6 +26,10 @@ from pathlib import Path
 import stat
 
 DEFAULT_DISK_BUDGET = 10 * 1024 * 1024 * 1024
+# 90 days, the documented default retention for workflow artifacts and logs.
+FINISHED_RUN_FOLDER_SECONDS = 90 * 24 * 60 * 60
+# Newest finished run folders kept while they are younger than that age.
+FINISHED_RUN_FOLDER_COUNT = 100
 
 
 def usage(root):

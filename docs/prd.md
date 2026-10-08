@@ -272,10 +272,11 @@ speed or resource claim that was not measured.
   not reported as GitHub Actions equivalence unless a reference comparison
   exists.
 
-No numeric service level is defined. The development worker retains runs and
-keys indefinitely and does not prune them. A configured disk budget refuses
-new submissions when state, snapshots, and attempt workspaces would exceed
-it. The worker is not an unattended production service.
+No numeric service level is defined. The development worker retains run
+records and submission keys. Finished run folders older than 90 days, or
+beyond the newest 100, are removed, oldest first when the disk budget needs
+room. In-flight runs stay. A configured disk budget refuses a new submission
+that still would not fit. The worker is not an unattended production service.
 
 ## Open questions
 
