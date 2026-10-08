@@ -184,8 +184,10 @@ class McpReadTests(unittest.TestCase):
         self.assertEqual(unknown["structuredContent"]["kind"], "RUN_NOT_FOUND")
 
     def test_a_long_log_pages_match_the_cli_across_connections(self):
+        page_limit = 64 * 1024
+        self.assertEqual(MAX_LOG_PAGE, page_limit)
         record = self.submit_fixture("paged")
-        payload = b"L" * (MAX_LOG_PAGE + 100)
+        payload = b"L" * (page_limit + 100)
         database = sqlite3.connect(self.state / "runs.sqlite3")
         try:
             database.execute("UPDATE runs SET log=? WHERE id=?", (payload, record["run_id"]))
@@ -193,23 +195,23 @@ class McpReadTests(unittest.TestCase):
         finally:
             database.close()
         first = self.session()
-        opened = first.call("logs", {"run_id": record["run_id"], "limit": MAX_LOG_PAGE})
+        opened = first.call("logs", {"run_id": record["run_id"], "limit": page_limit})
         page = opened["structuredContent"]
         self.assertIs(opened["isError"], False)
-        self.assertLessEqual(len(base64.b64decode(page["data_base64"])), MAX_LOG_PAGE)
+        self.assertEqual(len(base64.b64decode(page["data_base64"])), page_limit)
         cursor = page["next_cursor"]
         self.assertIsInstance(cursor, str)
         self.assertFalse(page["end_of_stream"])
         socket_page = call(
             self.state,
             "run.logs",
-            {"run_id": record["run_id"], "limit": MAX_LOG_PAGE},
+            {"run_id": record["run_id"], "limit": page_limit},
         )
         self.assertEqual(page, socket_page["result"])
         second = self.session()
         followed = second.call(
             "logs",
-            {"run_id": record["run_id"], "cursor": cursor, "limit": MAX_LOG_PAGE},
+            {"run_id": record["run_id"], "cursor": cursor, "limit": page_limit},
         )
         self.assertIs(followed["isError"], False)
         chunks = [
@@ -230,13 +232,13 @@ class McpReadTests(unittest.TestCase):
                 "logs",
                 record["run_id"],
                 "--limit",
-                str(MAX_LOG_PAGE),
+                str(page_limit),
             ]
             if cli_cursor is not None:
                 command.extend(["--cursor", cli_cursor])
             completed = subprocess.run(command, check=True, capture_output=True)
             body = json.loads(completed.stdout)["result"]
-            self.assertLessEqual(len(base64.b64decode(body["data_base64"])), MAX_LOG_PAGE)
+            self.assertLessEqual(len(base64.b64decode(body["data_base64"])), page_limit)
             cli_chunks.append(base64.b64decode(body["data_base64"]))
             cli_cursor = body["next_cursor"]
             if body["end_of_stream"]:

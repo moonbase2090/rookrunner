@@ -124,6 +124,8 @@ class InspectTests(unittest.TestCase):
         return reply["result"]
 
     def _workflow(self):
+        page_limit = 64 * 1024
+        self.assertEqual(MAX_LOG_PAGE, page_limit)
         reply = call(
             self.state,
             "run.submit",
@@ -148,7 +150,7 @@ class InspectTests(unittest.TestCase):
         (workspace / "out" / "b-other.txt").write_bytes(OTHER)
         head = "LOG-HEAD\n"
         tail = "LOG-TAIL\n"
-        stdout = head + ("x" * (MAX_LOG_PAGE - len(head.encode()))) + tail
+        stdout = head + ("x" * (page_limit - len(head.encode()))) + tail
         record.update(state="running", started_at=now(), attempt_id=attempt_id)
         with self.worker.db:
             self.worker.save(record)
