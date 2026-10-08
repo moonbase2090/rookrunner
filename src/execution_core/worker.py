@@ -1578,10 +1578,19 @@ class Worker:
         return Fault("INVALID_PARAMS", str(exc)[:512])
 
     def _over_budget(self, incoming):
+        """Return whether `incoming` still exceeds the budget after cleanup.
+
+        Confirmed terminal attempt directories are removed only when the
+        submission would not fit. Age and count retention run either way.
+        """
+
         try:
-            usage(self.state)
+            used = usage(self.state)
         except OSError:
             return True
+        if used + incoming <= self.disk_budget:
+            self._prune_finished_run_folders(0)
+            return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
         try:
