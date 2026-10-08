@@ -57,16 +57,20 @@ list of `{cron: "..."}` entries. Each cron is five fields, evaluated in
 UTC. When both the day-of-month and the day-of-week are restricted, the
 minute matches if either field matches. A literal `*` is the only
 unrestricted field. `7` and `SUN` are Sunday. An unusable cron is
-rejected and the workflow does not run.
+rejected and the workflow does not run. A `timezone` key, and any key
+other than `cron`, is rejected. Evaluation stays in UTC.
 
 The poll stores the last considered minute for each workflow. The first
 time a workflow is seen, that minute is stored and the workflow does
 not run. A later poll runs a minute only when it is newer than the
 stored minute and at or before the poll's clock. Several missed minutes
 produce one run, at the newest of them. The same minute is not run
-again after a restart. The clone is checked out at the default-branch
-tip before that run is submitted, so a pull-request checkout earlier in
-the pass is not the tree the scheduled run captures.
+again after a restart. The due minute and the tip SHA are stored before
+submit. A lost reply retries that SHA, including after the default
+branch moves, and only then considers a later minute. The clone is
+checked out at the stored SHA before that run is submitted, so a
+pull-request checkout earlier in the pass is not the tree the scheduled
+run captures.
 
 `github.event_name` is `schedule`. `github.event.schedule` is the cron
 text that matched. `github.event.ref` is `refs/heads/` plus the

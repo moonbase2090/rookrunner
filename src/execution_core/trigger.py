@@ -32,7 +32,8 @@ def schedule_expressions(on):
 
     A workflow with no schedule key returns an empty list. A schedule
     value that is not a list of ``{cron: "<five fields>"}`` entries is
-    ``INVALID_PARAMS``, as is a cron this parser rejects.
+    ``INVALID_PARAMS``, as is a cron this parser rejects. ``timezone``
+    and any other key are rejected. This evaluator is UTC only.
     """
 
     if not isinstance(on, dict) or "schedule" not in on:
@@ -44,7 +45,14 @@ def schedule_expressions(on):
     for item in value:
         if not isinstance(item, dict):
             invalid("on.schedule cron is not accepted")
-        parse_cron(item.get("cron"))
+        extra = set(item) - {"cron"}
+        if "timezone" in extra:
+            invalid("on.schedule timezone is not accepted")
+        if extra:
+            invalid("on.schedule key is not accepted")
+        if "cron" not in item:
+            invalid("on.schedule cron is not accepted")
+        parse_cron(item["cron"])
         found.append(item["cron"])
     return found
 

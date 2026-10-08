@@ -539,3 +539,14 @@ class SubmitTriggerTests(unittest.TestCase):
         self.assertEqual(reply["error"]["data"]["kind"], "INVALID_PARAMS")
         self.assertIn("on.schedule cron is not accepted", reply["error"]["message"])
         self.assertEqual(self.rows("bad-cron"), 0)
+
+    def test_a_timezone_schedule_rejects_a_push_submit(self):
+        self.write_workflow(
+            "on:\n  push:\n  schedule:\n    - cron: '0 9 * * 1-5'\n"
+            "      timezone: America/New_York\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+        )
+        reply = self.submit(submission_key="timezone", event_name="push")
+        self.assertEqual(reply["error"]["data"]["kind"], "INVALID_PARAMS")
+        self.assertIn("on.schedule timezone is not accepted", reply["error"]["message"])
+        self.assertEqual(self.rows("timezone"), 0)

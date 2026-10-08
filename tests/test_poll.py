@@ -286,6 +286,12 @@ class PollTests(unittest.TestCase):
         reply = self.worker.response(_request(method, params))
         if "error" in reply:
             raise PollError(reply["error"]["data"]["kind"], reply["error"]["message"])
+        if (
+            method == "run.submit"
+            and params.get("event_name") == "schedule"
+            and getattr(self, "lose_schedule_reply", False)
+        ):
+            raise PollError("WORKER_ERROR", "run.submit reply was lost")
         return reply["result"]
 
     def poll(self, clock=None):
@@ -1037,6 +1043,77 @@ class PollTests(unittest.TestCase):
             [item for item in again["submitted"] if item.get("event") == "schedule"],
             [],
         )
+
+    def test_a_lost_schedule_reply_retries_the_same_tick_after_the_tip_moves(self):
+        self._write(SCHEDULE)
+        _git(self.seed, "push", "origin", "main")
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.poll(clock=datetime(2026, 10, 8, 12, 2, tzinfo=UTC))
+        self.assertEqual(self.runs(), 0)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["schedules"][JOB[0]], "2026-10-08T12:00:00+00:00")
+
+        self.lose_schedule_reply = True
+        with self.assertRaises(PollError) as raised:
+            self.poll(clock=datetime(2026, 10, 8, 12, 17, tzinfo=UTC))
+        self.assertEqual(raised.exception.kind, "WORKER_ERROR")
+        self.assertEqual(str(raised.exception), "run.submit reply was lost")
+        self.assertEqual(self.runs(), 1)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["schedules"][JOB[0]], "2026-10-08T12:00:00+00:00")
+        pending = saved["schedule_pending"][JOB[0]]
+        self.assertEqual(pending["sha"], tip)
+        self.assertEqual(pending["ref"], "refs/heads/main")
+        self.assertEqual(pending["tick"], "2026-10-08T12:15:00+00:00")
+        self.assertEqual(pending["crons"], ["*/5 * * * *"])
+
+        later = self.seed / "later.txt"
+        later.write_text("later\n")
+        _git(self.seed, "add", "later.txt")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "later",
+        )
+        _git(self.seed, "push", "origin", "main")
+        moved = self._tip()
+        self.assertNotEqual(moved, tip)
+        self.server.branches = [{"name": "main", "commit": {"sha": moved}}]
+        self.server.etags["branches"] = "branches-2"
+        self.lose_schedule_reply = False
+        self.submits.clear()
+        again = self.poll(clock=datetime(2026, 10, 8, 12, 17, tzinfo=UTC))
+        self.assertEqual(self.runs(), 1)
+        schedule = [item for item in self.submits if item.get("event_name") == "schedule"]
+        self.assertEqual(len(schedule), 1)
+        tick = "2026-10-08T12:15:00+00:00\0*/5 * * * *"
+        expected = submission_key("acme/demo", "schedule", tip, JOB[0], JOB[1], tick)
+        self.assertEqual(schedule[0]["submission_key"], expected)
+        self.assertNotEqual(
+            schedule[0]["submission_key"],
+            submission_key("acme/demo", "schedule", moved, JOB[0], JOB[1], tick),
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["schedules"][JOB[0]], "2026-10-08T12:15:00+00:00")
+        self.assertNotIn(JOB[0], saved.get("schedule_pending") or {})
+        run_id = next(
+            item["run_id"] for item in again["submitted"] if item.get("event") == "schedule"
+        )
+        manifest = json.loads(
+            (
+                self.state
+                / "snapshots"
+                / self.worker.get(run_id)["input"]["snapshot_id"]
+                / "manifest.json"
+            ).read_text()
+        )
+        self.assertEqual(manifest["base_commit"], tip)
 
 
 class AllowlistTests(unittest.TestCase):

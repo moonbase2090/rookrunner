@@ -24,9 +24,9 @@ The first release targets one local worker. Later designs can extend execution t
 
 ## Schedule
 
-A poll of the default-branch tip runs a workflow that lists `on.schedule`. Each entry is `{cron: "..."}` with five POSIX fields, evaluated in UTC. When both the day-of-month and the day-of-week are restricted, the minute matches if either field matches. `7` and `SUN` are Sunday. An unusable cron is rejected.
+A poll of the default-branch tip runs a workflow that lists `on.schedule`. Each entry is `{cron: "..."}` with five POSIX fields, evaluated in UTC. When both the day-of-month and the day-of-week are restricted, the minute matches if either field matches. `7` and `SUN` are Sunday. An unusable cron is rejected. A `timezone` key, and any key other than `cron`, is rejected. Evaluation stays in UTC.
 
-The first time a workflow is seen, the poll records the latest due minute and does not run it. A later poll runs at most the newest minute that is due, including one catch-up after downtime. That minute is not run again after a restart. The run checks out the default-branch tip. `github.event_name` is `schedule` and `github.event.schedule` is the cron text. File-backed secrets follow the same rule as a push to the default branch. The check context is `rookrunner/<workflow file>/<job>/schedule`.
+The first time a workflow is seen, the poll records the latest due minute and does not run it. A later poll runs at most the newest minute that is due, including one catch-up after downtime. That minute is not run again after a restart. The due minute and the tip SHA are stored before submit, so a lost reply retries that SHA after the default branch moves. The run checks out that stored SHA. `github.event_name` is `schedule` and `github.event.schedule` is the cron text. File-backed secrets follow the same rule as a push to the default branch. The check context is `rookrunner/<workflow file>/<job>/schedule`.
 
 A due minute runs on the first poll at or after that minute. The engine does not choose the interval. The owner poll is every 5 minutes, so a shorter cron still runs at most once per poll.
 

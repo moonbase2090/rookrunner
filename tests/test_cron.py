@@ -132,6 +132,23 @@ class ScheduleTriggerTests(unittest.TestCase):
             submission_triggered(on, "push", PUSH, None, [], None, False)
         self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
 
+    def test_a_timezone_key_is_rejected(self):
+        on = {
+            "push": None,
+            "schedule": [{"cron": "0 9 * * 1-5", "timezone": "America/New_York"}],
+        }
+        with self.assertRaises(Fault) as raised:
+            submission_triggered(on, "push", PUSH, None, [], None, False)
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertIn("timezone", str(raised.exception))
+
+    def test_an_unknown_schedule_key_is_rejected(self):
+        on = {"push": None, "schedule": [{"cron": "0 9 * * 1-5", "foo": "1"}]}
+        with self.assertRaises(Fault) as raised:
+            submission_triggered(on, "push", PUSH, None, [], None, False)
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertIn("on.schedule key is not accepted", str(raised.exception))
+
     def test_schedule_on_the_default_branch_gets_push_to_main_secrets(self):
         event = {
             "ref": "refs/heads/main",

@@ -43,7 +43,10 @@ Local rules, not GitHub-equivalence claims:
 - A schedule is read from workflow files on the default-branch tip.
   The first time a workflow is seen, the latest due minute is stored
   and nothing is submitted. A later pass submits at most that newest
-  due minute, then stores it. The check context ends in ``/schedule``.
+  due minute. The minute and the tip SHA are stored before submit.
+  A lost reply retries that SHA, including after the branch moves.
+  The cursor is stored after the submit. The check context ends in
+  ``/schedule``.
 - An ssh host checks the worker repository ``origin`` owner/name. The
   host is written into ``poll.json`` before submit, and the tested SHA
   is checked out there from this clone. A key recorded for another host
@@ -1071,9 +1074,11 @@ class Pass:
         The workflow bytes are read from that tip. The clone is detached
         there only when a run is submitted, so a pull-request checkout
         earlier in this pass is not the tree the scheduled run captures.
-        The cursor is stored after a successful submit. A crash before that
-        store retries the same submission key. A pass with no stored branch
-        tip does not request the repository object.
+        The due minute and that tip SHA are stored before submit. Recovery
+        uses that stored row, including when the listed tip has since
+        moved, and only then considers a later minute. The cursor is
+        stored after the submit returns. A pass with no stored branch tip
+        does not request the repository object.
         """
 
         if self.budget.stopped:
@@ -1099,8 +1104,52 @@ class Pass:
             if workflow not in seen:
                 seen.append(workflow)
         for workflow in seen:
-            if self.budget.stopped or not self._schedule_workflow(workflow, ref, tip, repo):
+            if self.budget.stopped:
                 return
+            pending = self._pending_schedule(workflow)
+            if pending is not None and not self._resume_schedule(workflow, pending, repo):
+                return
+            if not self._schedule_workflow(workflow, ref, tip, repo):
+                return
+
+    def _pending_schedule(self, workflow):
+        pending = self.state.get("schedule_pending")
+        if not isinstance(pending, dict) or workflow not in pending:
+            return None
+        row = pending[workflow]
+        crons = row.get("crons") if isinstance(row, dict) else None
+        if (
+            not isinstance(row, dict)
+            or _schedule_cursor(row.get("tick")) is None
+            or _SHA.fullmatch(row.get("sha") or "") is None
+            or not isinstance(row.get("ref"), str)
+            or row.get("ref") == ""
+            or not isinstance(crons, list)
+            or not crons
+            or not all(isinstance(item, str) and item != "" for item in crons)
+        ):
+            raise PollError("STATE_INVALID", "poll state could not be read")
+        return row
+
+    def _resume_schedule(self, workflow, pending, repo):
+        """Submit the tick stored before the lost reply, on its original SHA."""
+
+        if repo is None:
+            repo = self._repository_body()
+            if repo is None:
+                return False
+        if not self._submit_schedule(
+            workflow,
+            pending["ref"],
+            pending["sha"],
+            repo,
+            pending["crons"],
+            pending["tick"],
+        ):
+            return False
+        self._store_schedule(workflow, _schedule_cursor(pending["tick"]))
+        self._clear_pending(workflow)
+        return True
 
     def _schedule_workflow(self, workflow, ref, tip, repo):
         blob = self._workflow_bytes(workflow, tip)
@@ -1127,31 +1176,62 @@ class Pass:
             repo = self._repository_body()
             if repo is None:
                 return False
-        _checkout(self.clone, tip)
         matching = [text for text in expressions if cron_matches(parse_cron(text), fire_at)]
-        for cron_text in matching:
+        if not matching:
+            self._store_schedule(workflow, cursor)
+            return True
+        tick = fire_at.isoformat()
+        self._store_pending(
+            workflow, {"tick": tick, "sha": tip, "ref": ref, "crons": list(matching)}
+        )
+        if not self._submit_schedule(workflow, ref, tip, repo, matching, tick):
+            return False
+        self._store_schedule(workflow, cursor)
+        self._clear_pending(workflow)
+        return True
+
+    def _submit_schedule(self, workflow, ref, sha, repo, crons, tick):
+        """Submit one stored minute. The SHA is the one recorded for that minute."""
+
+        _checkout(self.clone, sha)
+        for cron_text in crons:
             event = {
                 "ref": ref,
                 "repository": _event_repository(self.repository, repo),
                 "schedule": cron_text,
             }
-            tick = fire_at.isoformat() + "\0" + cron_text
             if not self._submit_jobs(
                 "schedule",
                 ref,
-                tip,
-                tip,
+                sha,
+                sha,
                 event,
                 None,
                 None,
                 True,
                 only=workflow,
-                tick=tick,
+                tick=tick + "\0" + cron_text,
                 context_suffix="/schedule",
             ):
                 return False
-        self._store_schedule(workflow, cursor)
         return True
+
+    def _store_pending(self, workflow, row):
+        pending = self.state.get("schedule_pending")
+        if not isinstance(pending, dict):
+            pending = {}
+            self.state["schedule_pending"] = pending
+        if pending.get(workflow) == row:
+            return
+        pending[workflow] = row
+        self._checkpoint()
+
+    def _clear_pending(self, workflow):
+        pending = self.state.get("schedule_pending")
+        if not isinstance(pending, dict) or workflow not in pending:
+            return
+        del pending[workflow]
+        self._checkpoint()
 
     def _workflow_bytes(self, workflow, tip):
         if not isinstance(tip, str) or _SHA.fullmatch(tip) is None:
