@@ -6,8 +6,10 @@ source capture still use only Python's standard library. No third-party source
 or binaries are copied into the repository or bundled into a distribution.
 
 Runtime and development packages are installed into the ignored `.venv`
-directory with `uv sync --locked --group dev`. `uv.lock` records their PyPI
-artifacts and hashes. No Local Actions resources were used.
+directory with `uv sync --locked --group dev`. The same development pins are
+also the `dev` extra, because Scorecard 0.1.6 runs its tests with
+`uv run --extra dev`. `uv.lock` records their PyPI artifacts and hashes. No
+Local Actions resources were used.
 
 PyYAML's installed wheel metadata and `licenses/LICENSE` were inspected on
 2026-10-02. The wheel reports license MIT, home page https://pyyaml.org/, and
