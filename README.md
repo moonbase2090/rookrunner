@@ -21,6 +21,7 @@ The first release targets one local worker. Later designs can extend execution t
 - [Execution protocol draft](docs/design/protocol.md): client and worker contract.
 - [Build milestones](docs/roadmap.md): implementation order and completion evidence.
 - [Epics and stories](docs/planning/project-plan.md): Waypoint work breakdown, owners, and acceptance criteria.
+- [Review policy](REVIEW_POLICY.md): leaf vs trunk, proof, review and merge rules.
 
 ## Schedule
 
