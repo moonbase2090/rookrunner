@@ -418,6 +418,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             list_token=token,
             ssh_host=getattr(args, "ssh_host", None),
             places=places,
+            allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
         )
     finally:
         if isinstance(token, str):
@@ -447,6 +448,10 @@ def report_poll(args):
     except StatusError as error:
         _print_status_error(error)
     else:
+        for warning in result.get("warnings") or []:
+            message = warning.get("message") if isinstance(warning, dict) else None
+            if isinstance(message, str) and message != "":
+                print(message, file=sys.stderr)
         print(canonical(result))
 
 
@@ -780,6 +785,15 @@ def main():
             "one worker in placement order, as a JSON object with name, state, "
             "cap, and image, and an optional ssh. Repeat for each worker. "
             "Omit it to keep one local socket or one --ssh-host."
+        ),
+    )
+    poll.add_argument(
+        "--allow-untrusted",
+        action="append",
+        default=[],
+        help=(
+            "SHA of one untrusted pull-request head or push tip that may run. "
+            "Repeat for each run. Omit it to refuse untrusted code."
         ),
     )
     poll.add_argument(
