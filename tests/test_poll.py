@@ -1169,7 +1169,6 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(manifest["base_commit"], tip)
 
-
     def test_a_non_collaborator_is_refused_with_a_named_warning(self):
         tip = self._tip()
         head = "ab" * 20
@@ -1202,9 +1201,7 @@ class PollTests(unittest.TestCase):
                     "sha": head,
                     "action": "refused",
                     "reason": "author is not a repository collaborator",
-                    "message": (
-                        "untrusted code refused: author is not a repository collaborator"
-                    ),
+                    "message": ("untrusted code refused: author is not a repository collaborator"),
                 }
             ],
         )
@@ -1392,6 +1389,7 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(stuck["warnings"][0]["sha"], "cd" * 20)
 
+
 class AllowlistTests(unittest.TestCase):
     def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
         default = {
@@ -1445,8 +1443,6 @@ class AllowlistTests(unittest.TestCase):
         self.assertTrue(allowlist_matches(pull, ["refs/pull/9/merge"], [], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], ["mona"], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], [""], "pull_request"))
-
-
 
 
 class CliPollTests(unittest.TestCase):
