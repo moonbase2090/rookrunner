@@ -43,6 +43,11 @@ Local rules, not GitHub-equivalence claims:
   ``mb2090-signoff`` is a failure. No CODEOWNERS blob is skipped and
   recorded. The pass does not apply the label and does not run
   ``signoff.yml``.
+- After posts and before the final state save, the pass calls
+  ``poll.record`` on the single caller and on each place whose origin
+  was accepted. ``PollError`` and ``OSError`` from that call are a
+  ``poll_stamp`` skip. Checkpoints do not call it. A pass that raises
+  before that call leaves the previous stamp.
 - The submission key is ``poll-`` plus the SHA-256 of the repository,
   event, tested SHA, workflow, and job. A schedule run also hashes the
   due minute and the cron. Leaving that part off keeps the key the same.
@@ -874,6 +879,7 @@ class Pass:
             else:
                 self._post_placed()
             self.result["stopped"] = self.budget.stopped
+            self._record_polls()
             _save_state(self.state_dir / "poll.json", self.state)
             return self.result
         finally:
@@ -1064,6 +1070,30 @@ class Pass:
 
     def _checkpoint(self):
         _save_state(self.state_dir / "poll.json", self.state)
+
+    def _record_polls(self):
+        """Stamp each worker reached in this pass. A refusal does not stop the save."""
+
+        completed_at = self.clock.isoformat()
+        if self.places is None:
+            self._record_poll(self.caller, completed_at, None)
+            return
+        for place in self.places:
+            if place.get("remote_repository") is None:
+                continue
+            self._record_poll(place["caller"], completed_at, place["name"])
+
+    def _record_poll(self, caller, completed_at, host):
+        try:
+            caller(
+                "poll.record",
+                {"completed_at": completed_at, "repository": self.repository},
+            )
+        except (PollError, OSError):
+            row = {"reason": "poll_stamp"}
+            if host is not None:
+                row["host"] = host
+            self.result["skipped"].append(row)
 
     def _object(self, path):
         """GET one JSON object. No credential is sent.

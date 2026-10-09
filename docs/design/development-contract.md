@@ -51,7 +51,9 @@ repository lock. The repository must exist but need not yet be a Git checkout.
 `status.view` returns the worker, the poll stamp, the newest 20
 runs, the queue, and the active groups. It creates no run.
 `poll.record` writes `poll_completed_at` and `poll_repository`.
-The poll command does not call it yet.
+The poll command calls it after posts and before the final state
+save, once for the single caller and once per place whose origin
+was accepted.
 
 `run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
 On a workflow run it returns a page of artifact entries and `next_cursor`.
