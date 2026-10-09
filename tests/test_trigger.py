@@ -273,6 +273,46 @@ class PatternTests(unittest.TestCase):
         self.assertIn("activity_type", str(missing_type))
 
 
+class DispatchTriggerTests(unittest.TestCase):
+    def test_only_a_listed_workflow_dispatch_matches(self):
+        event = {"ref": "refs/heads/main"}
+        self.assertFalse(triggered({"push": None}, event_name="workflow_dispatch", event=event))
+        self.assertFalse(triggered("push", event_name="workflow_dispatch", event=event))
+        self.assertTrue(triggered("workflow_dispatch", event_name="workflow_dispatch", event=event))
+        self.assertTrue(
+            triggered(["push", "workflow_dispatch"], event_name="workflow_dispatch", event=event)
+        )
+        self.assertTrue(
+            triggered({"workflow_dispatch": None}, event_name="workflow_dispatch", event=event)
+        )
+        self.assertTrue(
+            triggered({"workflow_dispatch": {}}, event_name="workflow_dispatch", event=event)
+        )
+
+    def test_inputs_and_other_keys_are_rejected(self):
+        event = {"ref": "refs/heads/main"}
+        inputs = {"workflow_dispatch": {"inputs": {"name": {"description": "who"}}}}
+        with self.assertRaises(Fault) as raised:
+            triggered(inputs, event_name="workflow_dispatch", event=event)
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertIn("inputs", str(raised.exception))
+        other = {"workflow_dispatch": {"types": ["requested"]}}
+        with self.assertRaises(Fault) as raised:
+            triggered(other, event_name="workflow_dispatch", event=event)
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertIn("key is not accepted", str(raised.exception))
+
+    def test_a_bad_schedule_still_rejects_workflow_dispatch(self):
+        on = {
+            "workflow_dispatch": None,
+            "schedule": [{"cron": "0 9 * * 1-5", "timezone": "UTC"}],
+        }
+        with self.assertRaises(Fault) as raised:
+            triggered(on, event_name="workflow_dispatch", event={"ref": "refs/heads/main"})
+        self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+        self.assertIn("timezone", str(raised.exception))
+
+
 WORKFLOW = """\
 name: demo
 on: push
@@ -434,7 +474,28 @@ class SubmitTriggerTests(unittest.TestCase):
             event_name="workflow_dispatch",
             event={"kind": "local"},
         )
-        self.assertEqual(dispatch["result"]["state"], "queued")
+        self.assertEqual(dispatch["result"], {"triggered": False})
+        self.assertEqual(self.rows("dispatch"), 0)
+        other = self.submit(
+            submission_key="release",
+            event_name="release",
+            event={"kind": "local"},
+        )
+        self.assertEqual(other["result"]["state"], "queued")
+
+    def test_workflow_dispatch_inputs_are_rejected_at_submit(self):
+        self.write_workflow(
+            "on:\n  workflow_dispatch:\n    inputs:\n      name:\n        description: who\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"
+        )
+        reply = self.submit(
+            submission_key="inputs",
+            event_name="workflow_dispatch",
+            event={"ref": "refs/heads/main"},
+        )
+        self.assertEqual(reply["error"]["data"]["kind"], "INVALID_PARAMS")
+        self.assertIn("inputs", reply["error"]["message"])
+        self.assertEqual(self.rows("inputs"), 0)
 
     def test_pull_request_type_and_path_limits_reach_submission(self):
         self.write_workflow(
