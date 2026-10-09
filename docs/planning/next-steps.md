@@ -1413,11 +1413,15 @@ the reason unless the operator gives an explicit per-run override.
   excludes from the local worker.
 - Registering as a GitHub self-hosted runner. That runs GitHub's job
   protocol, not this engine. It stays under Later investigations.
-- Untrusted code is refused with a warning that names the reason unless
-  the operator gives an explicit per-run override. It is not silently
-  skipped and it is not paused. GitHub's secure-use guidance says
-  self-hosted runners should almost never run public repository pull
-  requests
+- Untrusted code is refused with a warning, not silently skipped. A
+  pull request from a fork, a head repository other than the owner
+  repository, or an author or committer who is not a repository
+  collaborator names that reason and creates no run. The operator
+  allows one run by passing `--allow-untrusted` with that commit's SHA
+  on the poll invocation. The flag is not a default and it is not
+  stored. The run record stores the override and the reason. It is not
+  paused. GitHub's secure-use guidance says self-hosted runners should
+  almost never run public repository pull requests
   (https://docs.github.com/en/actions/reference/security/secure-use).
 - Deploy workflows. Secrets, `GITHUB_TOKEN`, and `write` permissions
   are designed in [secrets](../design/secrets.md). p7-mask,
@@ -2039,7 +2043,9 @@ and job, so a repeated pass creates no duplicate run.
 A run still queued 24 hours after acceptance is cancelled and reported
 as `error`. That is the self-hosted job queue time. A pass stops when
 the rate-limit headers report nothing remaining, and the next pass
-resumes. A pull request from a fork is skipped and recorded, never run.
+resumes. A pull request from a fork is refused with a warning that
+names the reason. It runs only when that poll invocation passes
+`--allow-untrusted` with the head SHA, and the run records the override.
 NS-42 does not cancel an older SHA's run when a newer push arrives.
 NS-45 cancels a queued or running run only inside a declared
 concurrency group. There is no listener, no resident service, and no
@@ -2054,7 +2060,8 @@ Acceptance criteria:
   - A new push and a same-repository pull request each produce one run
     and one `pending`, then one final status.
   - A repeated pass creates nothing new.
-  - A fork pull request runs nothing.
+  - A fork pull request is refused with a named warning and runs nothing
+    unless `--allow-untrusted` names its head SHA.
 - The 24-hour queue rule and rate-limit exhaustion are tested.
 - The credential rules from NS-40 hold.
 

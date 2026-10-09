@@ -28,9 +28,15 @@ Local rules, not GitHub-equivalence claims:
   is recorded as skipped and the pass continues. The tip is still
   stored. A workflow that is not a regular file, and any other capture
   failure, stops the pass.
-- A fork is recorded and runs nothing. The head and base repository
-  ids match only when both are integers and equal. A null head
-  repository is a fork. The full name is not the comparison.
+- A fork, a head repository other than the owner repository, or an
+  author or committer who is not a collaborator is refused with a
+  warning that names the reason. It is not silently skipped.
+  ``--allow-untrusted SHA`` runs that one pull-request head or push
+  tip and the run records the override. The flag is not stored and
+  it is not the default. The head and base repository ids match only
+  when both are integers and equal. A null head repository is a fork.
+  The full name is not the comparison. A missing association is not a
+  collaborator rejection. OWNER, MEMBER, and COLLABORATOR are.
 - A repository with ``.github/CODEOWNERS`` at the pull base or head
   gets a ``rookrunner/signoff`` status on the head SHA. Patterns are
   the union of the two blobs. A protected path without
@@ -219,6 +225,67 @@ def _same_repository(head, base):
     if head_id is None or base_id is None:
         return False
     return head_id == base_id
+
+
+_COLLABORATOR_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
+
+
+def _association(value):
+    """Return a non-empty association string, or None."""
+
+    if not isinstance(value, str) or value == "":
+        return None
+    return value
+
+
+def _user_association(user):
+    if not isinstance(user, dict):
+        return None
+    return _association(user.get("author_association"))
+
+
+def untrusted_reason(head, base, author_association=None, committer_association=None):
+    """Return why this code is untrusted, or None when it may run.
+
+    The repository comparison is ``_same_repository``. When that is false
+    and both ids are integers, the head repository is not the owner
+    repository. Any other mismatch is a fork. A missing association is
+    not a reason. OWNER, MEMBER, and COLLABORATOR are collaborators.
+    """
+
+    if (head is not None or base is not None) and not _same_repository(head, base):
+        head_repo = head.get("repo") if isinstance(head, dict) else None
+        base_repo = base.get("repo") if isinstance(base, dict) else None
+        head_id = _integer_id(head_repo.get("id")) if isinstance(head_repo, dict) else None
+        base_id = _integer_id(base_repo.get("id")) if isinstance(base_repo, dict) else None
+        if head_id is not None and base_id is not None and head_id != base_id:
+            return "head repository is not the owner repository"
+        return "pull request is from a fork"
+    reasons = []
+    author = _association(author_association)
+    committer = _association(committer_association)
+    if author is not None and author not in _COLLABORATOR_ASSOCIATIONS:
+        reasons.append("author is not a repository collaborator")
+    if committer is not None and committer not in _COLLABORATOR_ASSOCIATIONS:
+        reasons.append("committer is not a repository collaborator")
+    if not reasons:
+        return None
+    return "; ".join(reasons)
+
+
+def _allow_untrusted(values):
+    """Return the SHA set for one invocation. It is not read from state."""
+
+    if values is None:
+        values = ()
+    if not isinstance(values, list | tuple):
+        raise PollError("INVALID_PARAMS", "allow-untrusted must be a list of commit SHAs")
+    allowed = []
+    for item in values:
+        if not isinstance(item, str) or _SHA.fullmatch(item) is None:
+            raise PollError("INVALID_PARAMS", "allow-untrusted must be a commit SHA")
+        allowed.append(item)
+    return frozenset(allowed)
 
 
 def _event_repository(configured, body):
@@ -716,6 +783,7 @@ class Pass:
         list_token=None,
         ssh_host=None,
         places=None,
+        allow_untrusted=(),
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -730,6 +798,9 @@ class Pass:
         self.clock = clock
         self.ssh_host = ssh_host
         self.places = places
+        self.allow_untrusted = _allow_untrusted(allow_untrusted)
+        self.hold_branches = False
+        self.hold_pulls = False
         self.remote_repository = None
         self.budget = _Budget()
         self.state = None
@@ -737,7 +808,13 @@ class Pass:
         self.repository_body = None
         self.signoff_seen = False
         self.signoff_present = False
-        self.result = {"stopped": False, "submitted": [], "statuses": [], "skipped": []}
+        self.result = {
+            "stopped": False,
+            "submitted": [],
+            "statuses": [],
+            "skipped": [],
+            "warnings": [],
+        }
 
     def run(self):
         if not self.jobs:
@@ -1048,6 +1125,8 @@ class Pass:
             ref = _ref_name(self.clone, "heads", name)
             if not self._push(ref, sha):
                 return
+        if self.hold_branches:
+            return
         self.state["etags"]["branches"] = etag
         self._checkpoint()
 
@@ -1065,6 +1144,8 @@ class Pass:
                 return
         if self.signoff_seen and not self.signoff_present:
             self.result["skipped"].append({"reason": "signoff_absent"})
+        if self.hold_pulls:
+            return
         self.state["etags"]["pulls"] = etag
         self._checkpoint()
 
@@ -1286,6 +1367,17 @@ class Pass:
         login = _login(commit.get("author"))
         if login is not None:
             event["commits"] = [{"author": {"login": login}}]
+        reason = untrusted_reason(
+            None,
+            None,
+            _user_association(commit.get("author")),
+            _user_association(commit.get("committer")),
+        )
+        if reason is not None and sha not in self.allow_untrusted:
+            self._record_push_refusal(ref, sha, reason)
+            return True
+        if reason is not None:
+            self.result["warnings"].append(self._warning(None, sha, reason, True))
         if not self._submit_jobs(
             "push",
             ref,
@@ -1295,6 +1387,7 @@ class Pass:
             None,
             changed,
             previous is None,
+            override=reason,
         ):
             return False
         self.state["tips"][ref] = sha
@@ -1321,12 +1414,25 @@ class Pass:
         ):
             raise PollError("API_REJECTED", "GitHub pull request list is not usable")
         head_repo = head.get("repo")
-        if not _same_repository(head, base):
+        reason = untrusted_reason(
+            head,
+            base,
+            _association(item.get("author_association")),
+            None,
+        )
+        override = None
+        if reason is not None and head_sha not in self.allow_untrusted:
             full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
             if not isinstance(full_name, str):
                 full_name = None
-            self._record_fork(number, head_sha, full_name)
+            if _same_repository(head, base):
+                self._record_untrusted(number, head_sha, reason)
+            else:
+                self._record_fork(number, head_sha, full_name, reason)
             return True
+        if reason is not None:
+            self.result["warnings"].append(self._warning(number, head_sha, reason, True))
+            override = reason
         seen = self.state["pulls"].get(str(number))
         if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
             return self._signoff(number, head_sha, base_sha, item)
@@ -1365,7 +1471,15 @@ class Pass:
             "pull_request": pull_request,
         }
         submitted = self._submit_jobs(
-            "pull_request", ref, merge, head_sha, event, activity, changed, False
+            "pull_request",
+            ref,
+            merge,
+            head_sha,
+            event,
+            activity,
+            changed,
+            False,
+            override=override,
         )
         if submitted:
             self.state["pulls"][str(number)] = {
@@ -1508,12 +1622,46 @@ class Pass:
             self.budget.observe(posted.status_remaining)
         return True, posted.check_id
 
-    def _record_fork(self, number, head_sha, full_name):
+    def _warning(self, number, sha, reason, allowed):
+        verb = "allowed by override" if allowed else "refused"
+        entry = {
+            "sha": sha,
+            "reason": reason,
+            "action": "allowed" if allowed else "refused",
+            "message": f"untrusted code {verb}: {reason}",
+        }
+        if number is not None:
+            entry["number"] = number
+        return entry
+
+    def _record_fork(self, number, head_sha, full_name, reason):
         row = {"number": number, "head_sha": head_sha, "repository": full_name}
         if row not in self.state["forks"]:
             self.state["forks"].append(row)
             self.result["skipped"].append({"reason": "fork", "number": number})
+            self.result["warnings"].append(self._warning(number, head_sha, reason, False))
             self._checkpoint()
+        self.hold_pulls = True
+
+    def _record_untrusted(self, number, head_sha, reason):
+        row = {"number": number, "head_sha": head_sha, "reason": reason}
+        rows = self.state.setdefault("refusals", [])
+        if row not in rows:
+            rows.append(row)
+            self.result["skipped"].append({"reason": "untrusted", "number": number})
+            self.result["warnings"].append(self._warning(number, head_sha, reason, False))
+            self._checkpoint()
+        self.hold_pulls = True
+
+    def _record_push_refusal(self, ref, sha, reason):
+        row = {"ref": ref, "sha": sha, "reason": reason}
+        rows = self.state.setdefault("refusals", [])
+        if row not in rows:
+            rows.append(row)
+            self.result["skipped"].append({"reason": "untrusted", "ref": ref, "sha": sha})
+            self.result["warnings"].append(self._warning(None, sha, reason, False))
+            self._checkpoint()
+        self.hold_branches = True
 
     def _record_absent(self, number, head_sha):
         row = {"number": number, "head_sha": head_sha}
@@ -1535,6 +1683,7 @@ class Pass:
         only=None,
         tick=None,
         context_suffix="",
+        override=None,
     ):
         """Submit each configured job. Return false when a pending post did not finish."""
 
@@ -1551,6 +1700,7 @@ class Pass:
                 only,
                 tick,
                 context_suffix,
+                override,
             )
         jobs = self.jobs if only is None else [item for item in self.jobs if item[0] == only]
         for workflow, job_id in jobs:
@@ -1592,6 +1742,9 @@ class Pass:
                     params["commit_count"] = commits
                     if commits > COMMIT_PATH_LIMIT:
                         params.pop("changed_files", None)
+            if override is not None:
+                params["untrusted_override"] = True
+                params["untrusted_reason"] = override
             claimed = existing
             if claimed is None and self.ssh_host is not None:
                 claimed = {
@@ -1668,6 +1821,7 @@ class Pass:
         only=None,
         tick=None,
         context_suffix="",
+        override=None,
     ):
         """Place each new job. A recorded place is submitted again on that place."""
 
@@ -1747,6 +1901,9 @@ class Pass:
                     params["commit_count"] = commits
                     if commits > COMMIT_PATH_LIMIT:
                         params.pop("changed_files", None)
+            if override is not None:
+                params["untrusted_override"] = True
+                params["untrusted_reason"] = override
             self._place_checkout(tested)
             try:
                 submitted = self.caller("run.submit", params)
@@ -2054,6 +2211,7 @@ def poll_once(
     list_token=None,
     ssh_host=None,
     places=None,
+    allow_untrusted=(),
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -2073,4 +2231,5 @@ def poll_once(
         list_token=list_token,
         ssh_host=ssh_host,
         places=places,
+        allow_untrusted=allow_untrusted,
     ).run()

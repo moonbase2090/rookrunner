@@ -150,8 +150,13 @@ mask before the first step.
 The poll compares a pull request's head and base repository ids.
 The ids are integers and match when they are equal. A bool is not
 an id. A missing head repository, including a null `head.repo`, is
-a fork. A fork is recorded and runs nothing. A same-repository
-pull request still runs. The comparison does not use the full name.
+a fork. A fork is refused with a warning that names the reason. It
+runs only when that poll invocation passes `--allow-untrusted` with
+the head SHA, and the run records the override. The flag is not a
+default and it is not stored. A same-repository pull request still
+runs when the author association is missing or is OWNER, MEMBER, or
+COLLABORATOR. Any other association is refused the same way. The
+comparison does not use the full name.
 
 The poll copies `repository.id` and `repository.default_branch`
 from the repository object into the event it already stores. The

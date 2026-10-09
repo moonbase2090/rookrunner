@@ -1291,6 +1291,8 @@ class Worker:
                 "changed_files",
                 "commit_count",
                 "diff_unavailable",
+                "untrusted_override",
+                "untrusted_reason",
             ),
         )
         key = p["submission_key"]
@@ -1329,6 +1331,16 @@ class Worker:
             integer(p["commit_count"], 0, 1_000_000_000, "commit_count")
         if "diff_unavailable" in p and type(p["diff_unavailable"]) is not bool:
             invalid("diff_unavailable must be a boolean")
+        if "untrusted_override" in p or "untrusted_reason" in p:
+            if p.get("untrusted_override") is not True:
+                invalid("untrusted_override must be true")
+            reason = p.get("untrusted_reason")
+            if (
+                not isinstance(reason, str)
+                or not utf8_string(reason, 1, 256)
+                or any(character in reason for character in "\0\r\n")
+            ):
+                invalid("untrusted_reason must name why the run was overridden")
         if "image" in p:
             if not isinstance(p["image"], str) or not (
                 _IMAGE_ID.fullmatch(p["image"]) or _IMAGE_REF.fullmatch(p["image"])
@@ -1501,6 +1513,9 @@ class Worker:
                 "error": None,
                 "cleanup": "not_started",
             }
+            if p.get("untrusted_override") is True:
+                record["untrusted_override"] = True
+                record["untrusted_reason"] = p["untrusted_reason"]
             actions = remote_action_records(planned["plan"])
             if actions:
                 record["input"]["actions"] = actions
