@@ -8,7 +8,7 @@ import sys
 import time
 
 from .checks import mint_list_token, post_check_flow, revoke_installation_token
-from .poll import PollError, accept_place, poll_once
+from .poll import PollError, accept_place, dispatch_once, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
 from .worker import serve
@@ -426,6 +426,26 @@ def _run_poll(args, caller, mint, revoke, places=None):
         token = None
 
 
+def report_dispatch(args):
+    """Submit one workflow on the default-branch tip and exit."""
+
+    try:
+        result = dispatch_once(
+            repository=args.repository,
+            clone=args.clone,
+            workflow=args.workflow,
+            caller=_worker_caller(args.state),
+            image=args.image,
+        )
+    except PollError as error:
+        print(
+            canonical({"error": {"kind": error.kind, "message": str(error)}}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(canonical(result))
+
+
 def report_poll(args):
     """Run one pass and exit. A rate-limit stop is a finished pass."""
 
@@ -674,7 +694,7 @@ def main():
         help=(
             "optional event name for a version 1 workflow submit. "
             "It is part of the submission. Omit it to leave github.event_name unset. "
-            "push and pull_request check on before a run is stored"
+            "push, pull_request, schedule, and workflow_dispatch check on before a run is stored"
         ),
     )
     submit.add_argument(
@@ -742,6 +762,20 @@ def main():
         "--api-base",
         default=DEFAULT_API_BASE,
         help=f"GitHub API origin (default {DEFAULT_API_BASE})",
+    )
+    dispatch = commands.add_parser(
+        "dispatch",
+        help="submit one workflow on the default-branch tip and exit",
+    )
+    dispatch.add_argument("--repository", required=True, help="GitHub repository as owner/name")
+    dispatch.add_argument("--clone", required=True, help="dedicated clone; the worker repository")
+    dispatch.add_argument("--workflow", required=True, help="workflow path inside the clone")
+    dispatch.add_argument(
+        "--image",
+        help=(
+            "digest-pinned image id or name@sha256 pin. "
+            "Omit it to use the worker --runner-image digest"
+        ),
     )
     poll = commands.add_parser("poll", help="run one poll pass for one owner repository")
     poll.add_argument("--repository", required=True, help="GitHub repository as owner/name")
@@ -831,6 +865,9 @@ def main():
             return
         if args.command == "status":
             report_status(args)
+            return
+        if args.command == "dispatch":
+            report_dispatch(args)
             return
         if args.command == "poll":
             report_poll(args)

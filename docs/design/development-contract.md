@@ -65,13 +65,18 @@ Version 1 `run.submit` is separate. It requires `workflow`, `job_id`, and
 worker uses `--runner-image` only if every selected job is literal
 `runs-on: ubuntu-latest`. Without that flag, the omission is rejected and
 no run is stored. It captures and plans one sequential `run` job,
-then stores a queued run. When `event_name` is `push` or `pull_request`,
-`on` is checked before that run is stored. Optional parameters for that
-check are `activity_type`, `changed_files`, `commit_count`, and
-`diff_unavailable`. A workflow that does not match returns
-`{"triggered": false}`, creates no run, and does not consume the
-submission key. `workflow_dispatch` and `schedule` are not evaluated.
-Without `event_name`, `on` is not evaluated. The caller supplies the
+then stores a queued run. When `event_name` is `push`, `pull_request`, `schedule`, or
+`workflow_dispatch`, `on` is checked before that run is stored.
+Optional parameters for that check are `activity_type`,
+`changed_files`, `commit_count`, and `diff_unavailable`. A workflow
+that does not match returns `{"triggered": false}`, creates no run,
+and does not consume the submission key. `schedule` matches a listed
+cron. `workflow_dispatch` matches when it is listed as a string, a
+list member, null, or an empty mapping. `inputs` and any other key
+under it are rejected. The `dispatch` command submits that one
+workflow on the clone's default-branch tip and exits. It does not
+listen. Any other event name is not evaluated. Without `event_name`,
+`on` is not evaluated. The caller supplies the
 changed-file list. A push with `commit_count` above 1,000, or
 `diff_unavailable`, skips path filters. Only the first 3,000 changed
 files count. Branch, tag, and activity-type filters still apply. A tag push skips the path filters. `tags` and `tags-ignore` under `pull_request` are ignored. NS-42's `poll` command supplies this check for one owner repository and then exits. NS-43 recorded those statuses ([validation](../validation/owner-ci-rookrunner.md)). NS-44 evaluates expressions in `run`, `env`, `with`, and step and job `name`, including mixed text. NS-45 evaluates `concurrency` and `cancel-in-progress` on this one worker. With `queue: max`, at most 100 runs can be pending in a group. NS-46 names selected workspace files in the artifact manifest and records one local CodeQL SARIF file ([upload artifact](upload-artifact.md)). The capability version stays 12. P4 accepts `actions/checkout@v` plus digits as an owned checkout and copies ancestor history when that plan sets `fetch-depth` to the YAML integer `0` ([checkout tag](checkout-tag.md)). Omitting `fetch-depth` keeps one parentless synthesized commit and still excludes the original commit. `.github/workflows/check.yml` is unchanged. P6 runs the operator-built image when `worker --runner-image` is set and `image` is omitted and every selected job is literal `runs-on: ubuntu-latest` ([runner image](runner-image.md)). An explicit `image` still wins. Any other image stays a caller pin. `run_job` still requires a digest and still does not select a default. P5 posts one check run through the Rookrunner GitHub App when `--app-key` is set, then posts the commit status with that installation token. Omitting `--app-key` keeps the NS-40 token file. The plan schema is unchanged. P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for owner-repository push and pull-request runs on this one local worker ([secrets](secrets.md)). p7-mask changes the job mask. p7-trust-gate compares a pull request's head and base repository ids, records a null head repository as a fork, and copies the repository id, the default branch, and the actor login into the stored event. The allowlist match is a pure function of that event. p7-socket-lock adds the worker secret flags and refuses --docker-socket combined with --app-key or --secrets unless the ~/Secrets probe exits 0. p7-secret-env reads a file secret into a step env or with expression that is exactly secrets.NAME when --secrets is set and the allowlist matches, and passes those secret registrations into reusable-workflow call outputs. p7-secret-run is implemented. p7-job-token is implemented. MB2090 accepted the amended answers on 2026-10-05. The rest of the provisional list is not numbered yet. The stored image digest keeps the `sha256:` prefix.

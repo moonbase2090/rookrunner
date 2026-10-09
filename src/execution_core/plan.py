@@ -2238,6 +2238,24 @@ def workflow_on(workflow):
     return planner._on(body)
 
 
+def workflow_job_ids(workflow):
+    """Return top-level job ids without planning those jobs.
+
+    A key that planning would reject, including ``strategy``, stays in
+    the list. The caller submits each id.
+    """
+
+    planner = _Planner()
+    root = planner._root(workflow)
+    body = planner._mapping(root, "", forbid=False)
+    if "jobs" not in body:
+        _invalid("no selected job", "jobs")
+    jobs = planner._mapping(body["jobs"][1], "jobs", forbid=False)
+    if not jobs:
+        _invalid("no selected job", "jobs")
+    return list(jobs)
+
+
 def plan_snapshot(snapshot_dir, job_id, action_store=None):
     """Plan the workflow bytes stored in a capture snapshot. Does not verify hashes."""
 

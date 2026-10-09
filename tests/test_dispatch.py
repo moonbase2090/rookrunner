@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -469,6 +470,67 @@ class DispatchTests(unittest.TestCase):
         )
         self.assertFalse(allowlist_matches(request["event"], [], [], "pull_request"))
 
+
+class CliDispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="dispatch-cli-")
+        self.root = Path(self.tmp.name)
+        self.remote = self.root / "origin.git"
+        subprocess.run(
+            ["git", "init", "--bare", "-b", "main", str(self.remote)],
+            check=True,
+            capture_output=True,
+        )
+        self.seed = self.root / "seed"
+        self.seed.mkdir()
+        _git(self.seed, "init", "-b", "main")
+        _git(self.seed, "remote", "add", "origin", str(self.remote))
+        target = self.seed / WORKFLOW
+        target.parent.mkdir(parents=True)
+        target.write_text(DISPATCH)
+        _git(self.seed, "add", ".")
+        _commit(self.seed)
+        _git(self.seed, "push", "origin", "HEAD:refs/heads/main")
+        self.clone = self.root / "clone"
+        subprocess.run(
+            ["git", "clone", str(self.remote), str(self.clone)],
+            check=True,
+            capture_output=True,
+        )
+        self.state = self.root / "state"
+        self.process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "execution_core",
+                "--state",
+                str(self.state),
+                "worker",
+                "--repository",
+                str(self.clone),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        from execution_core.cli import call
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                self.fail(self.process.stderr.read().decode())
+            try:
+                call(self.state, "worker.describe", {})
+                return
+            except (OSError, ValueError):
+                time.sleep(0.01)
+        self.fail("worker did not become ready")
+
+    def tearDown(self):
+        if self.process.poll() is None:
+            self.process.terminate()
+        self.process.communicate(timeout=5)
+        self.tmp.cleanup()
+
     def cli(self, *args):
         return subprocess.run(
             [
@@ -519,10 +581,13 @@ class DispatchTests(unittest.TestCase):
         self.assertFalse((self.state / "poll.json").exists())
 
     def test_the_command_reports_a_miss_and_exits(self):
-        self.write(PUSH_ONLY)
-        self.push()
-        self.fetch()
-        parked = self.head()
+        target = self.seed / WORKFLOW
+        target.write_text(PUSH_ONLY)
+        _git(self.seed, "add", ".")
+        _commit(self.seed)
+        _git(self.seed, "push", "origin", "HEAD:refs/heads/main")
+        _git(self.clone, "fetch", "origin")
+        parked = _git(self.clone, "rev-parse", "HEAD").stdout.decode().strip()
         result = self.cli(
             "--repository",
             "acme/demo",
@@ -537,9 +602,19 @@ class DispatchTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["triggered"], False)
         self.assertNotIn("submitted", payload)
-        self.assertEqual(self.head(), parked)
+        self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.decode().strip(), parked)
 
     def test_the_command_has_no_ref_flag(self):
-        result = self.cli("--ref", "refs/heads/dev")
+        result = self.cli(
+            "--repository",
+            "acme/demo",
+            "--clone",
+            str(self.clone),
+            "--workflow",
+            WORKFLOW,
+            "--ref",
+            "refs/heads/dev",
+        )
         self.assertEqual(result.returncode, 2)
         self.assertIn("unrecognized", result.stderr)
+        self.assertIn("--ref", result.stderr)
