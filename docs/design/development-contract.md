@@ -45,6 +45,13 @@ repository lock. The repository must exist but need not yet be a Git checkout.
 | `artifact.read` | `artifact_id` | `offset`, `limit` |
 | `run.cancel` | `version: 0`, `run_id` | none |
 | `run.status` | `run_id`, `tested_commit`, `status_sha`, `context` | `record` |
+| `status.view` | none | none |
+| `poll.record` | `completed_at`, `repository` | none |
+
+`status.view` returns the worker, the poll stamp, the newest 20
+runs, the queue, and the active groups. It creates no run.
+`poll.record` writes `poll_completed_at` and `poll_repository`.
+The poll command does not call it yet.
 
 `run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
 On a workflow run it returns a page of artifact entries and `next_cursor`.

@@ -445,5 +445,30 @@
       }
     },
     "valid": true
+  },
+  {
+    "name": "status.view",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "status.view",
+      "params": {}
+    },
+    "valid": true
+  },
+  {
+    "name": "poll.record",
+    "definition": "Request",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "poll.record",
+      "params": {
+        "completed_at": "2026-10-09T00:00:12+00:00",
+        "repository": "moonbase2090/lightwell"
+      }
+    },
+    "valid": true
   }
 ]

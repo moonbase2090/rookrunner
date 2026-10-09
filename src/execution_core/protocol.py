@@ -22,6 +22,8 @@ METHODS = [
     "artifact.read",
     "run.cancel",
     "run.status",
+    "status.view",
+    "poll.record",
 ]
 ERROR_CODES = {
     "PARSE_ERROR": -32700,

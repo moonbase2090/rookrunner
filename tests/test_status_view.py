@@ -122,13 +122,20 @@ class StatusViewTests(unittest.TestCase):
                 "event": {"after": TIP, "repository": {"full_name": "acme/demo"}},
             },
         )
-        row = self.view()["runs"][0]
+        view = self.view()
+        row = view["runs"][0]
         self.assertEqual(row["run_id"], run_id)
+        self.assertEqual(row["repository"], "acme/demo")
         self.assertEqual(row["duration"], "finished")
         self.assertEqual(row["duration_seconds"], 12)
         self.assertEqual(row["state"], "succeeded")
         self.assertEqual(row["exit_code"], 0)
-        self.assertEqual(self.view()["poll"], {"completed_at": None, "repository": None})
+        self.assertEqual(view["poll"], {"completed_at": None, "repository": None})
+        self.assertEqual(view["worker"]["version"], "0.0.1")
+        self.assertIs(view["worker"]["ready"], True)
+        self.assertIsNone(view["worker"]["readiness_error"])
+        self.assertIsNone(view["worker"]["runner_image"])
+        self.assertEqual(view["ungrouped"], 0)
 
     def test_a_null_start_is_unstarted(self):
         queued = str(uuid.uuid4())

@@ -1,13 +1,12 @@
 # Status page
 
-Status: proposed, 2026-10-09. This document is for MB2090's
-sign-off. It is not accepted direction. It is not implemented
-behavior. MB2090 has not signed off. No code in this document's
-pull request.
+Status: accepted, 2026-10-09. MB2090 accepted this document on
+2026-10-09. `status.view` and `poll.record` are implemented. The
+poll command does not call `poll.record` yet. The page process
+is not built.
 
 The page this document describes is not built. The roadmap entry
-does not build it. Implementation waits until this document is
-accepted.
+does not build it.
 
 ## Overview
 
@@ -901,9 +900,9 @@ a second option left open.
 
 ## PR Plan
 
-These pull requests stay closed until MB2090 accepts this
-document. Each one merges before the next branch that depends on
-it opens. The capability version stays 12. `check.yml` is not
+MB2090 accepted this document on 2026-10-09. Each remaining
+pull request merges before the next branch that depends on it
+opens. The capability version stays 12. `check.yml` is not
 edited. No test reads a key file. No test contacts
 `api.github.com`. Ruff still passes. A test that only checks that
 a function was called, or that compares a constant to itself, is

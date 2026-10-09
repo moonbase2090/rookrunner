@@ -608,6 +608,12 @@
         },
         {
           "$ref": "#/$defs/run.status.request"
+        },
+        {
+          "$ref": "#/$defs/status.view.request"
+        },
+        {
+          "$ref": "#/$defs/poll.record.request"
         }
       ]
     },
@@ -1353,7 +1359,9 @@
             "run.artifacts",
             "artifact.read",
             "run.cancel",
-            "run.status"
+            "run.status",
+            "status.view",
+            "poll.record"
           ]
         },
         "capabilities": {
@@ -2237,6 +2245,631 @@
         }
       ]
     },
+    "status.view.request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "const": "status.view"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method"
+      ],
+      "additionalProperties": false
+    },
+    "StatusSubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "pull_request"
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "kind",
+            "number"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "commit"
+            },
+            "sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "kind",
+            "sha"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "StatusRun": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/StatusSubject"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\ud800-\\udfff]*$"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration": {
+          "enum": [
+            "finished",
+            "running",
+            "unstarted",
+            "none"
+          ]
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^https://github.com/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/runs/[1-9][0-9]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "repository",
+        "subject",
+        "workflow",
+        "job_id",
+        "state",
+        "exit_code",
+        "duration",
+        "duration_seconds",
+        "check_url"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "duration": {
+                "enum": [
+                  "finished",
+                  "running"
+                ]
+              }
+            },
+            "required": [
+              "duration"
+            ]
+          },
+          "then": {
+            "properties": {
+              "duration_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "duration": {
+                "enum": [
+                  "unstarted",
+                  "none"
+                ]
+              }
+            },
+            "required": [
+              "duration"
+            ]
+          },
+          "then": {
+            "properties": {
+              "duration_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StatusQueueItem": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/StatusSubject"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\ud800-\\udfff]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waiting": {
+          "type": "boolean"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[^\\n\\u0000\\ud800-\\udfff]*$"
+          }
+        }
+      },
+      "required": [
+        "run_id",
+        "repository",
+        "subject",
+        "workflow",
+        "job_id",
+        "waiting",
+        "groups"
+      ],
+      "additionalProperties": false
+    },
+    "StatusGroup": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\n\\u0000\\ud800-\\udfff]*$"
+        },
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^[^\\n\\u0000\\ud800-\\udfff]*$"
+          }
+        },
+        "queue": {
+          "enum": [
+            "single",
+            "max"
+          ]
+        },
+        "cancel_in_progress": {
+          "type": "boolean"
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending_limit": {
+          "anyOf": [
+            {
+              "const": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "names",
+        "queue",
+        "cancel_in_progress",
+        "queued",
+        "running",
+        "pending_limit"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "queue": {
+                "const": "max"
+              }
+            },
+            "required": [
+              "queue"
+            ]
+          },
+          "then": {
+            "properties": {
+              "pending_limit": {
+                "const": 100
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "queue": {
+                "const": "single"
+              }
+            },
+            "required": [
+              "queue"
+            ]
+          },
+          "then": {
+            "properties": {
+              "pending_limit": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StatusView": {
+      "type": "object",
+      "properties": {
+        "worker": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ready": {
+              "type": "boolean"
+            },
+            "readiness_error": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runner_image": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512,
+                  "pattern": "^[^\\ud800-\\udfff]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "ready",
+            "readiness_error",
+            "runner_image"
+          ],
+          "additionalProperties": false
+        },
+        "poll": {
+          "type": "object",
+          "properties": {
+            "completed_at": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[^\\n\\u0000]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "repository": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "completed_at",
+            "repository"
+          ],
+          "additionalProperties": false
+        },
+        "runs": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/StatusRun"
+          }
+        },
+        "queue": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/StatusQueueItem"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatusGroup"
+          }
+        },
+        "ungrouped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "worker",
+        "poll",
+        "runs",
+        "queue",
+        "groups",
+        "ungrouped"
+      ],
+      "additionalProperties": false
+    },
+    "PollRecordResult": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "status.view.response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "result": {
+              "$ref": "#/$defs/StatusView"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
+    "poll.record.request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "const": "poll.record"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "completed_at": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^\\n\\u0000]*$"
+            },
+            "repository": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$"
+            }
+          },
+          "required": [
+            "completed_at",
+            "repository"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "poll.record.response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "result": {
+              "$ref": "#/$defs/PollRecordResult"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/ErrorResponse"
+        }
+      ]
+    },
     "Response": {
       "oneOf": [
         {
@@ -2273,6 +2906,12 @@
                 },
                 {
                   "$ref": "#/$defs/NotTriggered"
+                },
+                {
+                  "$ref": "#/$defs/StatusView"
+                },
+                {
+                  "$ref": "#/$defs/PollRecordResult"
                 }
               ]
             }

@@ -56,7 +56,7 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
@@ -80,7 +80,7 @@ from .actions import (
 from .artifacts import ArtifactError, file_identity, named_manifest, read_bytes
 from .upload import load_uploads
 from .attempt import AttemptError, materialize_attempt
-from .concurrency import decide, eligible, resolve_groups
+from .concurrency import MAX_PENDING, decide, eligible, group_keys, resolve_groups
 from .disk import (
     DEFAULT_DISK_BUDGET,
     FINISHED_RUN_FOLDER_COUNT,
@@ -178,9 +178,201 @@ def _finished_stamp(value):
         stamp = datetime.fromisoformat(value)
     except ValueError:
         return None
-    if stamp.tzinfo is None:
+    if stamp.tzinfo is None or stamp.utcoffset() is None:
         return None
     return stamp
+
+
+_VIEW_SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+_GROUP_LIMIT = 1024
+
+
+def _owner_name(value):
+    from .poll import _REPOSITORY
+
+    return isinstance(value, str) and _REPOSITORY.fullmatch(value) is not None
+
+
+def _relative_name(value):
+    if not isinstance(value, str) or not value or "\0" in value:
+        return False
+    path = PurePosixPath(value)
+    return not (path.is_absolute() or any(part in ("", ".", "..") for part in value.split("/")))
+
+
+def _visible_group(value):
+    if not isinstance(value, str) or len(value) > _GROUP_LIMIT or "\n" in value or "\0" in value:
+        return False
+    return _relative_name(value)
+
+
+def _duration(record, clock):
+    """Return the view duration and whole seconds for one stored record."""
+
+    started = record.get("started_at") if isinstance(record, dict) else None
+    finished = record.get("finished_at") if isinstance(record, dict) else None
+    if started is None:
+        return "unstarted", None
+    start = _finished_stamp(started)
+    if finished is None:
+        if start is None:
+            return "none", None
+        span = (clock - start).total_seconds()
+        if span < 0:
+            return "none", None
+        return "running", int(span)
+    end = _finished_stamp(finished)
+    if start is None or end is None:
+        return "none", None
+    span = (end - start).total_seconds()
+    if span < 0:
+        return "none", None
+    return "finished", int(span)
+
+
+def _distinct_sha(values):
+    found = []
+    for value in values:
+        if isinstance(value, str) and value not in found:
+            found.append(value)
+    if len(found) == 1 and _VIEW_SHA.fullmatch(found[0]):
+        return found[0]
+    return None
+
+
+def _subject(event_name, event, check_shas, status_shas):
+    if event_name == "pull_request" and isinstance(event, dict):
+        number = event.get("number")
+        if type(number) is int and number >= 1:
+            return {"kind": "pull_request", "number": number}
+    if event_name != "pull_request" and isinstance(event, dict):
+        after = event.get("after")
+        if isinstance(after, str) and _VIEW_SHA.fullmatch(after):
+            return {"kind": "commit", "sha": after}
+    for values in (check_shas, status_shas):
+        sha = _distinct_sha(values)
+        if sha is not None:
+            return {"kind": "commit", "sha": sha}
+    return {"kind": "none"}
+
+
+def _check_url(repository, rows):
+    if not _owner_name(repository) or len(rows) != 1:
+        return None
+    _sha, identifier = rows[0]
+    if type(identifier) is not int or not 1 <= identifier <= MAX_OFFSET:
+        return None
+    return f"https://github.com/{repository}/runs/{identifier}"
+
+
+def _request_event(request):
+    if not isinstance(request, dict):
+        return None, None
+    event_name = request.get("event_name")
+    event = request.get("event")
+    return (
+        event_name if isinstance(event_name, str) else None,
+        event if isinstance(event, dict) else None,
+    )
+
+
+def _event_repository(event):
+    if not isinstance(event, dict):
+        return None
+    repository = event.get("repository")
+    if not isinstance(repository, dict):
+        return None
+    name = repository.get("full_name")
+    if _owner_name(name):
+        return name
+    return None
+
+
+def _workflow_fields(record):
+    raw = record.get("input") if isinstance(record, dict) else None
+    if not isinstance(raw, dict) or raw.get("kind") != "workflow_job":
+        return None, None
+    workflow = raw.get("workflow")
+    job_id = raw.get("job_id")
+    return (
+        workflow if _relative_name(workflow) else None,
+        job_id if _relative_name(job_id) else None,
+    )
+
+
+def _queue_groups(record):
+    items = record.get("concurrency") if isinstance(record, dict) else None
+    if not isinstance(items, list):
+        return []
+    names = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("group"), str):
+            continue
+        group = item["group"]
+        names.append(group if _visible_group(group) else "not shown")
+    return names
+
+
+def _group_rows(records):
+    """Return display rows and the ungrouped count for queued and running runs."""
+
+    buckets = {}
+    order = []
+    ungrouped = 0
+    for record, state in records:
+        items = record.get("concurrency") if isinstance(record, dict) else None
+        if not isinstance(items, list) or not items:
+            ungrouped += 1
+            continue
+        seen = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            group = item.get("group")
+            queue = item.get("queue")
+            cancel = item.get("cancel_in_progress")
+            if (
+                not isinstance(group, str)
+                or queue not in {"single", "max"}
+                or type(cancel) is not bool
+            ):
+                continue
+            if _visible_group(group):
+                ident = ("shown", group.casefold(), queue, cancel)
+            else:
+                ident = ("hidden", queue, cancel)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            if ident not in buckets:
+                order.append(ident)
+                buckets[ident] = {
+                    "names": [],
+                    "queue": queue,
+                    "cancel_in_progress": cancel,
+                    "queued": 0,
+                    "running": 0,
+                }
+            bucket = buckets[ident]
+            if ident[0] == "shown" and group not in bucket["names"]:
+                bucket["names"].append(group)
+            bucket[state] += 1
+    rows = []
+    for ident in order:
+        bucket = buckets[ident]
+        hidden = ident[0] == "hidden"
+        rows.append(
+            {
+                "key": "not shown" if hidden else ident[1],
+                "names": ["not shown"] if hidden or not bucket["names"] else bucket["names"],
+                "queue": bucket["queue"],
+                "cancel_in_progress": bucket["cancel_in_progress"],
+                "queued": bucket["queued"],
+                "running": bucket["running"],
+                "pending_limit": MAX_PENDING if bucket["queue"] == "max" else None,
+            }
+        )
+    return rows, ungrouped
 
 
 def cursor(kind, identity, offset):
@@ -1909,7 +2101,200 @@ class Worker:
             }
         if method == "run.status":
             return self.report_status(p)
+        if method == "status.view":
+            fields(p)
+            return self.status_view()
+        if method == "poll.record":
+            return self.record_poll(p)
         raise Fault("METHOD_NOT_FOUND", "unknown method")
+
+    def _metadata(self, key):
+        row = self.db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        if row is None or not isinstance(row[0], str):
+            return None
+        return row[0]
+
+    def _stored_object(self, text):
+        try:
+            value = json.loads(text)
+        except (ValueError, UnicodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _view_posts(self, run_ids):
+        checks = {}
+        statuses = {}
+        if not run_ids:
+            return checks, statuses
+        marks = ",".join("?" for _ in run_ids)
+        for row in self.db.execute(
+            f"SELECT run_id, sha, check_run_id FROM check_posts WHERE run_id IN ({marks})",
+            tuple(run_ids),
+        ):
+            checks.setdefault(row["run_id"], []).append((row["sha"], row["check_run_id"]))
+        for row in self.db.execute(
+            f"SELECT run_id, sha FROM status_posts WHERE run_id IN ({marks})",
+            tuple(run_ids),
+        ):
+            statuses.setdefault(row["run_id"], []).append(row["sha"])
+        return checks, statuses
+
+    def _view_run(self, record, request, checks, statuses, clock):
+        event_name, event = _request_event(request)
+        repository = _event_repository(event)
+        workflow, job_id = _workflow_fields(record)
+        duration, seconds = _duration(record, clock)
+        state = record.get("state")
+        exit_code = record.get("exit_code")
+        return {
+            "run_id": record["run_id"],
+            "repository": repository,
+            "subject": _subject(
+                event_name,
+                event,
+                [sha for sha, _identifier in checks],
+                statuses,
+            ),
+            "workflow": workflow,
+            "job_id": job_id,
+            "state": state if isinstance(state, str) and state != "" else "unknown",
+            "exit_code": exit_code if type(exit_code) is int else None,
+            "duration": duration,
+            "duration_seconds": seconds,
+            "check_url": _check_url(repository, checks),
+        }
+
+    def status_view(self):
+        """Return the read-only worker, poll, run, queue, and group view."""
+
+        described = self.dispatch("worker.describe", {})
+        image = described.get("runner_image")
+        error = described.get("readiness_error")
+        clock = datetime.now(UTC)
+        recent_rows = self.db.execute(
+            "SELECT request, record FROM runs ORDER BY sequence DESC LIMIT 20"
+        ).fetchall()
+        queued_rows = self.db.execute(
+            "SELECT request, record FROM runs "
+            "WHERE json_extract(record, '$.state')='queued' ORDER BY sequence ASC LIMIT ?",
+            (MAX_QUEUE,),
+        ).fetchall()
+        active_rows = self.db.execute(
+            "SELECT record FROM runs "
+            "WHERE json_extract(record, '$.state') IN ('queued', 'running') ORDER BY sequence"
+        ).fetchall()
+        recent = []
+        for row in recent_rows:
+            record = self._stored_object(row["record"])
+            request = self._stored_object(row["request"])
+            if record is None or "run_id" not in record:
+                continue
+            recent.append((record, {} if request is None else request))
+        queued = []
+        for row in queued_rows:
+            record = self._stored_object(row["record"])
+            request = self._stored_object(row["request"])
+            if record is None or "run_id" not in record:
+                continue
+            queued.append((record, {} if request is None else request))
+        ids = []
+        for record, _request in recent + queued:
+            if record["run_id"] not in ids:
+                ids.append(record["run_id"])
+        check_rows, status_rows = self._view_posts(ids)
+        runs = [
+            self._view_run(
+                record,
+                request,
+                check_rows.get(record["run_id"], []),
+                status_rows.get(record["run_id"], []),
+                clock,
+            )
+            for record, request in recent
+        ]
+        running_keys = set()
+        active = []
+        for row in active_rows:
+            record = self._stored_object(row["record"])
+            if record is None:
+                continue
+            state = record.get("state")
+            if state == "running":
+                running_keys |= group_keys(record)
+            if state in {"queued", "running"}:
+                active.append((record, state))
+        queue = []
+        for record, request in queued:
+            event_name, event = _request_event(request)
+            workflow, job_id = _workflow_fields(record)
+            checks = check_rows.get(record["run_id"], [])
+            queue.append(
+                {
+                    "run_id": record["run_id"],
+                    "repository": _event_repository(event),
+                    "subject": _subject(
+                        event_name,
+                        event,
+                        [sha for sha, _identifier in checks],
+                        status_rows.get(record["run_id"], []),
+                    ),
+                    "workflow": workflow,
+                    "job_id": job_id,
+                    "waiting": bool(group_keys(record) & running_keys),
+                    "groups": _queue_groups(record),
+                }
+            )
+        groups, ungrouped = _group_rows(active)
+        return {
+            "worker": {
+                "version": described.get("version")
+                if isinstance(described.get("version"), str)
+                else None,
+                "ready": described.get("ready") is True,
+                "readiness_error": error if isinstance(error, str) else None,
+                "runner_image": image if isinstance(image, str) else None,
+            },
+            "poll": {
+                "completed_at": self._metadata("poll_completed_at"),
+                "repository": self._metadata("poll_repository"),
+            },
+            "runs": runs,
+            "queue": queue,
+            "groups": groups,
+            "ungrouped": ungrouped,
+        }
+
+    def record_poll(self, p):
+        """Store one finished-pass stamp. A rejected call leaves the previous stamp."""
+
+        fields(p, ("completed_at", "repository"))
+        completed = p["completed_at"]
+        repository = p["repository"]
+        if (
+            not isinstance(completed, str)
+            or not 1 <= len(completed) <= 64
+            or "\n" in completed
+            or "\0" in completed
+        ):
+            invalid("completed_at is not an aware timestamp")
+        try:
+            stamp = datetime.fromisoformat(completed)
+        except ValueError:
+            invalid("completed_at is not an aware timestamp")
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            invalid("completed_at is not an aware timestamp")
+        if not _owner_name(repository):
+            invalid("repository is not owner/name")
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES ('poll_completed_at', ?)",
+                (completed,),
+            )
+            self.db.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES ('poll_repository', ?)",
+                (repository,),
+            )
+        return {}
 
     def report_status(self, p):
         """Decide or record one commit status. The credential is not a parameter.
