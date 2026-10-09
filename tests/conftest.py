@@ -1,15 +1,16 @@
+import os
 import sys
 
 
 def pytest_plugin_registered(plugin, manager):
-    """Scorecard keeps the first four pytest lines. Leave only the failure."""
+    """Scorecard keeps the first four pytest lines. On CI, leave only the failure."""
 
-    if manager.get_name(plugin) == "terminalreporter":
+    if os.environ.get("CI") and manager.get_name(plugin) == "terminalreporter":
         manager.unregister(plugin)
 
 
 def pytest_runtest_logreport(report):
-    if not report.failed:
+    if not os.environ.get("CI") or not report.failed:
         return
     text = getattr(report, "longreprtext", "") or ""
     detail = ""
