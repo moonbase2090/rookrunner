@@ -1395,15 +1395,29 @@ The poll interval is the operator's schedule, not a number in code. A
 poll pass follows GitHub's rate-limit response headers. It does not
 assume a fixed rate.
 
+### Planned, paused
+
+Paused until Rookrunner has been dogfooded on the Nexus and Vertex
+boxes. Do not plan or implement these yet.
+
+- macOS jobs, such as Scorecard's `check-macos`.
+- `actions/cache` and Docker actions.
+- `actions/setup-node` and `hashFiles`.
+
+Untrusted code is not paused. It is refused with a warning that names
+the reason unless the operator gives an explicit per-run override.
+
 ### Deliberately deferred
 
 - A webhook receiver. It needs an inbound listener, which the PRD
   excludes from the local worker.
 - Registering as a GitHub self-hosted runner. That runs GitHub's job
   protocol, not this engine. It stays under Later investigations.
-- Pull requests from forks, and any untrusted code. GitHub's secure-use
-  guidance says self-hosted runners should almost never run public
-  repository pull requests
+- Untrusted code is refused with a warning that names the reason unless
+  the operator gives an explicit per-run override. It is not silently
+  skipped and it is not paused. GitHub's secure-use guidance says
+  self-hosted runners should almost never run public repository pull
+  requests
   (https://docs.github.com/en/actions/reference/security/secure-use).
 - Deploy workflows. Secrets, `GITHUB_TOKEN`, and `write` permissions
   are designed in [secrets](../design/secrets.md). p7-mask,
@@ -1411,10 +1425,10 @@ assume a fixed rate.
   p7-job-token are implemented. `write` stays rejected.
   MB2090 accepted the amended answers on 2026-10-05.
   Deploy workflows stay deferred.
-- The `actions/cache` and artifact HTTP services, Docker actions, `pre`
-  entries, `node20` actions, tag or branch action refs, and private
-  action repositories.
-- macOS and Windows jobs, such as Scorecard's `check-macos`.
+- Artifact HTTP services, `pre` entries, `node20` actions, tag or
+  branch action refs, and private action repositories. `actions/cache`
+  and Docker actions are planned and paused, above.
+- Windows jobs. macOS jobs are planned and paused, above.
 - MCP, the dashboard, and packaging (M3 and M4). They come after CI-1.
 - Remote workers and hosted service discovery (RR-42 and RR-45). Their
   scope is unchanged.

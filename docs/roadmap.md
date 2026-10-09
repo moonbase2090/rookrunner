@@ -140,6 +140,28 @@ GitHub's documented limits (https://docs.github.com/en/actions/reference/limits)
 Scorecard and the websites need more workflow support. The NS-39 inventory
 orders that work.
 
+## Status page
+
+A local read-only page for the Nexus and Vertex dogfood. It is not paused.
+It is served on 127.0.0.1 and it is not the M3 dashboard.
+
+- The worker: up or down, version, runner image, and the last poll.
+- Recent runs: repository, pull request or commit, status, duration, and a link to the check.
+- The queue and the concurrency groups.
+
+Implementation is a later design document and needs sign-off. This entry does not build the page.
+
+## Planned, paused
+
+Paused until Rookrunner has been dogfooded on the Nexus and Vertex boxes.
+Do not plan or implement these yet.
+
+- macOS jobs.
+- `actions/cache` and Docker actions.
+- `actions/setup-node` and `hashFiles`.
+
+Untrusted code is not in this list. A run of untrusted code is refused with a warning unless the operator gives an explicit per-run override.
+
 ## M3 — Agent and human access
 
 1. Map MCP tools to the same protocol operations as the CLI.
