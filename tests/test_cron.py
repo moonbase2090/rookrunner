@@ -170,3 +170,19 @@ class ScheduleTriggerTests(unittest.TestCase):
         }
         self.assertFalse(allowlist_matches(pull, [], [], "pull_request"))
         self.assertFalse(allowlist_matches(pull, [], [], "schedule"))
+
+    def test_workflow_dispatch_on_the_default_branch_gets_push_to_main_secrets(self):
+        event = {
+            "ref": "refs/heads/main",
+            "repository": {"default_branch": "main"},
+        }
+        self.assertTrue(allowlist_matches(event, [], [], "workflow_dispatch"))
+        self.assertTrue(
+            allowlist_matches(event, ["refs/heads/dev"], ["nobody"], "workflow_dispatch")
+        )
+        other = {
+            "ref": "refs/heads/dev",
+            "repository": {"default_branch": "main"},
+        }
+        self.assertFalse(allowlist_matches(other, [], [], "workflow_dispatch"))
+        self.assertFalse(allowlist_matches(event, [], [], "pull_request"))

@@ -1395,6 +1395,7 @@ class Worker:
                         "push",
                         "pull_request",
                         "schedule",
+                        "workflow_dispatch",
                     ) and not self._event_triggered(p, prepared.path):
                         return {"triggered": False}
                 except Fault:

@@ -83,6 +83,27 @@ A due minute runs on the first poll at or after that minute. The owner
 poll is every 5 minutes, so a shorter cron still runs at most once per
 poll.
 
+### Workflow dispatch
+
+`dispatch` submits one workflow on the clone's default-branch tip and
+exits. It does not list GitHub, does not fetch, and does not listen.
+The tip is the clone's `origin/HEAD`.
+
+`github.event_name` is `workflow_dispatch`. `github.event.ref` is
+`refs/heads/` plus that branch. `github.event.repository.full_name` is
+the configured `owner/name`. `github.event.repository.default_branch`
+is that branch. The workflow runs when `on` lists `workflow_dispatch`
+as a string, a list member, null, or an empty mapping. `inputs` and
+any other key are rejected. That refusal checks nothing out and
+submits nothing. A workflow that does not list the event returns
+`triggered` false together with that `ref` and the tip `sha`. It
+checks nothing out and does not consume a submission key.
+
+Every top-level job is submitted. The submission key is the poll key
+for the repository, the event name, the tip SHA, the workflow, and the
+job. A repeat of the same tip returns the same run. File-backed
+secrets use the same rule as a push to that default branch.
+
 ## Source
 
 Each configured repository has one dedicated clone. A run captures a
@@ -176,9 +197,10 @@ Pull request:
 https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
 https://docs.github.com/en/rest/pulls/pulls
 
-`event_name` is `push` or `pull_request`. NS-41 evaluates `on` only
-when that name is sent. `workflow_dispatch` and `schedule` stay stored
-and are not evaluated.
+`event_name` is `push` or `pull_request` for this poll. NS-41 evaluates
+`on` when that name is sent. `schedule` is the section above.
+`workflow_dispatch` is the `dispatch` command below. Other event names
+stay stored and are not evaluated.
 
 ## Reporting
 
@@ -334,7 +356,9 @@ They stay out of scope: Scorecard `release.yml`, and every website
 are still listed below.
 
 `workflow_dispatch` and `schedule` appear on some of these files.
-NS-41 does not evaluate them.
+`schedule` is evaluated on the default-branch tip. `workflow_dispatch`
+is a one-shot `dispatch` of one workflow on that tip. These deploy
+files stay out of scope for the other reasons in this inventory.
 
 ### Rookrunner
 

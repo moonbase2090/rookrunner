@@ -137,6 +137,10 @@ Exit evidence:
 CI stays portable: plain CLI commands and an OS scheduler. There is no
 inbound listener, runner registration, or Terraform. Every limit cites
 GitHub's documented limits (https://docs.github.com/en/actions/reference/limits).
+`dispatch` submits one workflow on the default-branch tip with
+`github.event_name` set to `workflow_dispatch` and then exits. It is
+not a listener. Secrets follow the same rule as a push to the default
+branch.
 Scorecard and the websites need more workflow support. The NS-39 inventory
 orders that work.
 

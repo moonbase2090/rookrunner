@@ -53,6 +53,8 @@ Local rules, not GitHub-equivalence claims:
   A lost reply retries that SHA, including after the branch moves.
   The cursor is stored after the submit. The check context ends in
   ``/schedule``.
+- ``dispatch`` is a separate command. This pass does not submit
+  ``workflow_dispatch`` and it does not listen for that event.
 - An ssh host checks the worker repository ``origin`` owner/name. The
   host is written into ``poll.json`` before submit, and the tested SHA
   is checked out there from this clone. A key recorded for another host
@@ -87,7 +89,7 @@ from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
 from .cron import cron_matches, parse_cron, schedule_decision
-from .plan import PlanError, workflow_on
+from .plan import PlanError, workflow_job_ids, workflow_on
 from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
 from .status import (
     StatusError,
@@ -97,7 +99,12 @@ from .status import (
     read_credential,
     status_url,
 )
-from .trigger import COMMIT_PATH_LIMIT, MAX_CHANGED_FILES, schedule_expressions
+from .trigger import (
+    COMMIT_PATH_LIMIT,
+    MAX_CHANGED_FILES,
+    schedule_expressions,
+    submission_triggered,
+)
 
 # Self-hosted job queue time.
 # https://docs.github.com/en/actions/reference/limits
@@ -330,9 +337,9 @@ def _stored_login(event, event_name):
 
 
 def _default_branch_run(event, event_name):
-    """Return whether this push or schedule is on the default branch."""
+    """Return whether this push, schedule, or workflow_dispatch is on the default branch."""
 
-    if event_name not in ("push", "schedule") or not isinstance(event, dict):
+    if event_name not in ("push", "schedule", "workflow_dispatch") or not isinstance(event, dict):
         return False
     ref = event.get("ref")
     repository = event.get("repository")
@@ -348,16 +355,18 @@ def allowlist_matches(event, refs, pushers, event_name):
     """Return whether this stored event may receive file-backed secrets.
 
     ``refs`` and ``pushers`` are the operator lists. With both empty, the
-    only matches are a push or a schedule event whose ``ref`` is
-    ``refs/heads/`` plus ``repository.default_branch``. A listed ref
-    matches that ``ref`` exactly. A listed login matches the actor login
-    with ASCII case folding. That default-branch push or schedule stays a
-    match when a list is non-empty. For a push, the login is the last
-    commit's ``author.login`` when that field is a non-empty string. For
-    a pull request, the login is ``pull_request.user.login`` on the same
-    condition. A schedule event has no actor login. A missing login does
-    not match a pusher entry. An event that lacks these fields does not
-    match the default rule. This does not read a secret.
+    only matches are a push, a schedule, or a workflow_dispatch event
+    whose ``ref`` is ``refs/heads/`` plus ``repository.default_branch``.
+    A listed ref matches that ``ref`` exactly. A listed login matches
+    the actor login with ASCII case folding. That default-branch push,
+    schedule, or workflow_dispatch stays a match when a list is
+    non-empty. For a push, the login is the last commit's
+    ``author.login`` when that field is a non-empty string. For a pull
+    request, the login is ``pull_request.user.login`` on the same
+    condition. A schedule or workflow_dispatch event has no actor login.
+    A missing login does not match a pusher entry. An event that lacks
+    these fields does not match the default rule. This does not read a
+    secret.
     """
 
     if _default_branch_run(event, event_name):
@@ -1315,19 +1324,7 @@ class Pass:
         self._checkpoint()
 
     def _workflow_bytes(self, workflow, tip):
-        if not isinstance(tip, str) or _SHA.fullmatch(tip) is None:
-            raise PollError("GIT_FAILED", "git command failed")
-        if (
-            not isinstance(workflow, str)
-            or workflow == ""
-            or workflow.startswith(("/", "-"))
-            or ".." in Path(workflow).parts
-        ):
-            raise PollError("INVALID_PARAMS", "workflow path is not accepted")
-        result = _git(self.clone, "show", f"{tip}:{workflow}", check=False)
-        if result.returncode != 0:
-            return None
-        return result.stdout
+        return _workflow_at(self.clone, workflow, tip)
 
     def _store_schedule(self, workflow, cursor):
         if cursor is None:
@@ -2233,3 +2230,119 @@ def poll_once(
         places=places,
         allow_untrusted=allow_untrusted,
     ).run()
+
+
+def _workflow_path(workflow):
+    if (
+        not isinstance(workflow, str)
+        or workflow == ""
+        or workflow.startswith(("/", "-"))
+        or ".." in Path(workflow).parts
+    ):
+        raise PollError("INVALID_PARAMS", "workflow path is not accepted")
+
+
+def _workflow_at(clone, workflow, tip):
+    if not isinstance(tip, str) or _SHA.fullmatch(tip) is None:
+        raise PollError("GIT_FAILED", "git command failed")
+    _workflow_path(workflow)
+    result = _git(clone, "show", f"{tip}:{workflow}", check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _origin_head(clone):
+    """Return the branch name and tip SHA of ``origin/HEAD``. Does not fetch."""
+
+    shown = _git(clone, "rev-parse", "--abbrev-ref", "origin/HEAD", check=False)
+    if shown.returncode != 0:
+        raise PollError("GIT_FAILED", "git command failed")
+    text = _stdout(shown).strip()
+    prefix = "origin/"
+    if not text.startswith(prefix):
+        raise PollError("GIT_FAILED", "git command failed")
+    name = text[len(prefix) :]
+    if name == "" or _git(clone, "check-ref-format", "--branch", name, check=False).returncode != 0:
+        raise PollError("GIT_FAILED", "git command failed")
+    parsed = _git(clone, "rev-parse", "--verify", "--end-of-options", "origin/HEAD", check=False)
+    if parsed.returncode != 0:
+        raise PollError("GIT_FAILED", "git command failed")
+    sha = _stdout(parsed).strip()
+    if _SHA.fullmatch(sha) is None:
+        raise PollError("GIT_FAILED", "git command failed")
+    return name, sha
+
+
+def dispatch_once(*, repository, clone, workflow, caller, image=None):
+    """Submit one workflow on the default-branch tip and return.
+
+    This is one command. It does not fetch, does not listen, and does
+    not read poll state. The tip is the clone's ``origin/HEAD``. A
+    workflow that does not list ``workflow_dispatch`` checks nothing
+    out and submits nothing.
+    """
+
+    repository = _repository_name(repository)
+    clone = Path(clone)
+    _workflow_path(workflow)
+    described = caller("worker.describe", {})
+    repository_path = described.get("repository") if isinstance(described, dict) else None
+    if not isinstance(repository_path, str) or Path(repository_path).resolve() != clone.resolve():
+        raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository")
+    name, sha = _origin_head(clone)
+    ref = "refs/heads/" + name
+    blob = _workflow_at(clone, workflow, sha)
+    if blob is None:
+        raise PollError("INVALID_PARAMS", "workflow is not on the default-branch tip")
+    try:
+        on = workflow_on(blob)
+    except PlanError as exc:
+        raise PollError("INVALID_PARAMS", str(exc)) from exc
+    try:
+        matched = submission_triggered(
+            on,
+            "workflow_dispatch",
+            {"ref": ref},
+            None,
+            [],
+            None,
+            True,
+        )
+    except Fault as exc:
+        raise PollError(exc.kind, str(exc)) from exc
+    if not matched:
+        return {"triggered": False, "ref": ref, "sha": sha}
+    try:
+        job_ids = workflow_job_ids(blob)
+    except PlanError as exc:
+        raise PollError("INVALID_PARAMS", str(exc)) from exc
+    _checkout(clone, sha)
+    event = {
+        "ref": ref,
+        "repository": {"full_name": repository, "default_branch": name},
+    }
+    submitted = []
+    for job_id in job_ids:
+        params = {
+            "version": 1,
+            "submission_key": submission_key(
+                repository, "workflow_dispatch", sha, workflow, job_id
+            ),
+            "workflow": workflow,
+            "job_id": job_id,
+            "event": event,
+            "event_name": "workflow_dispatch",
+            "diff_unavailable": True,
+        }
+        if image is not None:
+            params["image"] = image
+        result = caller("run.submit", params)
+        if isinstance(result, dict) and "run_id" in result:
+            submitted.append({"job_id": job_id, "run_id": result["run_id"]})
+            continue
+        if isinstance(result, dict) and result.get("triggered") is False:
+            submitted.append({"job_id": job_id, "triggered": False})
+            continue
+        raise PollError("WORKER_ERROR", "worker refused the request")
+    return {"triggered": True, "ref": ref, "sha": sha, "submitted": submitted}

@@ -2006,6 +2006,10 @@ Both rules are documented. A workflow that does not match returns a
 structured not-triggered result, creates no run, and does not consume
 the key. Without `event_name`, `on` is not evaluated, as today.
 `workflow_dispatch` and `schedule` are not evaluated in this slice.
+A later slice evaluates `schedule` on the default-branch tip.
+`dispatch` submits one workflow on that tip with `github.event_name`
+set to `workflow_dispatch` and then exits. It does not listen.
+File-backed secrets use the same rule as a push to the default branch.
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax
 https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows

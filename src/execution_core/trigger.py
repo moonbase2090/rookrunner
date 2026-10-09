@@ -71,8 +71,11 @@ def submission_triggered(
     More than 1,000 commits on a push, or an unavailable diff, skips path
     filters only. Branch, tag, and activity-type filters still apply.
     A schedule event matches when ``event.schedule`` is one of the cron
-    strings under ``on.schedule``. Any other event name still matches,
-    after a present schedule has been checked for a usable cron.
+    strings under ``on.schedule``. ``workflow_dispatch`` matches when
+    that event is listed as a string, a list member, null, or an empty
+    mapping. ``inputs`` and any other key are rejected. Any other event
+    name still matches, after a present schedule has been checked for a
+    usable cron.
     """
 
     expressions = schedule_expressions(on)
@@ -81,6 +84,8 @@ def submission_triggered(
             return False
         listed = event.get("schedule")
         return isinstance(listed, str) and listed in expressions
+    if event_name == "workflow_dispatch":
+        return _workflow_dispatch(on)
     if event_name not in ("push", "pull_request"):
         return True
     config = _config(on, event_name)
@@ -89,6 +94,19 @@ def submission_triggered(
     if event_name == "push":
         return _push(config, event, changed_files, commit_count, diff_unavailable)
     return _pull_request(config, event, activity_type, changed_files, diff_unavailable)
+
+
+def _workflow_dispatch(on):
+    """Return whether ``on`` lists workflow_dispatch with no extra keys."""
+
+    config = _config(on, "workflow_dispatch")
+    if config is None:
+        return False
+    if not config:
+        return True
+    if "inputs" in config:
+        invalid("on.workflow_dispatch inputs is not accepted")
+    invalid("on.workflow_dispatch key is not accepted")
 
 
 def _config(on, event_name):
