@@ -2,8 +2,8 @@
 
 Status: accepted, 2026-10-09. MB2090 accepted this document on
 2026-10-09. `status.view` and `poll.record` are implemented. The
-poll command does not call `poll.record` yet. The page process
-is not built.
+poll command records the last poll at the end of a pass. The page
+process is not built.
 
 The page this document describes is not built. The roadmap entry
 does not build it.

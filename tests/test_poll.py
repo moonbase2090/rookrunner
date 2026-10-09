@@ -31,6 +31,7 @@ from execution_core.worker import Worker
 
 
 IMAGE = "sha256:" + "cd" * 32
+OTHER = "sha256:" + "ab" * 32
 TOKEN = "token-ns42-secret-value"
 WORKFLOW = """\
 name: check
@@ -271,12 +272,15 @@ class PollTests(unittest.TestCase):
             self.fail("scheduler did not stop")
         self.worker.stop.clear()
         self.submits = []
+        self.place_workers = []
 
     def tearDown(self):
         self.server.shutdown()
         self.thread.join(timeout=5)
         self.server.server_close()
         self.worker.close()
+        for worker in self.place_workers:
+            worker.close()
         self.tmp.cleanup()
 
     def _write(self, text):
@@ -1388,6 +1392,274 @@ class PollTests(unittest.TestCase):
             "untrusted code refused: author is not a repository collaborator",
         )
         self.assertEqual(stuck["warnings"][0]["sha"], "cd" * 20)
+
+    def _watch(self, seen, on_record=None):
+        original = PollTests.caller
+
+        def wrapped(method, params):
+            seen.append((method, params))
+            if method == "poll.record" and on_record is not None:
+                on_record(params)
+            return original(self, method, params)
+
+        self.caller = wrapped
+
+    def _meta(self, key, worker=None):
+        row = (
+            (worker or self.worker)
+            .db.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+            .fetchone()
+        )
+        return None if row is None else row[0]
+
+    def _place_worker(self, name, origin="https://github.com/acme/demo.git", runner_image=None):
+        repo = self.root / name
+        repo.mkdir()
+        _git(repo, "init", "-b", "main")
+        (repo / "README").write_text("local\n")
+        _git(repo, "add", "README")
+        _git(
+            repo,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "worker",
+        )
+        _git(repo, "remote", "add", "origin", origin)
+        worker = Worker(repo, self.root / f"state-{name}", runner_image=runner_image)
+        worker.start()
+        worker.stop.set()
+        worker.scheduler.join(timeout=5)
+        if worker.scheduler.is_alive():
+            self.fail("scheduler did not stop")
+        worker.stop.clear()
+        self.place_workers.append(worker)
+        return worker
+
+    def _bound(self, worker, calls, *, fail_describe=False, fail_record=False):
+        def caller(method, params):
+            calls.append(method)
+            if fail_describe and method == "worker.describe":
+                raise PollError("WORKER_ERROR", "worker describe failed")
+            if fail_record and method == "poll.record":
+                raise PollError("METHOD_NOT_FOUND", "method is not implemented")
+            reply = worker.response(_request(method, params))
+            if "error" in reply:
+                raise PollError(reply["error"]["data"]["kind"], reply["error"]["message"])
+            return reply["result"]
+
+        return caller
+
+    def _place(self, name, worker, caller, image=IMAGE):
+        return {
+            "name": name,
+            "state": str(worker.state),
+            "cap": 1,
+            "image": image,
+            "caller": caller,
+        }
+
+    def _places(self, places, clock, image=IMAGE):
+        def unused(method, _params):
+            raise AssertionError(method)
+
+        return poll_once(
+            repository="acme/demo",
+            clone=self.clone,
+            jobs=[JOB],
+            image=image,
+            credential_file=self.credential,
+            api_base=self.base,
+            state=self.state,
+            caller=unused,
+            clock=clock,
+            places=places,
+        )
+
+    def test_a_finished_pass_records_one_poll(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        clock = datetime(2026, 10, 9, tzinfo=UTC)
+        seen = []
+        self._watch(seen)
+        result = self.poll(clock=clock)
+        records = [params for method, params in seen if method == "poll.record"]
+        self.assertEqual(
+            records,
+            [
+                {
+                    "completed_at": "2026-10-09T00:00:00+00:00",
+                    "repository": "acme/demo",
+                }
+            ],
+        )
+        parsed = datetime.fromisoformat(records[0]["completed_at"])
+        self.assertEqual(parsed.utcoffset(), timedelta(0))
+        methods = [method for method, _params in seen]
+        self.assertEqual(methods.count("poll.record"), 1)
+        self.assertGreater(methods.index("poll.record"), methods.index("run.submit"))
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(self._meta("poll_completed_at"), "2026-10-09T00:00:00+00:00")
+        self.assertEqual(self._meta("poll_repository"), "acme/demo")
+        self.assertNotIn("poll_stamp", [item.get("reason") for item in result["skipped"]])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["repository"], "acme/demo")
+
+    def test_a_pass_that_raises_before_posts_records_nothing(self):
+        self.server.branches = ["not-a-branch"]
+        seen = []
+        self._watch(seen)
+        with self.assertRaises(PollError) as raised:
+            self.poll()
+        self.assertEqual(raised.exception.kind, "API_REJECTED")
+        self.assertIn("worker.describe", [method for method, _params in seen])
+        self.assertNotIn("poll.record", [method for method, _params in seen])
+        self.assertIsNone(self._meta("poll_completed_at"))
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_missing_poll_method_on_the_caller_still_saves_the_pass(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        seen = []
+
+        def refuse(_params):
+            raise PollError("METHOD_NOT_FOUND", "method is not implemented")
+
+        self._watch(seen, refuse)
+        result = self.poll(clock=datetime(2026, 10, 9, tzinfo=UTC))
+        records = [params for method, params in seen if method == "poll.record"]
+        self.assertEqual(
+            records,
+            [
+                {
+                    "completed_at": "2026-10-09T00:00:00+00:00",
+                    "repository": "acme/demo",
+                }
+            ],
+        )
+        stamps = [item for item in result["skipped"] if item.get("reason") == "poll_stamp"]
+        self.assertEqual(stamps, [{"reason": "poll_stamp"}])
+        self.assertEqual(len(result["submitted"]), 1)
+        self.assertFalse(result["stopped"])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["repository"], "acme/demo")
+        self.assertEqual(saved["tips"]["refs/heads/main"], tip)
+        self.assertIsNone(self._meta("poll_completed_at"))
+
+    def test_a_missing_poll_method_on_one_place_names_that_host(self):
+        worker = self._place_worker("alpha")
+        calls = []
+        clock = datetime(2026, 10, 9, tzinfo=UTC)
+        result = self._places(
+            [self._place("alpha", worker, self._bound(worker, calls, fail_record=True))],
+            clock,
+        )
+        stamps = [item for item in result["skipped"] if item.get("reason") == "poll_stamp"]
+        self.assertEqual(stamps, [{"reason": "poll_stamp", "host": "alpha"}])
+        self.assertEqual(calls.count("poll.record"), 1)
+        self.assertEqual(result["submitted"], [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["repository"], "acme/demo")
+        self.assertIsNone(self._meta("poll_completed_at", worker))
+
+    def test_two_places_record_each_reached_origin(self):
+        alpha = self._place_worker("alpha")
+        beta = self._place_worker("beta")
+        gamma = self._place_worker("gamma")
+        clock = datetime(2026, 10, 9, tzinfo=UTC)
+        alpha_calls = []
+        beta_calls = []
+        gamma_calls = []
+        first = self._places(
+            [
+                self._place("alpha", alpha, self._bound(alpha, alpha_calls)),
+                self._place("beta", beta, self._bound(beta, beta_calls)),
+                self._place("gamma", gamma, self._bound(gamma, gamma_calls), image=OTHER),
+            ],
+            clock,
+        )
+        self.assertEqual(alpha_calls.count("poll.record"), 1)
+        self.assertEqual(beta_calls.count("poll.record"), 1)
+        self.assertEqual(gamma_calls, [])
+        self.assertEqual(self._meta("poll_completed_at", alpha), "2026-10-09T00:00:00+00:00")
+        self.assertEqual(self._meta("poll_repository", alpha), "acme/demo")
+        self.assertEqual(self._meta("poll_completed_at", beta), "2026-10-09T00:00:00+00:00")
+        self.assertEqual(self._meta("poll_repository", beta), "acme/demo")
+        self.assertIsNone(self._meta("poll_completed_at", gamma))
+        self.assertNotIn("poll_stamp", [item.get("reason") for item in first["skipped"]])
+        self.assertIn({"reason": "image", "host": "gamma"}, first["skipped"])
+
+        (self.state / "poll.json").unlink()
+        alpha_again = []
+        beta_again = []
+        second = self._places(
+            [
+                self._place("alpha", alpha, self._bound(alpha, alpha_again)),
+                self._place("beta", beta, self._bound(beta, beta_again, fail_describe=True)),
+            ],
+            clock,
+        )
+        self.assertEqual(alpha_again.count("poll.record"), 1)
+        self.assertEqual(beta_again, ["worker.describe"])
+        self.assertIn({"reason": "unreachable", "host": "beta"}, second["skipped"])
+        self.assertNotIn(
+            {"reason": "poll_stamp", "host": "beta"},
+            second["skipped"],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["repository"], "acme/demo")
+        self.assertEqual(
+            alpha.db.execute("SELECT count(*) FROM runs").fetchone()[0],
+            0,
+        )
+
+    def test_an_image_mismatch_records_only_a_matching_origin(self):
+        matched = "example.invalid/runner@" + IMAGE
+        image_bad = self._place_worker("image-bad", origin="https://github.com/other/name.git")
+        image_ok = self._place_worker("image-ok")
+        ready_bad = self._place_worker(
+            "ready-bad",
+            origin="https://github.com/other/name.git",
+            runner_image=matched,
+        )
+        ready_ok = self._place_worker("ready-ok", runner_image=matched)
+        ready_bad.stop.set()
+        ready_ok.stop.set()
+        calls = {name: [] for name in ("image-bad", "image-ok", "ready-bad", "ready-ok")}
+        workers = {
+            "image-bad": image_bad,
+            "image-ok": image_ok,
+            "ready-bad": ready_bad,
+            "ready-ok": ready_ok,
+        }
+        result = self._places(
+            [
+                self._place(name, workers[name], self._bound(workers[name], calls[name]))
+                for name in ("image-bad", "image-ok", "ready-bad", "ready-ok")
+            ],
+            datetime(2026, 10, 9, tzinfo=UTC),
+            image=None,
+        )
+        self.assertEqual(calls["image-bad"].count("poll.record"), 0)
+        self.assertEqual(calls["ready-bad"].count("poll.record"), 0)
+        self.assertEqual(calls["image-ok"].count("poll.record"), 1)
+        self.assertEqual(calls["ready-ok"].count("poll.record"), 1)
+        self.assertIsNone(self._meta("poll_completed_at", image_bad))
+        self.assertIsNone(self._meta("poll_completed_at", ready_bad))
+        self.assertEqual(self._meta("poll_completed_at", image_ok), "2026-10-09T00:00:00+00:00")
+        self.assertEqual(self._meta("poll_repository", image_ok), "acme/demo")
+        self.assertEqual(self._meta("poll_completed_at", ready_ok), "2026-10-09T00:00:00+00:00")
+        self.assertEqual(self._meta("poll_repository", ready_ok), "acme/demo")
+        self.assertIn({"reason": "image", "host": "image-bad"}, result["skipped"])
+        self.assertIn({"reason": "image", "host": "image-ok"}, result["skipped"])
+        self.assertIn({"reason": "not_ready", "host": "ready-bad"}, result["skipped"])
+        self.assertIn({"reason": "not_ready", "host": "ready-ok"}, result["skipped"])
+        self.assertNotIn("poll_stamp", [item.get("reason") for item in result["skipped"]])
+        self.assertIn("worker.describe", calls["image-bad"])
+        self.assertIn("worker.describe", calls["image-ok"])
 
 
 class AllowlistTests(unittest.TestCase):
