@@ -149,7 +149,7 @@ It is served on 127.0.0.1 and it is not the M3 dashboard.
 - Recent runs: repository, pull request or commit, status, duration, and a link to the check.
 - The queue and the concurrency groups.
 
-Implementation is a later design document and needs sign-off. This entry does not build the page.
+Implementation is a later design document and needs sign-off. This entry does not build the page. The proposed design is [status page](design/status-page.md). It is not accepted and it does not build the page.
 
 ## Planned, paused
 
