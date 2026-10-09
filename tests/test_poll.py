@@ -63,6 +63,18 @@ def _request(method, params):
     ).encode()
 
 
+def _commit_user(login, association, ident):
+    if login is None and association is None:
+        return None
+    user = {"id": ident}
+    if isinstance(login, str):
+        user["login"] = login
+        user["email"] = "hidden@example.invalid"
+    if isinstance(association, str):
+        user["author_association"] = association
+    return user
+
+
 def _git(repo, *args, check=True):
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -125,11 +137,16 @@ class _Handler(BaseHTTPRequestHandler):
         if kind == "commit":
             sha = path.rsplit("/", 1)[-1]
             login = self.server.authors.get(sha)
-            author = None
-            if isinstance(login, str):
-                author = {"login": login, "id": 1, "email": "hidden@example.invalid"}
+            associations = getattr(self.server, "associations", {}).get(sha, {})
+            author = _commit_user(login, associations.get("author"), 1)
+            committer = _commit_user(None, associations.get("committer"), 2)
             body = json.dumps(
-                {"sha": sha, "author": author, "commit": {"message": "hidden-message"}}
+                {
+                    "sha": sha,
+                    "author": author,
+                    "committer": committer,
+                    "commit": {"message": "hidden-message"},
+                }
             ).encode()
             self._send(200, body, None, remaining)
             return
@@ -241,6 +258,7 @@ class PollTests(unittest.TestCase):
             "default_branch": "main",
         }
         self.server.authors = {}
+        self.server.associations = {}
         self.server.etags = {"branches": "branches-1", "pulls": "pulls-1"}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -294,7 +312,7 @@ class PollTests(unittest.TestCase):
             raise PollError("WORKER_ERROR", "run.submit reply was lost")
         return reply["result"]
 
-    def poll(self, clock=None):
+    def poll(self, clock=None, **extra):
         return poll_once(
             repository="acme/demo",
             clone=self.clone,
@@ -305,7 +323,43 @@ class PollTests(unittest.TestCase):
             state=self.state,
             caller=self.caller,
             clock=clock,
+            **extra,
         )
+
+    def _merged_head(self, number):
+        tip = self._tip()
+        name = f"feature-{number}"
+        feature = self.seed / f"{name}.txt"
+        feature.write_text("feature\n")
+        _git(self.seed, "checkout", "-b", name)
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "feature",
+        )
+        _git(self.seed, "push", "origin", name)
+        head = _git(self.seed, "rev-parse", name).stdout.strip()
+        _git(self.seed, "checkout", "main")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            name,
+            "-m",
+            "merge",
+        )
+        _git(self.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
+        return tip, head
 
     def posts(self):
         return [item for item in self.server.requests if item["method"] == "POST"]
@@ -1116,6 +1170,228 @@ class PollTests(unittest.TestCase):
         self.assertEqual(manifest["base_commit"], tip)
 
 
+    def test_a_non_collaborator_is_refused_with_a_named_warning(self):
+        tip = self._tip()
+        head = "ab" * 20
+        self.server.pulls = [
+            {
+                "number": 9,
+                "user": {"login": "Mona"},
+                "author_association": "NONE",
+                "head": {
+                    "sha": head,
+                    "ref": "feature",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        result = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(result["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            result["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": "author is not a repository collaborator",
+                    "message": (
+                        "untrusted code refused: author is not a repository collaborator"
+                    ),
+                }
+            ],
+        )
+        again = self.poll()
+        self.assertEqual(again["warnings"], [])
+        self.assertEqual(again["skipped"], [])
+        self.assertEqual(self.runs(), 0)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("allow_untrusted", saved)
+
+    def test_a_different_head_repository_names_that_reason(self):
+        head = "ef" * 20
+        self.server.pulls = [
+            {
+                "number": 5,
+                "head": {
+                    "sha": head,
+                    "ref": "feature",
+                    "repo": {"id": 9, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": "12" * 20,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        result = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(result["skipped"], [{"reason": "fork", "number": 5}])
+        self.assertEqual(
+            result["warnings"][0]["message"],
+            "untrusted code refused: head repository is not the owner repository",
+        )
+
+    def test_a_missing_head_repository_names_the_fork(self):
+        head = "ab" * 20
+        self.server.pulls = [
+            {
+                "number": 4,
+                "head": {"sha": head, "ref": "feature", "repo": None},
+                "base": {"sha": "cd" * 20, "ref": "main", "repo": {"id": 5150}},
+            }
+        ]
+        result = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            result["warnings"][0]["message"],
+            "untrusted code refused: pull request is from a fork",
+        )
+        self.assertEqual(result["warnings"][0]["sha"], head)
+
+    def test_a_collaborator_association_still_runs_without_an_override(self):
+        tip, head = self._merged_head(9)
+        self.server.pulls = [
+            {
+                "number": 9,
+                "user": {"login": "Mona"},
+                "author_association": "COLLABORATOR",
+                "head": {
+                    "sha": head,
+                    "ref": "feature-9",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        self.server.etags["pulls"] = "pulls-2"
+        result = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(result["warnings"], [])
+        record = self.worker.get(result["submitted"][0]["run_id"])
+        self.assertNotIn("untrusted_override", record)
+
+    def test_a_non_collaborator_committer_is_refused_until_that_sha_is_named(self):
+        tip = self._tip()
+        self.server.authors[tip] = "octocat"
+        self.server.associations[tip] = {"author": "OWNER", "committer": "NONE"}
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(
+            refused["warnings"][0]["message"],
+            "untrusted code refused: committer is not a repository collaborator",
+        )
+        self.assertNotIn("author is not", refused["warnings"][0]["message"])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("refs/heads/main", saved["tips"])
+        self.assertNotIn("allow_untrusted", saved)
+        allowed = self.poll(allow_untrusted=[tip])
+        self.assertEqual(self.runs(), 1)
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"],
+            "committer is not a repository collaborator",
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["tips"]["refs/heads/main"], tip)
+        self.assertNotIn("allow_untrusted", saved)
+        repeat = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(repeat["warnings"], [])
+
+    def test_an_override_runs_only_the_named_sha_and_is_not_sticky(self):
+        tip, head = self._merged_head(9)
+        other = "ab" * 20
+        self.server.pulls = [
+            {
+                "number": 9,
+                "user": {"login": "Mona"},
+                "author_association": "NONE",
+                "head": {
+                    "sha": head,
+                    "ref": "feature-9",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            },
+            {
+                "number": 4,
+                "head": {
+                    "sha": other,
+                    "ref": "feature",
+                    "repo": {"id": 9, "full_name": "other/demo"},
+                },
+                "base": {"sha": tip, "ref": "main", "repo": {"id": 5150}},
+            },
+        ]
+        self.server.etags["pulls"] = "pulls-2"
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            [item["message"] for item in refused["warnings"]],
+            [
+                "untrusted code refused: author is not a repository collaborator",
+                "untrusted code refused: head repository is not the owner repository",
+            ],
+        )
+        allowed = self.poll(allow_untrusted=[head])
+        self.assertEqual(self.runs(), 1)
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"],
+            "author is not a repository collaborator",
+        )
+        self.assertEqual(
+            [item["message"] for item in allowed["warnings"]],
+            ["untrusted code allowed by override: author is not a repository collaborator"],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("allow_untrusted", saved)
+        self.server.pulls = [
+            {
+                "number": 12,
+                "author_association": "CONTRIBUTOR",
+                "head": {
+                    "sha": "cd" * 20,
+                    "ref": "else",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        self.server.etags["pulls"] = "pulls-3"
+        stuck = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(
+            stuck["warnings"][0]["message"],
+            "untrusted code refused: author is not a repository collaborator",
+        )
+        self.assertEqual(stuck["warnings"][0]["sha"], "cd" * 20)
+
 class AllowlistTests(unittest.TestCase):
     def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
         default = {
@@ -1169,6 +1445,8 @@ class AllowlistTests(unittest.TestCase):
         self.assertTrue(allowlist_matches(pull, ["refs/pull/9/merge"], [], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], ["mona"], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], [""], "pull_request"))
+
+
 
 
 class CliPollTests(unittest.TestCase):
@@ -1250,6 +1528,10 @@ class CliPollTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(
                     json.loads(result.stdout)["skipped"], [{"number": 3, "reason": "fork"}]
+                )
+                self.assertIn(
+                    "untrusted code refused: head repository is not the owner repository",
+                    result.stderr,
                 )
                 self.assertNotIn(TOKEN, result.stdout)
                 self.assertFalse(any(item["method"] == "POST" for item in server.requests))
