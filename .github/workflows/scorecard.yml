@@ -1,0 +1,103 @@
+name: scorecard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install sc
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          case "$(uname -m)" in
+            x86_64) asset=sc-v0.1.6-x86_64-unknown-linux-gnu.tar.gz ;;
+            aarch64|arm64) asset=sc-v0.1.6-aarch64-unknown-linux-gnu.tar.gz ;;
+            *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
+          esac
+          base=https://github.com/moonbase2090/Scorecard/releases/download/v0.1.6
+          curl -fsSL -o "$asset" "$base/$asset"
+          curl -fsSL -o SHA256SUMS "$base/SHA256SUMS"
+          sha256sum -c --ignore-missing SHA256SUMS
+          tar -xzf "$asset"
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 sc sc-mcp "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install uv
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          case "$(uname -m)" in
+            x86_64) asset=uv-x86_64-unknown-linux-gnu.tar.gz ;;
+            aarch64|arm64) asset=uv-aarch64-unknown-linux-gnu.tar.gz ;;
+            *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o "$asset" "https://github.com/astral-sh/uv/releases/download/0.12.18/$asset"
+          tar -xzf "$asset"
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 "$(find . -type f -name uv -print -quit)" "$HOME/.local/bin/uv"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Sync the lockfile
+        run: |
+          set -eu
+          uv sync --locked --group dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Analyze
+        run: |
+          set -eu
+          git config --global --add safe.directory "$PWD"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            if [ -n "$base_sha" ]; then
+              git update-ref refs/remotes/origin/main "$base_sha"
+            fi
+            sc analyze . --diff origin/main --fail-on secrets,tests,lint,types \
+              --format all --out scorecard.html --budget-seconds 900
+          else
+            # sc 0.1.6 has no report-only gate name. An empty --fail-on is
+            # the silent opt-out from Scorecard #200. Keep the report, let a
+            # gate failure exit 0, and fail the job on an analyzer error.
+            set +e
+            sc analyze . --format all --out scorecard.html \
+              --budget-seconds 900
+            code=$?
+            set -e
+            if [ "$code" -ge 2 ]; then
+              exit "$code"
+            fi
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-report
+          if-no-files-found: error
+          path: |
+            scorecard.html
+            scorecard.md
+            scorecard.json
+            scorecard.sarif
+
+      - name: Upload SARIF
+        # A pull_request upload is allowed with contents: read. A push upload
+        # needs the security-events write permission, which this workflow does not grant.
+        # The report artifact above still includes scorecard.sarif.
+        if: always() && github.event_name == 'pull_request' && github.event.repository.visibility == 'public'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: scorecard.sarif
