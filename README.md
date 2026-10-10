@@ -2,9 +2,11 @@
 
 A local tool, worker agent, and execution protocol for software builds and tests.
 
-**Status:** M1 complete; M2 started. The worker runs synthetic development fixtures
-and executes one captured workflow job in a caller-pinned container. Planning,
-snapshot verification, and attempt materialization exist as libraries.
+**Status:** M1 is complete. M3 is implemented: the MCP adapter and the dashboard
+are in the tree. The owned engine runs owner CI. M4, the downloadable preview,
+is planned in [the release plan](docs/planning/m4-release.md) and is not yet
+packaged. The worker runs synthetic development fixtures and executes one
+captured workflow job in a caller-pinned container.
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection
@@ -34,17 +36,28 @@ A due minute runs on the first poll at or after that minute. The engine does not
 ## Project boundaries
 
 This is an independent repository under Moonbase2090. `execution-platform` is a temporary directory name.
-Rookrunner is the working title. The final public name, CLI name, package identifier, domain, and project license remain undecided.
+Rookrunner is the working title. The final public name, CLI name, package identifier, and domain remain undecided. The project license is the Mozilla Public License, v. 2.0, in [LICENSE](LICENSE). The distribution name is `execution-core`.
 
 Local Actions is a reference implementation outside this repository. No source or configuration has been imported from it.
 Implementation choices in these documents are proposals unless explicitly marked as accepted.
 
-The intended distribution is open source. A project license must be selected before public distribution.
+The intended distribution is open source under that license.
+
+## Untrusted code
+
+A poll refuses untrusted code. A fork, a head repository other than the owner
+repository, or an author or committer who is not `OWNER`, `MEMBER`, or
+`COLLABORATOR` produces a warning that names the reason. No run is created.
+`--allow-untrusted` with that commit's SHA is the only override. The flag is
+not stored and it is not the default. The run record stores the override and
+the reason. A missing association is not a rejection. See
+[the roadmap](docs/roadmap.md#planned-paused).
 
 ## Try the development contract
 
-Requires Linux and Python 3.11+ (validated on Python 3.14.6). No third-party
-dependencies or Docker are needed for synthetic fixtures. From this checkout:
+Requires Linux and Python 3.11+ (validated on Python 3.14.6). Synthetic
+fixtures do not need Docker. Starting the program requires PyYAML 6.0.3,
+because importing the worker imports the planner. From this checkout:
 
 ```bash
 export PYTHONPATH="$PWD/src"
@@ -127,5 +140,6 @@ See the [implemented contract](docs/design/development-contract.md),
 [M1 completion evidence](docs/validation/m1-completion.md), and
 [machine-readable schemas](schemas/v0/README.md). M1 covers the development
 backend. Version 1 accepts one workflow job and the worker executes it after
-recording the attempt. Packaging, MCP, and dashboard work remain on
-the roadmap. Development dependency provenance is [recorded here](docs/development-dependencies.md).
+recording the attempt. The MCP adapter and the dashboard are implemented.
+Packaging is the M4 preview and is not published yet. Development dependency
+provenance is [recorded here](docs/development-dependencies.md).
