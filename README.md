@@ -23,7 +23,7 @@ The first release targets one local worker. Later designs can extend execution t
 - [Technical design](docs/design/architecture.md): components, execution boundaries, and recovery.
 - [Execution protocol draft](docs/design/protocol.md): client and worker contract.
 - [Build milestones](docs/roadmap.md): implementation order and completion evidence.
-- [Install](docs/install.md): the 0.1.0 wheel and the host layout.
+- [Install](docs/install.md): the 0.1.1 wheel and the host layout.
 - [Epics and stories](docs/planning/project-plan.md): Waypoint work breakdown, owners, and acceptance criteria.
 - [Review policy](REVIEW_POLICY.md): leaf vs trunk, proof, review and merge rules.
 

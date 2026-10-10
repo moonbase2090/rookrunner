@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""The v0.1.0 release workflow verifies the tag and publishes three assets."""
+"""The release workflow verifies the tag and publishes three assets."""
 
 import os
 import shutil
@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text()
-NOTES = (ROOT / ".github" / "v0.1.0-release-notes.md").read_text()
+NOTES = (ROOT / ".github" / "v0.1.1-release-notes.md").read_text()
 SIGNERS = (ROOT / ".github" / "allowed_signers").read_text()
 SCRIPT = ROOT / ".github" / "verify-tag.sh"
 FETCH_TAG = 'git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"'
@@ -44,7 +44,7 @@ def _repo(path, email):
 
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_workflow_is_the_tag_build_and_a_separate_publish_job(self):
-        self.assertIn("tags:\n      - v0.1.0\n", WORKFLOW)
+        self.assertIn('tags:\n      - "v*"\n', WORKFLOW)
         self.assertNotIn("pull_request", WORKFLOW)
         self.assertNotIn("macos", WORKFLOW)
         self.assertNotIn("actions/cache", WORKFLOW)
@@ -59,18 +59,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(WORKFLOW.count("uv build --out-dir dist"), 2)
         self.assertEqual(WORKFLOW.count("contents: write"), 1)
         self.assertEqual(WORKFLOW.count('sh .github/verify-tag.sh "$GITHUB_REF_NAME"'), 2)
-        self.assertIn("execution_core-0.1.0-py3-none-any.whl", WORKFLOW)
-        self.assertIn("execution_core-0.1.0.tar.gz", WORKFLOW)
+        self.assertEqual(WORKFLOW.count("sh .github/release-version.sh"), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_WHEEL"'), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_SDIST"'), 2)
+        self.assertIn('"$RELEASE_TITLE"', WORKFLOW)
+        self.assertIn('"$RELEASE_NOTES"', WORKFLOW)
+        self.assertNotIn("execution_core-0.1.0", WORKFLOW)
+        self.assertNotIn("v0.1.0", WORKFLOW)
         self.assertIn("--prerelease", WORKFLOW)
         self.assertIn("--verify-tag", WORKFLOW)
-        self.assertIn(".github/v0.1.0-release-notes.md", WORKFLOW)
         script = SCRIPT.read_text()
         self.assertIn("git verify-tag", script)
         self.assertNotIn("|| true", script)
 
     def test_notes_and_signers_match_the_preview_plan(self):
         self.assertIn("This artifact is a preview.", NOTES)
-        self.assertIn("The version string is 0.1.0.", NOTES)
+        self.assertIn("The version string is 0.1.1.", NOTES)
+        self.assertIn("fetches the annotated tag", NOTES)
         self.assertIn("The capability version is 12.", NOTES)
         self.assertIn("Python 3.12", NOTES)
         self.assertIn("PyYAML 6.0.3", NOTES)
@@ -245,6 +250,38 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_release_names_come_from_the_tag_and_must_match_pyproject(self):
+        def run(tag):
+            env = os.environ.copy()
+            env["GITHUB_REF_NAME"] = tag
+            env.pop("GITHUB_ENV", None)
+            return subprocess.run(
+                ["sh", ".github/release-version.sh"],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        match = run("v0.1.1")
+        self.assertEqual(match.returncode, 0, match.stderr)
+        self.assertIn(
+            "RELEASE_WHEEL=execution_core-0.1.1-py3-none-any.whl",
+            match.stdout,
+        )
+        self.assertIn("RELEASE_SDIST=execution_core-0.1.1.tar.gz", match.stdout)
+        self.assertIn("RELEASE_TITLE=v0.1.1 preview", match.stdout)
+        self.assertIn(
+            "RELEASE_NOTES=.github/v0.1.1-release-notes.md",
+            match.stdout,
+        )
+        mismatch = run("v0.1.0")
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn("does not match", mismatch.stderr)
+        bare = run("0.1.1")
+        self.assertNotEqual(bare.returncode, 0)
 
 
 if __name__ == "__main__":
