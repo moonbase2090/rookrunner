@@ -24,7 +24,7 @@ class InstallDocTests(unittest.TestCase):
         self.assertIn("mode `0600`", TEXT)
 
     def test_the_page_does_not_touch_the_dogfood_hosts(self):
-        self.assertIn("does not install anything on Nexus or Vertex", PROSE)
+        self.assertIn("does not install anything on a dogfood host", PROSE)
         self.assertNotIn("/Users", TEXT)
         self.assertNotIn("/home/", TEXT)
 

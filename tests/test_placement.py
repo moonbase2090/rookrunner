@@ -507,16 +507,16 @@ class PlacementTests(unittest.TestCase):
         result = self._poll(
             [
                 self._place(
-                    "nexus",
+                    "linux-1",
                     worker,
                     ssh="worker-host",
                     caller=self._caller(worker, repository="/remote/worker"),
                 )
             ]
         )
-        self.assertEqual(result["submitted"][0]["host"], "nexus")
+        self.assertEqual(result["submitted"][0]["host"], "linux-1")
         saved = self._saved()
-        self.assertEqual(saved["submissions"][0]["host"], "nexus")
+        self.assertEqual(saved["submissions"][0]["host"], "linux-1")
         self.assertNotIn("worker-host", json.dumps(saved["submissions"]))
         self.assertNotIn("/remote/worker", json.dumps(saved))
         tip = self._tip()

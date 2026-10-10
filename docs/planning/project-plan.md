@@ -123,10 +123,10 @@ and evidence paths; an L story is split. Spikes have a bounded question and an
 artifact/decision exit, with unresolved questions explicitly reported. Research
 completion does not imply runtime acceptance.
 
-**Work in progress:** one implementation story for codex-rr and one research/review
+**Work in progress:** one implementation story for maintainer and one research/review
 story for grok-rr at a time. Epics aggregate work and do not consume story capacity.
-Currently RR-2 and RR-9 are in progress. grok-rr acknowledged RR-9 ownership and
-start in PMUX message 4526; RR-8 follows and remains todo. Future assignments are
+Currently RR-2 and RR-9 are in progress. grok-rr acknowledged RR-9 ownership.
+RR-8 follows and remains todo. Future assignments are
 planning ownership, not instructions to begin every task now.
 
 **Workflow:** todo → in_progress → review → done. Use blocked only for an actual
@@ -150,28 +150,28 @@ remaining risks and reorder the next ready work. Revisit L items before pulling
 and record scope changes in tickets and this baseline when material. Build cycle
 time/throughput history from completed work before forecasting dates.
 
-**Ownership:** codex-rr owns integration and engine/runtime source. grok-rr owns
+**Ownership:** maintainer owns integration and engine/runtime source. grok-rr owns
 assigned research/review artifacts in `docs/research/` and `fixtures/reference/`.
 Coordinate file ownership before expanding either lane. Use each agent's own
 Waypoint principal. Waypoint reported Crosstalk notification failures during setup;
-PMUX carries direct assignments and review findings until delivery is verified.
+Review findings are recorded until delivery is verified.
 
 ## Epic map
 
 | Epic | Outcome | Horizon / milestone | Owner | Child stories |
 | --- | --- | --- | --- | --- |
-| RR-1 — M2: Execute captured workflows with the owned engine | A developer can execute captured local workflow inputs and trust the reported terminal result. | Now / M2 | codex-rr | RR-2, RR-3, RR-4, RR-5, RR-6, RR-7, RR-8, RR-9 |
-| RR-10 — Evaluate workflow conditions and exchange step data | Authors can use conditions, contexts, step outputs and dependent jobs with explainable outcomes. | Next / Compatibility-1 | codex-rr | RR-11, RR-12, RR-13, RR-14 |
-| RR-15 — Run checkout and reusable action steps | Authors can run a checkout/setup/build workflow with owned action resolution and runtimes. | Now (check.yml subset) / Compatibility-2 | codex-rr | RR-16, RR-17, RR-18, RR-19 |
+| RR-1 — M2: Execute captured workflows with the owned engine | A developer can execute captured local workflow inputs and trust the reported terminal result. | Now / M2 | maintainer | RR-2, RR-3, RR-4, RR-5, RR-6, RR-7, RR-8, RR-9 |
+| RR-10 — Evaluate workflow conditions and exchange step data | Authors can use conditions, contexts, step outputs and dependent jobs with explainable outcomes. | Next / Compatibility-1 | maintainer | RR-11, RR-12, RR-13, RR-14 |
+| RR-15 — Run checkout and reusable action steps | Authors can run a checkout/setup/build workflow with owned action resolution and runtimes. | Now (check.yml subset) / Compatibility-2 | maintainer | RR-16, RR-17, RR-18, RR-19 |
 | dogfood (no ticket yet) — Run this repository's check.yml end to end from the CLI | Rookrunner runs its own `check.yml` and reports a terminal result tied to an identified commit. | Now / CI-1 | build-seat | dogfooddesign, permissions, context, dogfoodproof |
 | ownerci (no ticket yet) — Report CI results for owner repositories to GitHub | Pushes and same-repository pull requests on owner repositories receive a truthful commit status. | Next / CI-1 | build-seat | cidesign, status, ontriggers, poll, ciproof |
-| RR-20 — Expand workflow orchestration beyond sequential builds | Teams can incrementally adopt more complex workflows without silent omissions. | Later / Compatibility-3 | codex-rr | RR-21, RR-22, RR-23, RR-24 |
-| RR-25 — Make compatibility claims traceable and reproducible | Maintainers and users can see exactly which behavior is supported and how it was validated. | Next / Quality | codex-rr | RR-26, RR-27, RR-28 |
-| RR-29 — Give coding agents reliable execution tools | Agents can submit, reconnect, inspect and cancel through the same contract as CLI users. | Later / M3 | codex-rr | RR-30, RR-31, RR-32 |
-| RR-33 — Let humans inspect and control local execution | A developer can understand queue, results and recovery from a usable local dashboard. | Later / M3 | codex-rr | RR-34, RR-35, RR-36 |
-| RR-37 — Deliver an installable local preview | A new user can install independently and complete the documented first workflow run. | Later / M4 | codex-rr | RR-38, RR-39, RR-40, RR-41 |
-| RR-42 — Discover private remote execution requirements | Decide whether and how to extend local execution to authenticated private machines. | Discovery / Discovery-remote | codex-rr | RR-43, RR-44 |
-| RR-45 — Discover isolation requirements for serving unrelated customers | Decide whether a managed multi-customer service is viable as a separate product milestone. | Discovery / Discovery-hosted | codex-rr | RR-46, RR-47 |
+| RR-20 — Expand workflow orchestration beyond sequential builds | Teams can incrementally adopt more complex workflows without silent omissions. | Later / Compatibility-3 | maintainer | RR-21, RR-22, RR-23, RR-24 |
+| RR-25 — Make compatibility claims traceable and reproducible | Maintainers and users can see exactly which behavior is supported and how it was validated. | Next / Quality | maintainer | RR-26, RR-27, RR-28 |
+| RR-29 — Give coding agents reliable execution tools | Agents can submit, reconnect, inspect and cancel through the same contract as CLI users. | Later / M3 | maintainer | RR-30, RR-31, RR-32 |
+| RR-33 — Let humans inspect and control local execution | A developer can understand queue, results and recovery from a usable local dashboard. | Later / M3 | maintainer | RR-34, RR-35, RR-36 |
+| RR-37 — Deliver an installable local preview | A new user can install independently and complete the documented first workflow run. | Later / M4 | maintainer | RR-38, RR-39, RR-40, RR-41 |
+| RR-42 — Discover private remote execution requirements | Decide whether and how to extend local execution to authenticated private machines. | Discovery / Discovery-remote | maintainer | RR-43, RR-44 |
+| RR-45 — Discover isolation requirements for serving unrelated customers | Decide whether a managed multi-customer service is viable as a separate product milestone. | Discovery / Discovery-hosted | maintainer | RR-46, RR-47 |
 
 ## Critical path and review checkpoints
 
@@ -201,7 +201,7 @@ restart reconciliation and storage policy into reviewable stories before pulling
 
 Exit: RR-7 records end-to-end success, failure, captured-input isolation, cancellation and restart evidence; all M2 stories satisfy their acceptance criteria.
 
-**RR-2 — Parse Actions YAML and produce deterministic capability-checked plans** (enabler; codex-rr; M)
+**RR-2 — Parse Actions YAML and produce deterministic capability-checked plans** (enabler; maintainer; M)
 
 As a workflow author, I can see whether a workflow is supported before any work launches.
 
@@ -211,7 +211,7 @@ As a workflow author, I can see whether a workflow is supported before any work 
 
 Dependencies: none.
 
-**RR-3 — Bind plans to verified immutable snapshots** (story; codex-rr; M)
+**RR-3 — Bind plans to verified immutable snapshots** (story; maintainer; M)
 
 As a developer, I can run exactly the source I submitted.
 
@@ -221,7 +221,7 @@ As a developer, I can run exactly the source I submitted.
 
 Dependencies: RR-2.
 
-**RR-4 — Implement supervised container execution for sequential Bash steps** (story; codex-rr; M)
+**RR-4 — Implement supervised container execution for sequential Bash steps** (story; maintainer; M)
 
 As a developer, I can run a simple build in an identified environment.
 
@@ -231,7 +231,7 @@ As a developer, I can run a simple build in an identified environment.
 
 Dependencies: RR-3.
 
-**RR-5 — Persist workflow submissions and per-step results in worker protocol** (story; codex-rr; M)
+**RR-5 — Persist workflow submissions and per-step results in worker protocol** (story; maintainer; M)
 
 As a agent client, I can disconnect and recover the same accepted run.
 
@@ -241,7 +241,7 @@ As a agent client, I can disconnect and recover the same accepted run.
 
 Dependencies: RR-3, RR-4.
 
-**RR-6 — Reconcile cancellation, timeouts, restart and disk budgets** (story; codex-rr; L)
+**RR-6 — Reconcile cancellation, timeouts, restart and disk budgets** (story; maintainer; L)
 
 As a machine owner, I can stop execution and recover without hidden work.
 
@@ -251,7 +251,7 @@ As a machine owner, I can stop execution and recover without hidden work.
 
 Dependencies: RR-4, RR-5.
 
-**RR-7 — Establish M2 end-to-end execution evidence** (verification; codex-rr; M)
+**RR-7 — Establish M2 end-to-end execution evidence** (verification; maintainer; M)
 
 As a developer, I can judge the first executable release against recorded evidence.
 
@@ -285,7 +285,7 @@ Dependencies: none.
 
 Exit: A supported fixture suite proves each semantic feature and explicitly lists unsupported cases.
 
-**RR-11 — Evaluate expressions in the correct workflow context** (story; codex-rr; L)
+**RR-11 — Evaluate expressions in the correct workflow context** (story; maintainer; L)
 
 As a workflow author, I can use conditions without phase-dependent surprises.
 
@@ -295,7 +295,7 @@ As a workflow author, I can use conditions without phase-dependent surprises.
 
 Dependencies: RR-2, RR-8.
 
-**RR-12 — Pass environment and outputs between steps** (story; codex-rr; M)
+**RR-12 — Pass environment and outputs between steps** (story; maintainer; M)
 
 As a workflow author, I can consume data produced by earlier steps.
 
@@ -305,7 +305,7 @@ As a workflow author, I can consume data produced by earlier steps.
 
 Dependencies: RR-4, RR-8.
 
-**RR-13 — Report outcomes and evaluate failure conditions accurately** (story; codex-rr; M)
+**RR-13 — Report outcomes and evaluate failure conditions accurately** (story; maintainer; M)
 
 As a workflow author, I can handle failed steps without a false green run.
 
@@ -315,7 +315,7 @@ As a workflow author, I can handle failed steps without a false green run.
 
 Dependencies: RR-11, RR-12.
 
-**RR-14 — Run selected jobs with their dependency closure** (story; codex-rr; M)
+**RR-14 — Run selected jobs with their dependency closure** (story; maintainer; M)
 
 As a workflow author, I can execute dependent jobs in the right order.
 
@@ -329,7 +329,7 @@ Dependencies: RR-13.
 
 Exit: A pinned checkout plus setup plus build fixture completes with action provenance, lifecycle and cleanup evidence.
 
-**RR-16 — Resolve actions to verified immutable content** (story; codex-rr; M)
+**RR-16 — Resolve actions to verified immutable content** (story; maintainer; M)
 
 As a workflow author, I can know which action code ran.
 
@@ -339,7 +339,7 @@ As a workflow author, I can know which action code ran.
 
 Dependencies: RR-2, RR-8.
 
-**RR-17 — Preserve submitted inputs through checkout and Git commands** (story; codex-rr; M)
+**RR-17 — Preserve submitted inputs through checkout and Git commands** (story; maintainer; M)
 
 As a developer, I can use checkout without replacing submitted changes.
 
@@ -349,7 +349,7 @@ As a developer, I can use checkout without replacing submitted changes.
 
 Dependencies: RR-16, RR-3.
 
-**RR-18 — Execute JavaScript actions with setup and cleanup** (story; codex-rr; M)
+**RR-18 — Execute JavaScript actions with setup and cleanup** (story; maintainer; M)
 
 As a workflow author, I can use supported setup actions.
 
@@ -359,7 +359,7 @@ As a workflow author, I can use supported setup actions.
 
 Dependencies: RR-16, RR-12.
 
-**RR-19 — Execute local composite actions** (story; codex-rr; M)
+**RR-19 — Execute local composite actions** (story; maintainer; M)
 
 As a workflow author, I can reuse a sequence of supported steps.
 
@@ -373,7 +373,7 @@ Dependencies: RR-16, RR-11, RR-12.
 
 Exit: Every enabled capability has bounded-resource and failure/cleanup fixtures plus a compatibility entry.
 
-**RR-21 — Expand and schedule bounded job matrices** (story; codex-rr; L)
+**RR-21 — Expand and schedule bounded job matrices** (story; maintainer; L)
 
 As a workflow author, I can test a declared set of configurations.
 
@@ -383,7 +383,7 @@ As a workflow author, I can test a declared set of configurations.
 
 Dependencies: RR-14.
 
-**RR-22 — Call reusable workflows with typed inputs and outputs** (story; codex-rr; L)
+**RR-22 — Call reusable workflows with typed inputs and outputs** (story; maintainer; L)
 
 As a workflow author, I can share tested workflow definitions.
 
@@ -393,7 +393,7 @@ As a workflow author, I can share tested workflow definitions.
 
 Dependencies: RR-14, RR-16.
 
-**RR-23 — Run Docker actions with owned cleanup** (story; codex-rr; M)
+**RR-23 — Run Docker actions with owned cleanup** (story; maintainer; M)
 
 As a workflow author, I can use supported container actions.
 
@@ -403,7 +403,7 @@ As a workflow author, I can use supported container actions.
 
 Dependencies: RR-16, RR-6.
 
-**RR-24 — Run jobs with declared service containers** (story; codex-rr; M)
+**RR-24 — Run jobs with declared service containers** (story; maintainer; M)
 
 As a workflow author, I can test against a disposable dependency service.
 
@@ -427,7 +427,7 @@ As a maintainer, I can identify unsupported behavior before advertising it.
 
 Dependencies: RR-8.
 
-**RR-27 — Compare local results with reference evidence** (story; codex-rr; M)
+**RR-27 — Compare local results with reference evidence** (story; maintainer; M)
 
 As a maintainer, I can detect semantic regressions.
 
@@ -451,7 +451,7 @@ Dependencies: RR-26, RR-2.
 
 Exit: CLI and MCP agree on identifiers, outcomes, bounded logs and errors in end-to-end fixtures.
 
-**RR-30 — Expose execution operations through MCP** (story; codex-rr; M)
+**RR-30 — Expose execution operations through MCP** (story; maintainer; M)
 
 As a agent client, I can control runs without owning worker lifetime.
 
@@ -461,7 +461,7 @@ As a agent client, I can control runs without owning worker lifetime.
 
 Dependencies: RR-5.
 
-**RR-31 — Recover from tool errors and reconnect safely** (story; codex-rr; M)
+**RR-31 — Recover from tool errors and reconnect safely** (story; maintainer; M)
 
 As a agent client, I can distinguish retryable failures from run outcomes.
 
@@ -471,7 +471,7 @@ As a agent client, I can distinguish retryable failures from run outcomes.
 
 Dependencies: RR-30.
 
-**RR-32 — Retrieve bounded logs and artifact manifests** (story; codex-rr; M)
+**RR-32 — Retrieve bounded logs and artifact manifests** (story; maintainer; M)
 
 As a agent client, I can inspect results without unbounded output or unsafe paths.
 
@@ -485,7 +485,7 @@ Dependencies: RR-30, RR-6.
 
 Exit: Selected runnable design passes visible install-to-result, reconnect and cancellation scenarios.
 
-**RR-34 — Compare runnable dashboard design options** (spike; codex-rr; M)
+**RR-34 — Compare runnable dashboard design options** (spike; maintainer; M)
 
 As a developer, I can choose a usable execution view before implementation.
 
@@ -495,7 +495,7 @@ As a developer, I can choose a usable execution view before implementation.
 
 Dependencies: none.
 
-**RR-35 — Inspect runs, steps and evidence in the dashboard** (story; codex-rr; M)
+**RR-35 — Inspect runs, steps and evidence in the dashboard** (story; maintainer; M)
 
 As a developer, I can understand what ran and why it failed.
 
@@ -505,7 +505,7 @@ As a developer, I can understand what ran and why it failed.
 
 Dependencies: RR-34, RR-32.
 
-**RR-36 — Cancel work and understand recovery in the dashboard** (story; codex-rr; M)
+**RR-36 — Cancel work and understand recovery in the dashboard** (story; maintainer; M)
 
 As a machine owner, I can stop a run without confusing uncertain cleanup with success.
 
@@ -529,7 +529,7 @@ As a project owner, I can distribute an artifact with explicit naming and licens
 
 Dependencies: none.
 
-**RR-39 — Build a reproducible preview archive** (story; codex-rr; M)
+**RR-39 — Build a reproducible preview archive** (story; maintainer; M)
 
 As a developer, I can install outside the source checkout.
 
@@ -539,7 +539,7 @@ As a developer, I can install outside the source checkout.
 
 Dependencies: RR-7, RR-38.
 
-**RR-40 — Diagnose prerequisites and follow a documented first run** (story; codex-rr; M)
+**RR-40 — Diagnose prerequisites and follow a documented first run** (story; maintainer; M)
 
 As a new user, I can resolve setup problems without inspecting implementation.
 
@@ -549,7 +549,7 @@ As a new user, I can resolve setup problems without inspecting implementation.
 
 Dependencies: RR-39.
 
-**RR-41 — Validate the packaged preview with an external user** (verification; codex-rr; M)
+**RR-41 — Validate the packaged preview with an external user** (verification; maintainer; M)
 
 As a new user, I can complete a real build using published instructions.
 
@@ -573,7 +573,7 @@ As a machine owner, I can understand the requirements for using a private remote
 
 Dependencies: none.
 
-**RR-44 — Review the private remote execution proposal** (spike; codex-rr; M)
+**RR-44 — Review the private remote execution proposal** (spike; maintainer; M)
 
 As a project owner, I can choose a separately scoped remote milestone.
 
@@ -597,7 +597,7 @@ As a service owner, I can understand requirements before hosting untrusted custo
 
 Dependencies: none.
 
-**RR-47 — Evaluate managed service viability and decision gates** (spike; codex-rr; M)
+**RR-47 — Evaluate managed service viability and decision gates** (spike; maintainer; M)
 
 As a project owner, I can decide whether managed execution should proceed.
 

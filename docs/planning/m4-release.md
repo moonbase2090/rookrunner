@@ -2,7 +2,7 @@
 
 Status: proposed. This document is a plan. It does not build a
 wheel, choose a license, sign a tag, or publish a release. It
-does not change Nexus or Vertex. Paused items stay paused.
+does not change the dogfood hosts. Paused items stay paused.
 
 Grok signs off on this plan before a later pull request starts.
 Capability version stays 12. `.github/workflows/check.yml` is
@@ -53,11 +53,11 @@ path, no `--app-key`, no `--docker-socket`, and no listen
 socket. A host copy appends that host's image digest and still
 has none of those other fields.
 
-The Vertex letter installs an engine tree with `git archive`,
+The second dogfood host letter installs an engine tree with `git archive`,
 writes a user `.pth`, and installs PyYAML for that interpreter.
 The dogfood hosts are past that letter. Their running sources
 match `1b686e71990ec24c28d6141e715145ff3dca9650`. The record is
-[Nexus and Vertex dogfood start](../validation/dogfood-nexus-vertex.md).
+[Dogfood start](../validation/dogfood.md).
 The 14-day window is open. This plan leaves that install in
 place.
 
@@ -119,8 +119,8 @@ not decisions until then.
    is not an external-user run.
 8. Install documentation has two procedures. A developer
    machine installs the wheel and runs `python -m execution_core`
-   with no `PYTHONPATH`. A host that follows the Nexus and
-   Vertex layout unpacks the tarball into
+   with no `PYTHONPATH`. A host that follows the dogfood host layout
+   unpacks the tarball into
    `/var/lib/rookrunner/engine` so the existing unit's
    `PYTHONPATH` still finds `src`. That host still installs
    `pyyaml==6.0.3` for `/usr/bin/python3`, keeps state mode
@@ -257,14 +257,14 @@ The notes that ship with `0.1.0` say at least this:
   stop. P03–P12 are not re-measured on the wheel in this
   preview.
 - macOS jobs, `actions/cache`, Docker actions,
-  `actions/setup-node`, and `hashFiles` stay paused while the
-  Nexus and Vertex window is open.
+  `actions/setup-node`, and `hashFiles` stay paused during the
+  initial dogfood period.
 - Untrusted code is refused unless that poll invocation passes
   `--allow-untrusted` with the SHA.
 - The worker has no listen socket. Write permissions stay
   rejected. A webhook receiver and GitHub runner registration
   stay out.
-- The Nexus and Vertex dogfood install is unchanged. The page
+- The self-hosted Linux dogfood install is unchanged. The page
   there can keep showing `0.0.1` until a later host change,
   which this preview does not include.
 - The App private key is not in the artifact.

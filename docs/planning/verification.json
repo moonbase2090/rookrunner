@@ -15,6 +15,6 @@
     "RR-2",
     "RR-9"
   ],
-  "notification_limitation": "Crosstalk event delivery reported unavailable; direct PMUX assignments acknowledged in 4526",
+  "notification_limitation": "Crosstalk event delivery reported unavailable; direct assignments were acknowledged",
   "runtime_checks": "Not run: planning and documentation changes only"
 }

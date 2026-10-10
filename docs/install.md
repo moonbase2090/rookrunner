@@ -4,7 +4,7 @@ Version 0.1.1 can be installed in two ways. Neither way is a
 published download yet. `uv build` in a checkout writes
 `execution_core-0.1.1-py3-none-any.whl` and
 `execution_core-0.1.1.tar.gz`. A later release will attach those
-files. This page does not install anything on Nexus or Vertex.
+files. This page does not install anything on a dogfood host.
 
 ## A developer machine
 
@@ -21,7 +21,7 @@ Do not set `PYTHONPATH`. `pip install` of the same wheel is the
 same install. The checkout procedure in the README remains the
 way to work on this tree.
 
-## A host that follows the Nexus and Vertex layout
+## A host that follows the dogfood host layout
 
 This procedure matches
 [deploy/rookrunner-worker.service](../deploy/rookrunner-worker.service).

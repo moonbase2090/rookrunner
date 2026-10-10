@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""Vertex uses the shared worker unit and enables linger on the host.
+"""The second dogfood host uses the shared worker unit and enables linger.
 
 The unit file does not carry a linger directive.
 """
@@ -10,10 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT = ROOT / "deploy" / "rookrunner-worker.service"
-DOC = ROOT / "docs" / "design" / "vertex-worker.md"
+DOC = ROOT / "docs" / "design" / "linux-host-worker.md"
 
 
-class VertexWorkerTests(unittest.TestCase):
+class LinuxHostWorkerTests(unittest.TestCase):
     def test_the_shared_unit_has_no_linger_directive(self):
         text = UNIT.read_text(encoding="utf-8")
         self.assertIn("Restart=always\n", text)

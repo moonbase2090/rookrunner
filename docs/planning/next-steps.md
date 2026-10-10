@@ -1397,9 +1397,9 @@ assume a fixed rate.
 
 ### Planned, paused
 
-Paused until Rookrunner has been dogfooded on the Nexus and Vertex
-boxes. The dogfood has started. The start record is
-[Nexus and Vertex dogfood start](../validation/dogfood-nexus-vertex.md).
+Paused until Rookrunner has been dogfooded on the self-hosted Linux
+hosts. The dogfood has started. The start record is
+[Dogfood start](../validation/dogfood.md).
 The 14-day window is open. Do not plan or implement these yet.
 
 - macOS jobs, such as Scorecard's `check-macos`.

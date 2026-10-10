@@ -146,7 +146,7 @@ orders that work.
 
 ## Status page
 
-A local read-only page for the Nexus and Vertex dogfood. It is not paused.
+A local read-only page for the dogfood hosts. It is not paused.
 It is served on 127.0.0.1 and it is not the M3 dashboard.
 
 - The worker: up or down, version, runner image, and the last poll.
@@ -158,13 +158,13 @@ The accepted design is [status page](design/status-page.md).
 records the last poll at the end of a pass. The page process
 serves 127.0.0.1:8765. These pull requests do not start it on a
 host. The dogfood start record says each box is serving it
-([Nexus and Vertex dogfood start](validation/dogfood-nexus-vertex.md)).
+([Dogfood start](validation/dogfood.md)).
 
 ## Planned, paused
 
-Paused until Rookrunner has been dogfooded on the Nexus and Vertex boxes.
+Paused until Rookrunner has been dogfooded on the self-hosted Linux hosts.
 The dogfood has started. The start record is
-[Nexus and Vertex dogfood start](validation/dogfood-nexus-vertex.md).
+[Dogfood start](validation/dogfood.md).
 The 14-day window is open. Do not plan or implement these yet.
 
 - macOS jobs.
