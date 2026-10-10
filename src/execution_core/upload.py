@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Select workspace files for an owned upload step.
 
 The step records an artifact name and workspace-relative paths. It does not

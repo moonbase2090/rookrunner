@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One poll pass against a local Git remote and a local HTTP stub.
 
 No test contacts GitHub. The scheduler is stopped so a submitted run stays

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Single-user Unix worker.
 
 Version 0 submits a synthetic development fixture. It never launches commands

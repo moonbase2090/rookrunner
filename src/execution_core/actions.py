@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Fetch one SHA-pinned action into the state directory.
 
 The documented forms are ``{owner}/{repo}@{sha}`` and

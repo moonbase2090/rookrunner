@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Read tools on the stdio MCP adapter.
 
 The adapter is a client of one worker socket. These tests cover

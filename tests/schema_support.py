@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Independent JSON Schema checks against the published v0 contract."""
 
 from datetime import datetime

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Startup lock for worker --docker-socket, --secrets, and --app-key.
 
 The probe is exercised with a fake Docker client. No test reads

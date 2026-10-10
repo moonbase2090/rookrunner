@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """The systemd user unit restarts the worker from a fixed checkout.
 
 The file names no key, no Docker socket, no image digest, and no home path.

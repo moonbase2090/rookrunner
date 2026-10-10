@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Job mask for p7-mask.
 
 A fixture value is masked in stdout, across a split read, in an

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Two local dashboard options, both socket clients.
 
 Each shows a queued run, a failed run, a lost run, a missing

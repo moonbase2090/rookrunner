@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Placement across configured workers.
 
 Tests drive a real poll pass. A stand-in ssh is first on PATH for the

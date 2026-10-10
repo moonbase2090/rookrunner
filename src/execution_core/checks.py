@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One check run and one commit status for one run.
 
 The operator passes the App private-key path. A poll pass reads that

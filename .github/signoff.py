@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MPL-2.0
+
 """Fail a pull request that changes a CODEOWNERS path without mb2090-signoff.
 
 The protected-path list is read from CODEOWNERS. It is not copied here.

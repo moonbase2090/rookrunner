@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Decide whether a push, pull request, or schedule matches a workflow's `on`.
 
 The pattern rules are the workflow syntax filter cheat sheet. `*` does not

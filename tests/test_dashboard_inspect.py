@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Terminal inspect view: snapshot, steps, log pages, and artifacts.
 
 Every binding has a key and a mouse target. Reopening the view

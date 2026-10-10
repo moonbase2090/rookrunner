@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One-shot workflow_dispatch against a local clone. No test contacts GitHub."""
 
 import json

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Omit the container this process is running in.
 
 A job container is named ``rookrunner-`` plus 16 hexadecimal characters.

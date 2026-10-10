@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Evaluator for step `if`, job `if`, job outputs, and text expressions.
 
 Operators, literals, coercion, and functions follow the GitHub Actions

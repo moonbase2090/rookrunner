@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Terminal cancel: version 0, then the record the worker returned.
 
 A queued cancel renders cancelled. A finished run stays succeeded

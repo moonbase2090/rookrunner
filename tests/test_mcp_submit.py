@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Submit and cancel on the stdio MCP adapter.
 
 submit sends version 1 with event {} and no event_name. A poll-

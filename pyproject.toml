@@ -2,6 +2,7 @@
 name = "execution-core"
 version = "0.0.1"
 description = "Local execution contract prototype for Rookrunner"
+license = "MPL-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml==6.0.3",

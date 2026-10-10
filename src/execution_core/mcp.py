@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Stdio MCP adapter.
 
 Each tool call opens one worker socket through the CLI client. The

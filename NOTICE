@@ -1,0 +1,14 @@
+Rookrunner is licensed under the Mozilla Public License, v. 2.0.
+The license text is the LICENSE file.
+
+Third-party notices
+
+PyYAML 6.0.3
+License: MIT
+Source: https://github.com/yaml/pyyaml
+Terms: https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE
+Copyright: Ingy döt Net (2017-2021) and Kirill Simonov (2006-2016)
+
+The package does not vendor PyYAML. Installing it pulls pyyaml==6.0.3.
+Development tools are not part of that distribution and are not listed
+here.

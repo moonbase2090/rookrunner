@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Shared v0 framing, limits, and errors; no backend or storage dependencies."""
 
 import json

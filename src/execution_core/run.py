@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Run one planned job as sequential Bash steps in a caller-pinned container.
 
 This is the library later worker code can call. It is not a protocol method.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Preparatory Git working-file capture for M2; never executes workflows.
 
 Snapshots contain plain files, a canonical manifest, the loose trees and

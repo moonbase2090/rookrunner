@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Versioned plan for one selected job and the jobs it needs.
 
 Parsing does not pull images, start containers, or accept a run. It fetches

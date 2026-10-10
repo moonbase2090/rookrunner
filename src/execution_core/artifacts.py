@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Manifest of files a workflow attempt writes into its workspace.
 
 The manifest lists regular files under that workspace whose bytes differ from

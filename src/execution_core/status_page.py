@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Read-only HTML page on 127.0.0.1:8765.
 
 The process calls status.view and nothing else. It does not open

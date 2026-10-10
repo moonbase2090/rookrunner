@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Check runs through a local HTTP stub and a fixture key under a temporary HOME.
 
 No test reads ~/Secrets/github-app/rookrunner-app/ and no test contacts api.github.com.
