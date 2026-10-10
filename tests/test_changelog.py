@@ -16,9 +16,9 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
 
     def test_preview_section_waits_for_the_artifact(self):
-        self.assertIn("The current package version is 0.0.1.", TEXT)
+        self.assertIn("The current package version is 0.1.0.", TEXT)
         self.assertIn(
-            "Its section is added when the wheel and the tarball exist",
+            "when the published wheel and the tarball exist",
             PROSE,
         )
         self.assertNotIn("## [0.1.0]", TEXT)
