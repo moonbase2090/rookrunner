@@ -670,6 +670,10 @@ def main():
         "dashboard",
         help="terminal view of runs, logs, artifacts, and cancel",
     )
+    commands.add_parser(
+        "status-page",
+        help="read-only page on 127.0.0.1:8765",
+    )
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
     )
@@ -858,6 +862,11 @@ def main():
             from .dashboard import serve_terminal
 
             serve_terminal(args.state)
+            return
+        if args.command == "status-page":
+            from .status_page import serve as serve_page
+
+            serve_page(args.state)
             return
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)

@@ -53,7 +53,9 @@ runs, the queue, and the active groups. It creates no run.
 `poll.record` writes `poll_completed_at` and `poll_repository`.
 The poll command calls it after posts and before the final state
 save, once for the single caller and once per place whose origin
-was accepted.
+was accepted. The `status-page` command binds 127.0.0.1 port 8765
+and calls `status.view` for `GET /` and `HEAD /`. It does not call
+another method.
 
 `run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
 On a workflow run it returns a page of artifact entries and `next_cursor`.

@@ -257,7 +257,7 @@ class StatusPageTests(unittest.TestCase):
         self.assertIn("405", head.split("\r\n", 1)[0])
         self.assertEqual(body, "")
         self.assertEqual(fake.methods, [])
-        self.assertNotIn("Content-Type", head)
+        self.assertNotRegex(head, r"(?im)^content-type:")
         self.assertNotIn("Access-Control-Allow-Origin", head)
 
     def test_a_query_string_is_400(self):

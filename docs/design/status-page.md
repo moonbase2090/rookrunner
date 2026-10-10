@@ -3,10 +3,11 @@
 Status: accepted, 2026-10-09. MB2090 accepted this document on
 2026-10-09. `status.view` and `poll.record` are implemented. The
 poll command records the last poll at the end of a pass. The page
-process is not built.
+process serves 127.0.0.1:8765.
 
-The page this document describes is not built. The roadmap entry
-does not build it.
+The page this document describes is implemented. These pull
+requests do not install a unit and do not start the process on
+a host.
 
 ## Overview
 

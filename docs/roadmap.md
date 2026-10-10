@@ -155,8 +155,9 @@ It is served on 127.0.0.1 and it is not the M3 dashboard.
 
 The accepted design is [status page](design/status-page.md).
 `status.view` and `poll.record` are implemented. The poll command
-records the last poll at the end of a pass. The page process is
-not built.
+records the last poll at the end of a pass. The page process
+serves 127.0.0.1:8765. These pull requests do not start it on a
+host.
 
 ## Planned, paused
 
