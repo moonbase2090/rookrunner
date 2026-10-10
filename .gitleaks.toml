@@ -8,7 +8,9 @@ description = "Parser text in checks.py that starts at the PEM header literals. 
 condition = "AND"
 paths = ['''src/execution_core/checks\.py''']
 regexTarget = "secret"
-regexes = ['''^-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"}[\s\S]*b64decode[\s\S]*_der_sequence\(der\)''']
+# Character classes stop this line matching a private-key rule.
+# The regex still matches the parser span.
+regexes = ['''^-----BEGI[N] RSA PRIVATE KE[Y]-----", "-----BEGI[N] PRIVATE KE[Y]-----"}[\s\S]*b64decode[\s\S]*_der_sequence\(der\)''']
 
 [[allowlists]]
 description = "Recorded fixture submission keys. Other fields in these files stay scanned."
