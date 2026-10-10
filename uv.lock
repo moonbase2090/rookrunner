@@ -13,8 +13,8 @@ wheels = [
 
 [[package]]
 name = "execution-core"
-version = "0.0.1"
-source = { virtual = "." }
+version = "0.1.0"
+source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
 ]

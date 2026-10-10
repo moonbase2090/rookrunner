@@ -30,7 +30,7 @@ On main, the worker listens on `<state>/worker.sock`, mode
 returns `version`, `ready`, `readiness_error`, `repository`, and,
 only when the process was started with `--runner-image`,
 `runner_image`. `version` is the package string from
-`execution_core.__version__`, currently `"0.0.1"`. It is not the
+`execution_core.__version__`, currently `"0.1.0"`. It is not the
 capability version. The capability version is 12 and is not a
 field of `worker.describe`. `repository` is
 `Path(repository).resolve(strict=True)`. On the unit file that
