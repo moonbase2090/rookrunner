@@ -1,0 +1,21 @@
+title = "Rookrunner gitleaks allowlist"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Parser text in checks.py that starts at the PEM header literals. A key body does not match."
+condition = "AND"
+paths = ['''src/execution_core/checks\.py''']
+regexTarget = "secret"
+regexes = ['''^-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"}[\s\S]*b64decode[\s\S]*_der_sequence\(der\)''']
+
+[[allowlists]]
+description = "Recorded fixture submission keys. Other fields in these files stay scanned."
+condition = "AND"
+paths = [
+  '''docs/validation/dogfood-check-evidence\.json''',
+  '''docs/validation/m1-completion-evidence\.json''',
+]
+regexTarget = "line"
+regexes = ['''"submission_key"\s*:\s*"[A-Za-z0-9-]{16,40}"''']
