@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Job and service containers are created with a memory limit of 4g,
+  no swap beyond that limit, a process limit of 1024, and a CPU limit
+  of 2. The default network remains bridge.
 - The project license is the Mozilla Public License, v. 2.0.
 - `SECURITY.md` states the private reporting path, the socket and state
   modes, and that local mode is not a sandbox for a hostile repository.

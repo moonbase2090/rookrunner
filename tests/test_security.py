@@ -20,6 +20,10 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("state directory is mode `0700`", TEXT)
         self.assertIn("socket is mode `0600`", TEXT)
         self.assertIn("The worker has no network listener.", TEXT)
+        self.assertIn("memory limit of 4g", TEXT)
+        self.assertIn("process limit of 1024", TEXT)
+        self.assertIn("CPU limit of 2", TEXT)
+        self.assertIn("The default network remains `bridge`.", TEXT)
 
     def test_local_mode_is_not_a_sandbox(self):
         self.assertIn(
