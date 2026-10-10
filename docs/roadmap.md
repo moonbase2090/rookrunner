@@ -157,12 +157,15 @@ The accepted design is [status page](design/status-page.md).
 `status.view` and `poll.record` are implemented. The poll command
 records the last poll at the end of a pass. The page process
 serves 127.0.0.1:8765. These pull requests do not start it on a
-host.
+host. The dogfood start record says each box is serving it
+([Nexus and Vertex dogfood start](validation/dogfood-nexus-vertex.md)).
 
 ## Planned, paused
 
 Paused until Rookrunner has been dogfooded on the Nexus and Vertex boxes.
-Do not plan or implement these yet.
+The dogfood has started. The start record is
+[Nexus and Vertex dogfood start](validation/dogfood-nexus-vertex.md).
+The 14-day window is open. Do not plan or implement these yet.
 
 - macOS jobs.
 - `actions/cache` and Docker actions.
