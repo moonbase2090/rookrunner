@@ -8,7 +8,9 @@ The file names no key, no Docker socket, no image digest, and no home path.
 import unittest
 from pathlib import Path
 
-UNIT = Path(__file__).resolve().parents[1] / "deploy" / "rookrunner-worker.service"
+ROOT = Path(__file__).resolve().parents[1]
+UNIT = ROOT / "deploy" / "rookrunner-worker.service"
+DESIGN = ROOT / "docs" / "design" / "worker-unit.md"
 
 
 class WorkerUnitTests(unittest.TestCase):
@@ -19,6 +21,31 @@ class WorkerUnitTests(unittest.TestCase):
         self.assertIn("Type=simple\n", self.text)
         self.assertIn("Restart=always\n", self.text)
         self.assertIn("NoNewPrivileges=yes\n", self.text)
+        for line in (
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectSystem=strict",
+            "ProtectHome=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectKernelLogs=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "ProtectHostname=yes",
+            "ProtectProc=invisible",
+            "ProcSubset=pid",
+            "RestrictNamespaces=yes",
+            "RestrictRealtime=yes",
+            "RestrictSUIDSGID=yes",
+            "LockPersonality=yes",
+            "RemoveIPC=yes",
+            "SystemCallArchitectures=native",
+            "CapabilityBoundingSet=",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "UMask=0077",
+            "ReadWritePaths=/var/lib/rookrunner/state /var/lib/rookrunner/clone",
+        ):
+            self.assertIn(line + "\n", self.text, line)
         self.assertIn("WorkingDirectory=/var/lib/rookrunner/engine\n", self.text)
         self.assertIn(
             "Environment=PYTHONPATH=/var/lib/rookrunner/engine/src\n",
@@ -49,3 +76,14 @@ class WorkerUnitTests(unittest.TestCase):
         )
         for item in forbidden:
             self.assertNotIn(item, self.text, item)
+
+    def test_host_copy_must_reexpose_secrets_under_protect_home(self):
+        folded = " ".join(DESIGN.read_text(encoding="utf-8").split())
+        self.assertIn(
+            "A host copy that adds the documented `~/Secrets` key flows "
+            "(`--app-key` or `--secrets`) must re-expose that path. "
+            "`ProtectHome=yes` hides the service user's home, so the key file "
+            "is unreadable and the startup probe treats a missing `~/Secrets` "
+            "directory as not shared. Secrets then stay absent without an error.",
+            folded,
+        )

@@ -22,7 +22,16 @@ durable engine checkout. `PYTHONPATH` is
 checkout. `ExecStart` is `/usr/bin/python3 -m execution_core` with
 `--state /var/lib/rookrunner/state`, the `worker` command, and
 `--repository /var/lib/rookrunner/clone`. `NoNewPrivileges=yes` is
-set. `WantedBy=default.target` is the user-session install target.
+set. The unit also sets `PrivateTmp`, `PrivateDevices`,
+`ProtectSystem=strict`, `ProtectHome`, the kernel and control-group
+protections, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible`,
+`ProcSubset=pid`, `RestrictNamespaces`, `RestrictRealtime`,
+`RestrictSUIDSGID`, `LockPersonality`, `RemoveIPC`,
+`SystemCallArchitectures=native`, an empty `CapabilityBoundingSet`,
+`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, and `UMask=0077`.
+`ReadWritePaths` is `/var/lib/rookrunner/state` and
+`/var/lib/rookrunner/clone`. The engine checkout stays read-only.
+`WantedBy=default.target` is the user-session install target.
 The unit has no `User=` line. The user who enables it is the
 service user.
 
@@ -34,6 +43,13 @@ private-key path, no `--app-key`, and no `--docker-socket`. It
 contains no image digest. The documented parent digest stays where
 the runner-image document already records it. A host digest is
 added only in the unit copied onto that host.
+
+A host copy that adds the documented `~/Secrets` key flows
+(`--app-key` or `--secrets`) must re-expose that path.
+`ProtectHome=yes` hides the service user's home, so the key file
+is unreadable and the startup probe treats a missing `~/Secrets`
+directory as not shared. Secrets then stay absent without an error.
+The template unit itself still omits those flags.
 
 ## Accepted, and not done here
 
