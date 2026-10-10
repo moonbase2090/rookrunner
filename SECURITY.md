@@ -25,6 +25,11 @@ not part of this program.
 The Docker socket is not mounted into a job unless the worker is
 started with `--docker-socket`.
 
+A job container and a service container are created with a memory
+limit of 4g, no swap beyond that limit, a process limit of 1024, and
+a CPU limit of 2. The default network remains `bridge`. `network none`
+still turns egress off.
+
 ## What this is not
 
 Local mode is not a sandbox for arbitrary hostile repositories.

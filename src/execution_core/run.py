@@ -47,7 +47,11 @@ The container is created on Docker network `bridge` by default, so the job
 can reach the public internet. GitHub-hosted runners have that access by
 default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-Pass network `none` to turn it off. Other network names are rejected. The
+Pass network `none` to turn it off. Other network names are rejected. A
+job container and a service container are created with `--memory 4g`,
+`--memory-swap 4g`, `--pids-limit 1024`, and `--cpus 2`. The swap
+limit matches the memory limit, so the container does not add swap
+beyond that cap. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the engine socket this process already uses, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -309,6 +313,11 @@ _WORKFLOW_PATH = contextvars.ContextVar("rookrunner_workflow_path", default=None
 DEFAULT_NETWORK = "bridge"
 _CALLED_WORKFLOW = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 _NETWORKS = {DEFAULT_NETWORK, "none"}
+# A job cannot take the whole host. Swap matches memory, so the cap is
+# the memory value rather than Docker's default of twice that.
+_CONTAINER_MEMORY = "4g"
+_CONTAINER_PIDS = "1024"
+_CONTAINER_CPUS = "2"
 # Inside the job, the Docker client looks at this socket. GitHub's
 # permission error names the same path.
 # https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners
@@ -1402,6 +1411,21 @@ def _prepare_runner_account(docker, reference, account, deadline):
     _setup("runner account setup failed")
 
 
+def _limit_args():
+    """Return the resource flags applied to every job and service container."""
+
+    return [
+        "--memory",
+        _CONTAINER_MEMORY,
+        "--memory-swap",
+        _CONTAINER_MEMORY,
+        "--pids-limit",
+        _CONTAINER_PIDS,
+        "--cpus",
+        _CONTAINER_CPUS,
+    ]
+
+
 def _create_args(
     name,
     workspace,
@@ -1428,6 +1452,7 @@ def _create_args(
         network,
         "--user",
         f"{os.getuid()}:{os.getgid()}",
+        *_limit_args(),
     ]
     if socket_path is not None:
         # The engine socket is often mode 0660. The host gid opens a native
@@ -1727,6 +1752,7 @@ def _service_create_args(service_name, network_name, service, job_name):
         service["id"],
         "--label",
         f"rookrunner.owner={job_name}",
+        *_limit_args(),
     ]
     for key in sorted(service.get("env") or {}):
         args.extend(["--env", f"{key}={service['env'][key]}"])
