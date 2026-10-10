@@ -1,0 +1,3 @@
+# Public half of the SSH key that signs release tags.
+# The private key is not in this repository.
+322824348+mb2090@users.noreply.github.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4/lemcxNIbBZvx8dqW2f0i8Pdr+dfdPjSppvg7JGQx
