@@ -18,6 +18,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Fetch the annotated tag
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
       - name: Verify the tag signature
         run: sh .github/verify-tag.sh "$GITHUB_REF_NAME"
 
@@ -52,6 +55,9 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Fetch the annotated tag
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
 
       - name: Verify the tag signature
         run: sh .github/verify-tag.sh "$GITHUB_REF_NAME"

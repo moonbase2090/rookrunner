@@ -2,6 +2,7 @@
 
 """The v0.1.0 release workflow verifies the tag and publishes three assets."""
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text()
 NOTES = (ROOT / ".github" / "v0.1.0-release-notes.md").read_text()
 SIGNERS = (ROOT / ".github" / "allowed_signers").read_text()
 SCRIPT = ROOT / ".github" / "verify-tag.sh"
+FETCH_TAG = 'git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"'
 
 
 def _git(repo, *args, check=True):
@@ -137,6 +139,112 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 check=False,
             )
             self.assertNotEqual(unknown.returncode, 0)
+
+    def test_checkout_peel_is_replaced_by_the_annotated_tag_fetch(self):
+        self.assertEqual(WORKFLOW.count(FETCH_TAG), 2)
+        verify = 'sh .github/verify-tag.sh "$GITHUB_REF_NAME"'
+        search = 0
+        for _ in range(2):
+            fetch_at = WORKFLOW.index(FETCH_TAG, search)
+            verify_at = WORKFLOW.index(verify, fetch_at)
+            self.assertLess(fetch_at, verify_at)
+            search = verify_at + 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            origin = Path(tmp) / "origin"
+            github = _repo(origin, "release-test@example.com")
+            key = Path(tmp) / "id"
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    "ed25519",
+                    "-f",
+                    str(key),
+                    "-N",
+                    "",
+                    "-C",
+                    "release-workflow-test",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            public = key.with_suffix(".pub").read_text().strip()
+            (github / "allowed_signers").write_text(
+                'release-test@example.com namespaces="git" ' + public + "\n"
+            )
+            _git(origin, "add", ".github")
+            _git(origin, "commit", "-m", "verifier")
+            _git(origin, "config", "gpg.format", "ssh")
+            _git(origin, "config", "user.signingkey", str(key))
+            _git(origin, "tag", "-s", "v0.1.0", "-m", "signed")
+
+            clone = Path(tmp) / "clone"
+            subprocess.run(
+                ["git", "clone", str(origin), str(clone)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            before = subprocess.run(
+                ["sh", ".github/verify-tag.sh", "v0.1.0"],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(before.returncode, 0, before.stderr)
+            commit = _git(origin, "rev-parse", "HEAD").stdout.strip()
+            _git(
+                clone,
+                "fetch",
+                "--no-tags",
+                "--prune",
+                "--no-recurse-submodules",
+                "origin",
+                f"+{commit}:refs/tags/v0.1.0",
+            )
+            self.assertEqual(
+                _git(clone, "cat-file", "-t", "v0.1.0").stdout.strip(),
+                "commit",
+            )
+            rejected = subprocess.run(
+                ["sh", ".github/verify-tag.sh", "v0.1.0"],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(
+                "cannot verify a non-tag object of type commit",
+                rejected.stderr,
+            )
+            env = os.environ.copy()
+            env["GITHUB_REF_NAME"] = "v0.1.0"
+            fetched = subprocess.run(
+                FETCH_TAG,
+                cwd=clone,
+                env=env,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(fetched.returncode, 0, fetched.stderr)
+            self.assertEqual(
+                _git(clone, "cat-file", "-t", "v0.1.0").stdout.strip(),
+                "tag",
+            )
+            accepted = subprocess.run(
+                ["sh", ".github/verify-tag.sh", "v0.1.0"],
+                cwd=clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
 
 if __name__ == "__main__":
