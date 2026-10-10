@@ -41,16 +41,6 @@ jobs:
             > SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 2
 
-      - name: Upload the three release assets
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-assets
-          path: |
-            dist/execution_core-0.1.0-py3-none-any.whl
-            dist/execution_core-0.1.0.tar.gz
-            dist/SHA256SUMS
-          if-no-files-found: error
-
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -66,11 +56,25 @@ jobs:
       - name: Verify the tag signature
         run: sh .github/verify-tag.sh "$GITHUB_REF_NAME"
 
-      - name: Download the release assets
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          name: release-assets
-          path: dist
+          version: "0.12.18"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Build the wheel and the tarball
+        run: uv build --out-dir dist
+
+      - name: Write SHA256SUMS
+        run: |
+          set -eu
+          cd dist
+          sha256sum \
+            execution_core-0.1.0-py3-none-any.whl \
+            execution_core-0.1.0.tar.gz \
+            > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 2
 
       - name: Publish the prerelease
         env:
