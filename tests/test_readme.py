@@ -17,7 +17,7 @@ class ReadmeTests(unittest.TestCase):
 
     def test_milestones_match_the_roadmap(self):
         self.assertIn("M3 is implemented", PROSE)
-        self.assertIn("is not yet packaged", PROSE)
+        self.assertIn("are not yet published", PROSE)
         self.assertNotIn("M2 started", PROSE)
         self.assertNotIn("Packaging, MCP, and dashboard work remain", PROSE)
 
