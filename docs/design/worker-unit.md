@@ -22,7 +22,16 @@ durable engine checkout. `PYTHONPATH` is
 checkout. `ExecStart` is `/usr/bin/python3 -m execution_core` with
 `--state /var/lib/rookrunner/state`, the `worker` command, and
 `--repository /var/lib/rookrunner/clone`. `NoNewPrivileges=yes` is
-set. `WantedBy=default.target` is the user-session install target.
+set. The unit also sets `PrivateTmp`, `PrivateDevices`,
+`ProtectSystem=strict`, `ProtectHome`, the kernel and control-group
+protections, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible`,
+`ProcSubset=pid`, `RestrictNamespaces`, `RestrictRealtime`,
+`RestrictSUIDSGID`, `LockPersonality`, `RemoveIPC`,
+`SystemCallArchitectures=native`, an empty `CapabilityBoundingSet`,
+`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, and `UMask=0077`.
+`ReadWritePaths` is `/var/lib/rookrunner/state` and
+`/var/lib/rookrunner/clone`. The engine checkout stays read-only.
+`WantedBy=default.target` is the user-session install target.
 The unit has no `User=` line. The user who enables it is the
 service user.
 

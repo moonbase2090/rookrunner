@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The worker unit keeps the state directory and the clone writable
+  and mounts the rest of the filesystem read-only. It drops
+  capabilities and limits address families to Unix sockets and IP.
 - Job and service containers are created with a memory limit of 4g,
   no swap beyond that limit, a process limit of 1024, and a CPU limit
   of 2. The default network remains bridge.

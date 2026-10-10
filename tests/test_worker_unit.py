@@ -19,6 +19,31 @@ class WorkerUnitTests(unittest.TestCase):
         self.assertIn("Type=simple\n", self.text)
         self.assertIn("Restart=always\n", self.text)
         self.assertIn("NoNewPrivileges=yes\n", self.text)
+        for line in (
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectSystem=strict",
+            "ProtectHome=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectKernelModules=yes",
+            "ProtectKernelLogs=yes",
+            "ProtectControlGroups=yes",
+            "ProtectClock=yes",
+            "ProtectHostname=yes",
+            "ProtectProc=invisible",
+            "ProcSubset=pid",
+            "RestrictNamespaces=yes",
+            "RestrictRealtime=yes",
+            "RestrictSUIDSGID=yes",
+            "LockPersonality=yes",
+            "RemoveIPC=yes",
+            "SystemCallArchitectures=native",
+            "CapabilityBoundingSet=",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+            "UMask=0077",
+            "ReadWritePaths=/var/lib/rookrunner/state /var/lib/rookrunner/clone",
+        ):
+            self.assertIn(line + "\n", self.text, line)
         self.assertIn("WorkingDirectory=/var/lib/rookrunner/engine\n", self.text)
         self.assertIn(
             "Environment=PYTHONPATH=/var/lib/rookrunner/engine/src\n",

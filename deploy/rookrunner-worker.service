@@ -10,6 +10,28 @@ Environment=PYTHONPATH=/var/lib/rookrunner/engine/src
 ExecStart=/usr/bin/python3 -m execution_core --state /var/lib/rookrunner/state worker --repository /var/lib/rookrunner/clone
 Restart=always
 NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+ReadWritePaths=/var/lib/rookrunner/state /var/lib/rookrunner/clone
 
 [Install]
 WantedBy=default.target
