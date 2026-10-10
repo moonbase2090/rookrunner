@@ -2,7 +2,11 @@
 
 Status: proposed. This document is a plan. It does not install a
 unit, load a timer, enable linger, copy a key, build an image, or
-start the status page. The host install is a later pull request.
+start the status page. The hosts are running that install. The
+record is
+[Nexus and Vertex dogfood start](../validation/dogfood-nexus-vertex.md).
+The 14-day window is open. Success criteria are written when the
+window ends. Paused items stay paused.
 
 Capability version stays 12.
 `.github/workflows/check.yml` is unchanged.
@@ -46,15 +50,17 @@ jobs are not in this configuration. `linux-cli-aarch64` is a
 separate Mac place at cap 1. The two passes keep separate state
 directories, and their job lists do not overlap.
 
-The process that posts checks is the Mac launchd poller in that
-document. It passes the App key flag. The key file stays on the
-Mac. A host does not receive a copy. Linux hosts have no poll
-timer in the accepted unit documents.
+The process that posts checks is the poller on each box. It passes
+`--app-key` for that box's own key. The Mac key stays on the Mac.
+The Mac place for these three jobs is stopped. The aarch64 pass
+stays on the Mac. The accepted unit documents have no poll timer.
+The timer is the one this plan describes, and the record says it
+is enabled.
 
 The status page is implemented. The command is `status-page`. It
 binds `127.0.0.1:8765` and calls `status.view` only. The design is
 [status page](../design/status-page.md). Those pull requests do not
-start the page on a host.
+start the page on a host. The record says each box is serving it.
 
 The paused list is in [the roadmap](../roadmap.md#planned-paused).
 Paused until this dogfood:
@@ -67,9 +73,9 @@ Untrusted code is not on that list.
 
 ## What to install
 
-The later pull request installs two processes on Nexus and the same
-two processes on Vertex. This pull request does not install either
-process.
+The install runs two processes on Nexus and the same two processes
+on Vertex. This document does not install either process. What is
+running is the record linked above.
 
 ### Worker
 
@@ -110,33 +116,31 @@ python3 -m execution_core
 Vertex uses the same command with `"name":"vertex"`, `"cap":2`, and
 `"<vertex lightwell image>"`.
 
-The pass does not pass `--allow-untrusted`, `--app-key`,
-`--credential-file`, `--docker-socket`, or `--ssh-host`.
+The pass does not pass `--allow-untrusted`,
+`--credential-file`, `--docker-socket`, or `--ssh-host`. The
+installed pass adds `--app-key` for that box's own key. The record
+describes that key.
 
 ### What the later letter still has to keep
 
-The accepted documents keep the posting poller on the Mac because
-the App key stays on the Mac. This plan proposes a poller on each
-box and proposes that poller with no key. The later letter can add
-the timer only while the host still has no copy of the key and the
-unit still has no `--app-key`. Listing and check posting that need
-the App key stay on the Mac poller until a later decision names a
-credential that is not a copy of that key. This document does not
-name that credential.
+The letter has been carried out. Implemented behavior is in the
+record linked above. These constraints stay in force:
 
-Until that letter, day-to-day placement stays the Mac pass in
-[Lightwell poll](../design/lightwell-poll.md): the three jobs,
-Nexus then Vertex, caps 4 and 2, `--image` omitted, separate state
-directories. The later letter starts the box timer only after that
-Mac place for the same jobs has stopped, so two pollers do not
-submit the same job. The aarch64 pass stays on the Mac.
+- The worker unit has no `--app-key`, no `--docker-socket`, and no
+  listen socket. The repository copy of the unit stays free of a
+  digest and a key path. The host copy appends that host's
+  lightwell image digest.
+- Each box's poller uses its own App key at the path the engine
+  already accepts. The Mac key stays on the Mac.
+- The Mac place for these three jobs stays stopped, so it does not
+  submit them beside the box timers. The aarch64 pass stays on the
+  Mac.
+- The poller omits `--allow-untrusted`.
 
-The later letter also creates `/var/lib/rookrunner/engine`,
-`/var/lib/rookrunner/state`, `/var/lib/rookrunner/poll`, and
-`/var/lib/rookrunner/clone`, copies the unit, and appends the host
-digest. Linger stays off until that letter runs the linger command
-already recorded for the service user. This document does not run
-that command.
+Before that letter, this plan kept day-to-day placement on the Mac
+pass in [Lightwell poll](../design/lightwell-poll.md) and proposed
+a box poller with no key. The letter named each box's own key and
+stopped that Mac place before the box timers started.
 
 ## Repositories
 
@@ -202,7 +206,7 @@ https://docs.github.com/en/actions/reference/security/secure-use
 ## Status page
 
 On each box the operator opens `http://127.0.0.1:8765/` in a
-browser on that box. The command the later letter starts is:
+browser on that box. The command the record says is running is:
 
 ```text
 python3 -m execution_core --state /var/lib/rookrunner/state status-page
@@ -222,9 +226,9 @@ signal the worker. It has no cancel, retry, submit, or status
 post. It is not the M3 dashboard. A second process exits 1. Its
 stderr line is `status page could not bind 127.0.0.1:8765`.
 
-While the Mac pass is the poller, `poll.json` stays in the Mac poll
-state. After posts, and before the final save of that file, the
-pass calls `poll.record` on each place whose origin was accepted.
+The box poller keeps `poll.json` in its poll state. After posts,
+and before the final save of that file, the pass calls
+`poll.record` on each place whose origin was accepted.
 The page reads that stamp from `status.view`. It does not read
 `poll.json`. A place is stamped only when `remote_repository` is
 set. A `poll_stamp` skip does not stop the pass from saving.
@@ -240,8 +244,8 @@ Otherwise the cell is `not posted`. The page shows no filesystem
 path, home path, secret, token, or submission key.
 
 A page on the Mac that renders a Nexus or Vertex worker is a
-non-goal. The later letter starts the page on the box. This pull
-request does not start it.
+non-goal. The record says the page is running on each box. This
+document does not start it.
 
 ## How long it runs
 
@@ -296,8 +300,8 @@ not a successful run.
 7. At the end of the window the engine still rejects macOS jobs,
    `actions/cache`, Docker actions, `actions/setup-node`, and
    `hashFiles`. The host unit still has no `--app-key`, no
-   `--docker-socket`, and no listen socket. The App key was not
-   copied onto the box.
+   `--docker-socket`, and no listen socket. The Mac key stays on
+   the Mac. Each box's poller key is its own.
 
 ## What a finding unlocks
 
