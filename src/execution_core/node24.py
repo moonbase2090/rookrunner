@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Operator-supplied Node 24 directory.
 
 The worker does not download or bundle Node. ``worker --node24 DIR`` names

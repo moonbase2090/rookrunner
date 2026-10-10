@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Job-token mint, delivery, and revocation against a local HTTP stub.
 
 No test reads ~/Secrets/github-app/rookrunner-app/ and no test contacts

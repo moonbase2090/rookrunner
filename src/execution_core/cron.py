@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Five-field UTC cron, with GitHub's day-of-month / day-of-week rule.
 
 A tick is one UTC minute. When both the day-of-month and the day-of-week

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """The poller reaches a worker through ssh -o BatchMode=yes.
 
 The remote command is the local client. Tests put a stand-in ssh on PATH.

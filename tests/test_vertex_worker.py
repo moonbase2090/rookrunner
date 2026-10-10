@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Vertex uses the shared worker unit and enables linger on the host.
 
 The unit file does not carry a linger directive.

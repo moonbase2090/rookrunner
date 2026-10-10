@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One commit-status post for one run.
 
 The credential is read at call time from an operator file. It is not

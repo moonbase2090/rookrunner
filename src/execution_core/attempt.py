@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Materialize a private attempt workspace from a verified snapshot.
 
 The workspace is a new directory. It is not the snapshot tree. Bytes are copied

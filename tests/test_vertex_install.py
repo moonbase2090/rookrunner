@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """The Vertex install letter enables linger and does not open a port.
 
 The commands name the vertex host. The pull request does not run them.

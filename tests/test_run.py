@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 import ast
 from pathlib import Path
 import hashlib

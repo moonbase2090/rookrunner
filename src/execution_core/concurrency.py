@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Concurrency groups for one worker.
 
 The plan stores the source. This module evaluates it when a run is

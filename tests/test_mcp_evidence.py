@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Artifact tools on the stdio MCP adapter.
 
 `artifacts` and `artifact_read` forward one socket call each.

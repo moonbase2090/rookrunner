@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Startup rules for the worker secret flags and the Docker socket.
 
 ``--secrets`` takes no path. ``--app-key`` accepts one path and does not

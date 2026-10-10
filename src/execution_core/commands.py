@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Environment files and stdout workflow commands for one job.
 
 `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` are read after a step

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Remote checkout and the host claim.
 
 The stand-in ssh is first on PATH. It records argv and runs the remote

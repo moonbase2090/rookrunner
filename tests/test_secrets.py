@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """File-backed step env, with, and run. HOME points at a temporary directory.
 
 No test reads the GitHub App key directory or contacts api.github.com.

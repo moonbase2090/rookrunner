@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """The poller posts rookrunner/signoff from CODEOWNERS and the sign-off label.
 
 No test reads a secret or contacts api.github.com. Expected states are

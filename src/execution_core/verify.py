@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Read-only check that a captured snapshot still matches its manifest.
 
 Verification does not create an attempt directory, does not follow a symlink

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """File-backed secrets for one repository.
 
 The store is ``~/Secrets/rookrunner-secrets/<owner>/<repo>/``. A file is

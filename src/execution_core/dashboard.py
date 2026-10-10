@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Terminal dashboard.
 
 The view reads the worker socket and binds no port. Each action has

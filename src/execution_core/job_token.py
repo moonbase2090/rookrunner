@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One Contents-read installation token for one job.
 
 This is not the check-run post token. The mint body always names the

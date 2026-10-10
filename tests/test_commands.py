@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 import unittest
 
 from execution_core.commands import mask_text, parse_env, parse_output, parse_path, process_stdout

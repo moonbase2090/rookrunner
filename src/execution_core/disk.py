@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Bytes under one worker state directory.
 
 The default budget is the default GitHub Actions cache storage limit: 10 GB

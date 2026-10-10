@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Cron matching and the one-tick catch-up rule. Times are UTC."""
 
 import unittest

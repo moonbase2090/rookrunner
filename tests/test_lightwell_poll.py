@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """The Lightwell poll configuration names the Linux jobs and the places."""
 
 import re

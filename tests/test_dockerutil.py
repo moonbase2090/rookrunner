@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 import unittest
 
 from dockerutil import container_id_from_hostname, foreign_ids, foreign_named, same_container

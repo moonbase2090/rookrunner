@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """One poll pass for one configured repository.
 
 The operating system's scheduler starts this command. The pass lists

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 """Error results on the stdio MCP adapter.
 
 A bad tool call is a tool error and the session stays open. An

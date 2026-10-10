@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MPL-2.0
+
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
