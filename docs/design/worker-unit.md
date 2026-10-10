@@ -44,6 +44,13 @@ contains no image digest. The documented parent digest stays where
 the runner-image document already records it. A host digest is
 added only in the unit copied onto that host.
 
+A host copy that adds the documented `~/Secrets` key flows
+(`--app-key` or `--secrets`) must re-expose that path.
+`ProtectHome=yes` hides the service user's home, so the key file
+is unreadable and the startup probe treats a missing `~/Secrets`
+directory as not shared. Secrets then stay absent without an error.
+The template unit itself still omits those flags.
+
 ## Accepted, and not done here
 
 The Nexus install letter creates `/var/lib/rookrunner/engine`,
