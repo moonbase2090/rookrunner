@@ -133,7 +133,7 @@ class StatusViewTests(unittest.TestCase):
         self.assertEqual(row["state"], "succeeded")
         self.assertEqual(row["exit_code"], 0)
         self.assertEqual(view["poll"], {"completed_at": None, "repository": None})
-        self.assertEqual(view["worker"]["version"], "0.1.0")
+        self.assertEqual(view["worker"]["version"], "0.1.1")
         self.assertIs(view["worker"]["ready"], True)
         self.assertIsNone(view["worker"]["readiness_error"])
         self.assertIsNone(view["worker"]["runner_image"])

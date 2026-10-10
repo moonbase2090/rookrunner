@@ -1,9 +1,9 @@
 # Install
 
-Version 0.1.0 can be installed in two ways. Neither way is a
+Version 0.1.1 can be installed in two ways. Neither way is a
 published download yet. `uv build` in a checkout writes
-`execution_core-0.1.0-py3-none-any.whl` and
-`execution_core-0.1.0.tar.gz`. A later release will attach those
+`execution_core-0.1.1-py3-none-any.whl` and
+`execution_core-0.1.1.tar.gz`. A later release will attach those
 files. This page does not install anything on Nexus or Vertex.
 
 ## A developer machine
@@ -13,7 +13,7 @@ PyYAML 6.0.3 and does not vendor it.
 
 ```sh
 uv venv
-uv pip install ./execution_core-0.1.0-py3-none-any.whl
+uv pip install ./execution_core-0.1.1-py3-none-any.whl
 python -m execution_core --help
 ```
 
@@ -37,7 +37,7 @@ no `--app-key`, no `--docker-socket`, and no listen socket.
    `/var/lib/rookrunner/engine/src/execution_core`.
 
 ```sh
-tar -xzf execution_core-0.1.0.tar.gz -C /var/lib/rookrunner/engine --strip-components=1
+tar -xzf execution_core-0.1.1.tar.gz -C /var/lib/rookrunner/engine --strip-components=1
 ```
 
 3. Install PyYAML for `/usr/bin/python3`. The unit runs that
