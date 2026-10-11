@@ -3,9 +3,12 @@
 """Startup rules for the worker secret flags and the Docker socket.
 
 ``--secrets`` takes no path. ``--app-key`` accepts one path and does not
-open it. ``--docker-socket`` combined with either flag refuses unless the
-``~/Secrets`` probe reports that the directory is not shared. This module
-does not inject a secret and does not mint a token.
+open it. The accepted file is ``private-key.pem`` in the key directory.
+``--key-dir`` overrides ``ROOKRUNNER_KEY_DIR``. Otherwise the directory is
+``$XDG_CONFIG_HOME/rookrunner/keys``, or ``~/.config/rookrunner/keys`` when
+that variable is unset. ``--docker-socket`` combined with either flag
+refuses unless the key-directory probe reports that the directory is not
+shared. This module does not inject a secret and does not mint a token.
 """
 
 import os
@@ -17,9 +20,8 @@ import subprocess
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?")
 _APP_KEY_MESSAGE = (
-    "worker --app-key accepts only ~/Secrets/github-app/rookrunner-app/private-key.pem"
+    "worker --app-key accepts only private-key.pem in the configured key directory"
 )
-_APP_KEY_PARTS = ("Secrets", "github-app", "rookrunner-app", "private-key.pem")
 # The command prints nothing. Exit 42 means the mount is a usable directory.
 _PROBE_SCRIPT = (
     "if [ -d /rr-secrets ] && [ -r /rr-secrets ] && [ -x /rr-secrets ]; "
@@ -32,11 +34,70 @@ _MOUNT_MARKERS = (
     "mounts denied",
     "invalid mount config",
 )
-HOST_CONTROL_WARNING = (
-    "docker socket exposes the host engine, including "
-    "~/Secrets/github-app/rookrunner-app/ and "
-    "~/Secrets/rookrunner-secrets/"
-)
+
+
+def _present(value):
+    return isinstance(value, str) and value.strip() != ""
+
+
+def config_home():
+    """Return the configuration home. Do not create it."""
+
+    raw = os.environ.get("XDG_CONFIG_HOME")
+    path = Path(raw).expanduser() if _present(raw) else Path.home() / ".config"
+    if not path.is_absolute():
+        raise ValueError("key directory must be absolute")
+    return _lexical(path)
+
+
+def resolve_key_dir(explicit=None):
+    """Return the key directory. The flag wins, then the env, then the default."""
+
+    if _present(explicit):
+        raw = explicit
+    else:
+        env = os.environ.get("ROOKRUNNER_KEY_DIR")
+        raw = env if _present(env) else config_home() / "rookrunner" / "keys"
+    path = _lexical(Path(raw).expanduser())
+    if not path.is_absolute():
+        raise ValueError("key directory must be absolute")
+    return path
+
+
+def file_store_root():
+    """Return the file-secret store root. Do not create it."""
+
+    return _lexical(config_home() / "rookrunner" / "files")
+
+
+def probe_directories(key_dir=None):
+    """Return the directories the Docker probe must show are unshared."""
+
+    key = resolve_key_dir(key_dir)
+    root = _lexical(config_home() / "rookrunner")
+    try:
+        key.relative_to(root)
+    except ValueError:
+        return [key, root]
+    return [root]
+
+
+def _display(path):
+    home = _lexical(Path.home())
+    path = _lexical(path)
+    try:
+        relative = path.relative_to(home)
+    except ValueError:
+        return path.as_posix()
+    return "~/" + relative.as_posix()
+
+
+def host_control_warning(key_dir=None):
+    """Name the key directory and the file store without expanding home."""
+
+    key = _display(resolve_key_dir(key_dir))
+    store = _display(file_store_root())
+    return f"docker socket exposes the host engine, including {key}/ and {store}/"
 
 
 class SocketFlags:
@@ -100,7 +161,19 @@ def _symlink_below_home(path, home):
     return False
 
 
-def accept_app_key(value):
+def _redirected(path):
+    home = _lexical(Path.home())
+    try:
+        path.relative_to(home)
+    except ValueError:
+        try:
+            return path.is_symlink() or path.parent.is_symlink()
+        except OSError:
+            return True
+    return _symlink_below_home(path, home)
+
+
+def accept_app_key(value, key_dir=None):
     """Return the one accepted key path. Do not open the file."""
 
     if not isinstance(value, str) or value == "" or "\0" in value or "\n" in value:
@@ -108,10 +181,12 @@ def accept_app_key(value):
     expanded = Path(value).expanduser()
     if not expanded.is_absolute():
         raise ValueError(_APP_KEY_MESSAGE)
-    home = Path.home()
-    allowed = _lexical(home.joinpath(*_APP_KEY_PARTS))
+    try:
+        allowed = _lexical(resolve_key_dir(key_dir) / "private-key.pem")
+    except ValueError:
+        raise ValueError(_APP_KEY_MESSAGE) from None
     candidate = _lexical(expanded)
-    if candidate != allowed or _symlink_below_home(candidate, _lexical(home)):
+    if candidate != allowed or _redirected(candidate):
         raise ValueError(_APP_KEY_MESSAGE)
     return str(allowed)
 
@@ -171,7 +246,7 @@ def _mount_source(secrets_dir, partners):
         or not text.startswith("/")
         or any(character in text for character in (",", "\n", "\0"))
     ):
-        raise ValueError(_combination(partners, "the ~/Secrets probe cannot run"))
+        raise ValueError(_combination(partners, "the key-directory probe cannot run"))
     return text
 
 
@@ -210,7 +285,7 @@ def _invoke(invoke, args, timeout, partners, detail):
 
 
 def probe_secrets_unshared(image, partners, secrets_dir=None, invoke=None):
-    """Return True when ``~/Secrets`` is not usable inside ``image``.
+    """Return True when the key directory is not usable inside ``image``.
 
     The container's only host mount is that directory, read-only. It does
     not receive the Docker socket. Its command prints no file names and no
@@ -222,7 +297,7 @@ def probe_secrets_unshared(image, partners, secrets_dir=None, invoke=None):
     """
 
     if secrets_dir is None:
-        secrets_dir = Path.home() / "Secrets"
+        secrets_dir = probe_directories()[0]
     if invoke is None:
         invoke = _docker_invoke
     source = _mount_source(secrets_dir, partners)
@@ -290,7 +365,7 @@ def probe_secrets_unshared(image, partners, secrets_dir=None, invoke=None):
         except (AttributeError, UnicodeError, ValueError):
             raise ValueError(_combination(partners, image_failure)) from None
         if status == 42:
-            raise ValueError(_combination(partners, "~/Secrets is a usable directory"))
+            raise ValueError(_combination(partners, "the key directory is a usable directory"))
         if status != 0:
             raise ValueError(_combination(partners, image_failure))
         return True
@@ -312,13 +387,14 @@ def accept_socket_flags(
     secret_refs,
     secret_pushers,
     runner_image,
+    key_dir=None,
 ):
     """Validate the worker flags. Probe only for a socket combination."""
 
     if type(secrets) is not bool:
         raise ValueError("worker --secrets takes no path")
     repository = _repository(github_repository, secrets)
-    key = None if app_key is None else accept_app_key(app_key)
+    key = None if app_key is None else accept_app_key(app_key, key_dir)
     refs = _sequence(secret_refs, _secret_ref, "worker --secret-ref must be a full ref")
     pushers = _sequence(
         secret_pushers, _secret_pusher, "worker --secret-pusher must be a GitHub login"
@@ -331,13 +407,14 @@ def accept_socket_flags(
     if docker_socket and partners:
         if runner_image is None:
             raise ValueError(
-                _combination(partners, "the ~/Secrets probe needs worker --runner-image")
+                _combination(partners, "the key-directory probe needs worker --runner-image")
             )
-        unshared = probe_secrets_unshared(
-            runner_image,
-            partners,
-            secrets_dir=Path.home() / "Secrets",
-        )
-        if unshared is False:
-            raise ValueError(_combination(partners, "~/Secrets is a usable directory"))
+        for directory in probe_directories(key_dir):
+            unshared = probe_secrets_unshared(
+                runner_image,
+                partners,
+                secrets_dir=directory,
+            )
+            if unshared is False:
+                raise ValueError(_combination(partners, "the key directory is a usable directory"))
     return SocketFlags(secrets, repository, key, refs, pushers)

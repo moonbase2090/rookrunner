@@ -2,7 +2,7 @@
 
 """Check runs through a local HTTP stub and a fixture key under a temporary HOME.
 
-No test reads ~/Secrets/github-app/rookrunner-app/ and no test contacts api.github.com.
+No test reads ~/.config/rookrunner/keys/ and no test contacts api.github.com.
 """
 
 import base64
@@ -30,6 +30,7 @@ from schema_support import validate_response
 from test_status import COMMIT, CONTEXT, HEAD, _snapshot
 
 
+APP_KEY = "~/.config/rookrunner/keys/private-key.pem"
 CLIENT = "Iv1.fixtureclient"
 INSTALL = "424242"
 TOKEN = "ghs_fixture_installation_token"
@@ -195,6 +196,11 @@ class CliCheckTests(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.home = self.root / "home"
         self.home.mkdir()
+        self._saved_env = {
+            name: os.environ.get(name) for name in ("XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.state = self.root / "state"
@@ -235,10 +241,15 @@ class CliCheckTests(unittest.TestCase):
         if self.worker.poll() is None:
             self.worker.terminate()
         self.worker.communicate(timeout=5)
+        for name, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         self.tmp.cleanup()
 
     def _install(self, pem=None, mode=0o600, directory_mode=0o700):
-        directory = self.home / "Secrets" / "github-app" / "rookrunner-app"
+        directory = self.home / ".config" / "rookrunner" / "keys"
         directory.mkdir(parents=True)
         os.chmod(directory, directory_mode)
         key = directory / "private-key.pem"
@@ -320,7 +331,7 @@ class CliCheckTests(unittest.TestCase):
         ]
         app_key = key
         if app_key is None and (both or credential is None):
-            app_key = "~/Secrets/github-app/rookrunner-app/private-key.pem"
+            app_key = APP_KEY
         if app_key is not None:
             command.extend(["--app-key", str(app_key)])
         if credential is not None or both:
@@ -446,7 +457,7 @@ class CliCheckTests(unittest.TestCase):
                 check_run_id=None,
                 status_state="pending",
                 post_status_request=True,
-                app_key="~/Secrets/github-app/rookrunner-app/private-key.pem",
+                app_key=APP_KEY,
                 state_dir=self.state,
                 repository_root=self.repo,
                 clock=moment,
@@ -492,7 +503,7 @@ class CliCheckTests(unittest.TestCase):
                 check_run_id=None,
                 status_state="success",
                 post_status_request=False,
-                app_key="~/Secrets/github-app/rookrunner-app/private-key.pem",
+                app_key=APP_KEY,
                 state_dir=self.state,
                 repository_root=self.repo,
                 clock=datetime(2026, 10, 5, 12, 0, tzinfo=UTC),
@@ -587,7 +598,7 @@ class CliCheckTests(unittest.TestCase):
         outside = self.root / "private-key.pem"
         outside.write_bytes(self.pem_bytes)
         os.chmod(outside, 0o600)
-        link = self.home / "Secrets" / "github-app" / "rookrunner-app" / "linked.pem"
+        link = self.key.parent / "linked.pem"
         link.symlink_to(self.key)
         renamed = self.key.with_name("moved.pem")
         self.key.rename(renamed)

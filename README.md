@@ -79,10 +79,10 @@ replace those three. The volume is removed with the job container. The
 host `/tmp` is not mounted. The image must already contain the Docker
 client. Combining `--docker-socket` with `--app-key` or `--secrets`
 refuses at startup unless `--runner-image` is set and a startup probe
-shows `~/Secrets` is not a usable directory in that image. A worker
+shows the configured key directory is not a usable directory in that image. A worker
 that starts with `--docker-socket` warns that the exposure includes
-`~/Secrets/github-app/rookrunner-app/` and
-`~/Secrets/rookrunner-secrets/`.
+`~/.config/rookrunner/keys/` and
+`~/.config/rookrunner/files/`.
 GitHub requires that service to be installed and running on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 

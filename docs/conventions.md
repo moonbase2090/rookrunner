@@ -17,7 +17,7 @@ Review rows stay with Muse until a check exists.
 | Tests are `unittest` modules under `tests/`. No pytest. | CI (planned): PT stays off; a check rejects a pytest import |
 | A test does not pass `dir="/private/tmp"` to `TemporaryDirectory`. GitHub-hosted runners have no `/private/tmp`. | CI (planned) |
 | A test Git identity is `Fixture` and `fixture@example.invalid`. | Review |
-| A test does not read `~/Secrets` and does not contact `api.github.com`. `HOME` is a temp directory only when the test touches a key path. | CI (planned) for the two banned strings |
+| A test does not read the configured key directory and does not contact `api.github.com`. `HOME` is a temp directory only when the test touches a key path. | CI (planned) for the two banned strings |
 | Runtime dependencies are `pyyaml` only. Workflow YAML uses a `SafeLoader` subclass. `yaml.load`, `yaml.unsafe_load`, and `CLoader` stay unused. | CI (planned) |
 | User-facing JSON is `protocol.canonical`, printed from `cli.py`. | CI: T20, with `cli.py` as the listed print site |
 | The worker may print the host-control warning to stderr. That call is one row in `docs/lints.md`. | CI |

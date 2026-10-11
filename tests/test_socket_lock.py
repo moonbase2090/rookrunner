@@ -3,7 +3,7 @@
 """Startup lock for worker --docker-socket, --secrets, and --app-key.
 
 The probe is exercised with a fake Docker client. No test reads
-~/Secrets/github-app/rookrunner-app/ and no test contacts api.github.com.
+~/.config/rookrunner/keys/ and no test contacts api.github.com.
 HOME points at a temporary directory.
 """
 
@@ -18,16 +18,16 @@ import unittest
 from unittest.mock import patch
 
 from execution_core.cli import call
-from execution_core.socket_lock import (
-    HOST_CONTROL_WARNING,
-    accept_app_key,
-    probe_secrets_unshared,
-)
+from execution_core.socket_lock import accept_app_key, probe_secrets_unshared
 from execution_core.worker import Worker
 
 IMAGE = "example.invalid/runner@sha256:" + "ab" * 32
-APP_KEY = "~/Secrets/github-app/rookrunner-app/private-key.pem"
-KEY_PARTS = ("Secrets", "github-app", "rookrunner-app", "private-key.pem")
+APP_KEY = "~/.config/rookrunner/keys/private-key.pem"
+KEY_PARTS = (".config", "rookrunner", "keys", "private-key.pem")
+WARNING = (
+    "docker socket exposes the host engine, including "
+    "~/.config/rookrunner/keys/ and ~/.config/rookrunner/files/"
+)
 PROBE_SCRIPT = (
     "if [ -d /rr-secrets ] && [ -r /rr-secrets ] && [ -x /rr-secrets ]; "
     "then exit 42; else exit 0; fi"
@@ -48,7 +48,10 @@ class _HomeTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="socket-lock-")
         self.home = Path(self.tmp.name) / "home"
         self.home.mkdir()
-        self._env = patch.dict(os.environ, {"HOME": str(self.home)})
+        self._env = patch.dict(
+            os.environ,
+            {"HOME": str(self.home), "XDG_CONFIG_HOME": "", "ROOKRUNNER_KEY_DIR": ""},
+        )
         self._env.start()
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
@@ -84,7 +87,7 @@ class FlagTests(_HomeTest):
         worker = self.worker(secrets=True, github_repository="Owner/Demo")
         self.assertIs(worker.secrets, True)
         self.assertEqual(worker.github_repository, "Owner/Demo")
-        self.assertFalse((self.home / "Secrets").exists())
+        self.assertFalse((self.home / ".config").exists())
 
     def test_app_key_accepts_only_the_home_path_and_does_not_open_it(self):
         with (
@@ -101,7 +104,7 @@ class FlagTests(_HomeTest):
             self.worker(app_key=bad)
         self.assertNotIn("CANARY-NOT-THIS-PATH", str(caught.exception))
         with self.assertRaisesRegex(ValueError, "worker --app-key"):
-            self.worker(app_key="Secrets/github-app/rookrunner-app/private-key.pem")
+            self.worker(app_key="keys/private-key.pem")
 
     def test_app_key_refuses_a_symlink_without_reading_the_target(self):
         allowed = self.home.joinpath(*KEY_PARTS)
@@ -134,9 +137,8 @@ class FlagTests(_HomeTest):
     def test_docker_socket_alone_warns_and_names_both_directories(self):
         worker = self.worker(docker_socket=True)
         self.assertIs(worker.docker_socket, True)
-        self.assertIn("~/Secrets/github-app/rookrunner-app/", worker.host_control_warning)
-        self.assertIn("~/Secrets/rookrunner-secrets/", worker.host_control_warning)
-        self.assertEqual(worker.host_control_warning, HOST_CONTROL_WARNING)
+        self.assertEqual(worker.host_control_warning, WARNING)
+        self.assertNotIn(str(self.home), worker.host_control_warning)
         self.assertIsNone(self.worker().host_control_warning)
 
     def test_combination_without_a_runner_image_names_both_flags(self):
@@ -176,7 +178,9 @@ class FlagTests(_HomeTest):
         probe.assert_called_once()
         self.assertEqual(probe.call_args.args[0], IMAGE)
         self.assertEqual(probe.call_args.args[1], ["--app-key", "--secrets"])
-        self.assertEqual(probe.call_args.kwargs["secrets_dir"], self.home / "Secrets")
+        self.assertEqual(
+            probe.call_args.kwargs["secrets_dir"], self.home / ".config" / "rookrunner"
+        )
         self.assertIs(worker.docker_socket, True)
         self.assertIs(worker.secrets, True)
         self.assertEqual(worker.app_key, self.key_path())
@@ -195,6 +199,50 @@ class FlagTests(_HomeTest):
         self.assertIn("worker --app-key", text)
         self.assertIn("usable directory", text)
         self.assertNotIn(str(self.home), text)
+
+    def test_key_directory_precedence_and_the_retired_path(self):
+        retired = "~/" + "Sec" + "rets/github-app/rookrunner-app/private-key.pem"
+        with self.assertRaisesRegex(ValueError, "configured key directory") as caught:
+            accept_app_key(retired)
+        self.assertNotIn("github-app", str(caught.exception))
+        chosen = self.home / "from-env"
+        os.environ["ROOKRUNNER_KEY_DIR"] = str(chosen)
+        self.assertEqual(
+            accept_app_key(str(chosen / "private-key.pem")),
+            str(chosen / "private-key.pem"),
+        )
+        xdg = self.home / "xdg"
+        os.environ["ROOKRUNNER_KEY_DIR"] = ""
+        os.environ["XDG_CONFIG_HOME"] = str(xdg)
+        xdg_key = xdg / "rookrunner" / "keys" / "private-key.pem"
+        self.assertEqual(accept_app_key(str(xdg_key)), str(xdg_key))
+        flag = self.home / "flagged"
+        os.environ["ROOKRUNNER_KEY_DIR"] = str(chosen)
+        self.assertEqual(
+            accept_app_key(str(flag / "private-key.pem"), key_dir=str(flag)),
+            str(flag / "private-key.pem"),
+        )
+        with self.assertRaisesRegex(ValueError, "configured key directory") as caught:
+            accept_app_key(str(chosen / "private-key.pem"), key_dir=str(flag))
+        self.assertNotIn(str(chosen), str(caught.exception))
+        with self.assertRaisesRegex(ValueError, "configured key directory") as caught:
+            accept_app_key(self.key_path(), key_dir="relative/keys")
+        self.assertNotIn("relative", str(caught.exception))
+
+    def test_an_outside_key_directory_is_probed_with_the_config_root(self):
+        outside = Path(self.tmp.name) / "outside-keys"
+        with patch("execution_core.socket_lock.probe_secrets_unshared", return_value=True) as probe:
+            worker = self.worker(
+                docker_socket=True,
+                app_key=str(outside / "private-key.pem"),
+                key_dir=str(outside),
+                runner_image=IMAGE,
+            )
+        self.assertEqual(probe.call_count, 2)
+        probed = [call.kwargs["secrets_dir"] for call in probe.call_args_list]
+        self.assertEqual(probed, [outside, self.home / ".config" / "rookrunner"])
+        self.assertNotIn(str(self.home), worker.host_control_warning)
+        self.assertIn(outside.as_posix() + "/", worker.host_control_warning)
 
 
 def _client(
@@ -231,7 +279,7 @@ def _client(
 class ProbeTests(_HomeTest):
     def _probe(self, invoke, secrets_dir=None):
         if secrets_dir is None:
-            secrets_dir = self.home / "Secrets"
+            secrets_dir = self.home / ".config" / "rookrunner"
         return probe_secrets_unshared(
             IMAGE,
             ["--secrets"],
@@ -254,14 +302,14 @@ class ProbeTests(_HomeTest):
         self.assertTrue(
             created[created.index("--name") + 1].startswith("rookrunner-secrets-probe-")
         )
-        self.assertFalse((self.home / "Secrets").exists())
+        self.assertFalse((self.home / ".config").exists())
 
     def test_a_directory_that_is_not_usable_passes(self):
         calls, invoke = _client(wait=(0, b"0\n", b"CANARY-BYTES"))
         self.assertIs(self._probe(invoke), True)
         create = self._create(calls)
         mount = create[create.index("--mount") + 1]
-        source = str(self.home / "Secrets")
+        source = str(self.home / ".config" / "rookrunner")
         self.assertEqual(
             mount,
             f"type=bind,source={source},target=/rr-secrets,readonly",
@@ -348,16 +396,21 @@ class CliTests(_HomeTest):
             "--app-key",
             "--secret-ref",
             "--secret-pusher",
+            "--key-dir",
         ):
             self.assertIn(flag, worker.stdout)
         self.assertIn("Takes no path", worker.stdout)
+        self.assertIn("ROOKRUNNER_KEY_DIR", worker.stdout)
+        self.assertIn("~/.config/rookrunner/keys", worker.stdout)
         poll = run_cli("--state", "unused", "poll", "--help")
         status = run_cli("--state", "unused", "status", "--help")
         self.assertNotIn("--secrets", poll.stdout)
         self.assertNotIn("--secret-ref", poll.stdout)
         self.assertNotIn("--secrets", status.stdout)
         self.assertIn("--app-key", poll.stdout)
+        self.assertIn("--key-dir", poll.stdout)
         self.assertIn("--credential-file", status.stdout)
+        self.assertIn("--key-dir", status.stdout)
 
     def test_secrets_value_is_an_argument_error(self):
         result = run_cli(
@@ -468,18 +521,34 @@ class CliTests(_HomeTest):
             self.assertNotIn("Secrets", text)
             self.assertNotIn("owner/demo", text)
             self.assertNotIn("rookrunner-secrets", secret_err.read_text())
-            self.assertFalse((self.home / "Secrets").exists())
+            self.assertFalse((self.home / ".config").exists())
             socket_process, _described = self._start(
                 socket_state,
                 socket_err,
                 "--docker-socket",
             )
             warning = socket_err.read_text()
-            self.assertIn("~/Secrets/github-app/rookrunner-app/", warning)
-            self.assertIn("~/Secrets/rookrunner-secrets/", warning)
+            self.assertIn("~/.config/rookrunner/keys/", warning)
+            self.assertIn("~/.config/rookrunner/files/", warning)
             self.assertNotIn(str(self.home), warning)
         finally:
             for process in (secret_process, socket_process):
                 if process is not None and process.poll() is None:
                     process.terminate()
                     process.wait(timeout=5)
+
+
+class TreeTests(unittest.TestCase):
+    def test_the_tree_has_no_retired_key_location(self):
+        root = Path(__file__).resolve().parents[1]
+        slash = "sec" + "rets/"
+        home = "~/" + "Sec" + "rets"
+        for needle in (slash, home):
+            result = subprocess.run(
+                ["git", "grep", "-n", "-i", "-e", needle],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout, "")

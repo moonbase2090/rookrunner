@@ -47,19 +47,18 @@ def _chmod(path, mode):
 
 
 def _secret_home(root, files, repository="owner/demo", repo_mode=0o700):
-    """Create ~/Secrets/rookrunner-secrets/<owner>/<repo>/ under root."""
+    """Create ~/.config/rookrunner/files/<owner>/<repo>/ under root."""
 
     home = root / "home"
     owner, repo = repository.split("/", 1)
-    repo_dir = home / "Secrets" / "rookrunner-secrets" / owner / repo
+    config = home / ".config"
+    rook = config / "rookrunner"
+    store = rook / "files"
+    repo_dir = store / owner / repo
     repo_dir.mkdir(parents=True)
-    for path in (
-        home,
-        home / "Secrets",
-        home / "Secrets" / "rookrunner-secrets",
-        home / "Secrets" / "rookrunner-secrets" / owner,
-        repo_dir,
-    ):
+    _chmod(home, 0o755)
+    _chmod(config, 0o755)
+    for path in (rook, store, store / owner, repo_dir):
         _chmod(path, 0o700)
     _chmod(repo_dir, repo_mode)
     for name, payload in files.items():
@@ -77,14 +76,20 @@ class SecretFileTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="rr-secrets-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.previous = os.environ.get("HOME")
+        self.previous = {
+            name: os.environ.get(name)
+            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
         self.addCleanup(self._restore_home)
 
     def _restore_home(self):
-        if self.previous is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self.previous
+        for name, value in self.previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def _use(self, files, **kwargs):
         slot = self.root / f"slot-{len(list(self.root.iterdir()))}"
@@ -163,7 +168,7 @@ class SecretFileTests(unittest.TestCase):
         self.assertNotIn(str(home), str(raised.exception))
 
         self._use({})
-        link = Path(os.environ["HOME"]) / "Secrets/rookrunner-secrets/owner/demo/API"
+        link = Path(os.environ["HOME"]) / ".config/rookrunner/files/owner/demo/API"
         link.symlink_to(link.parent / "OTHER")
         (link.parent / "OTHER").write_bytes(b"other-bytes\n")
         _chmod(link.parent / "OTHER", 0o600)
@@ -221,6 +226,51 @@ class SecretFileTests(unittest.TestCase):
             load_job_secrets("owner/demo", [])
         self.assertEqual(str(raised.exception), "secret directory is not accepted")
         self.assertNotIn(str(home), str(raised.exception))
+
+    def test_config_home_may_be_world_executable(self):
+        home, _repo = self._use({"API": b"value\n"})
+        _chmod(home / ".config", 0o755)
+        self.assertEqual(load_job_secrets("owner/demo", ["API"]), {"API": "value"})
+
+    def test_a_loose_rookrunner_directory_is_refused(self):
+        home, _repo = self._use({"API": b"value\n"})
+        _chmod(home / ".config" / "rookrunner", 0o755)
+        with self.assertRaises(SecretError) as raised:
+            load_job_secrets("owner/demo", ["API"])
+        self.assertEqual(str(raised.exception), "secret directory is not accepted")
+        self.assertNotIn(str(home), str(raised.exception))
+
+    def test_xdg_config_home_selects_the_file_store(self):
+        slot = self.root / "xdg-slot"
+        slot.mkdir()
+        home = slot / "home"
+        home.mkdir()
+        xdg = slot / "xdg"
+        repo_dir = xdg / "rookrunner" / "files" / "owner" / "demo"
+        repo_dir.mkdir(parents=True)
+        for path in (
+            xdg / "rookrunner",
+            xdg / "rookrunner" / "files",
+            xdg / "rookrunner" / "files" / "owner",
+            repo_dir,
+        ):
+            _chmod(path, 0o700)
+        target = repo_dir / "API"
+        target.write_bytes(b"from-xdg\n")
+        _chmod(target, 0o600)
+        decoy = home / ".config" / "rookrunner" / "files" / "owner" / "demo"
+        decoy.mkdir(parents=True)
+        (decoy / "API").write_bytes(b"from-home\n")
+        os.environ["HOME"] = str(home)
+        os.environ["XDG_CONFIG_HOME"] = str(xdg)
+        self.assertEqual(load_job_secrets("owner/demo", ["API"]), {"API": "from-xdg"})
+
+    def test_a_relative_config_home_is_refused_without_a_path(self):
+        self._use({"API": b"value\n"})
+        os.environ["XDG_CONFIG_HOME"] = "relative-config"
+        with self.assertRaises(SecretError) as raised:
+            load_job_secrets("owner/demo", ["API"])
+        self.assertNotIn("relative-config", str(raised.exception))
 
 
 class SecretPlanTests(unittest.TestCase):
@@ -446,14 +496,20 @@ class SecretBindTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="rr-bind-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.previous = os.environ.get("HOME")
+        self.previous = {
+            name: os.environ.get(name)
+            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
         self.addCleanup(self._restore_home)
 
     def _restore_home(self):
-        if self.previous is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self.previous
+        for name, value in self.previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def _job(self, expressions):
         return {"steps": [{"env": expressions, "with": {}}]}

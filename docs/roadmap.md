@@ -111,7 +111,7 @@ through NS-43 in [next steps](planning/next-steps.md).
    mask. p7-trust-gate compares pull-request repository ids and
    stores the allowlist fields on the event. p7-socket-lock adds the
    worker secret flags and refuses --docker-socket combined with
-   --app-key or --secrets unless the ~/Secrets probe exits 0.
+   --app-key or --secrets unless the key-directory probe exits 0.
    p7-secret-env reads file secrets into step `env` and `with` when
    `--secrets` is set and the allowlist matches. p7-secret-run
    rewrites an exact `secrets.NAME` in `run` to `${RR_SECRET_NAME}`

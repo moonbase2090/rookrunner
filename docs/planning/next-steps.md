@@ -1867,7 +1867,7 @@ Settled there, so later slices do not reopen them:
    Rookrunner-App, App ID 5201333, not moonbase2090-agents. The
    installation and the private key are still pending. Checks write,
    Commit statuses write, and Contents read. The private key lives
-   only in `~/Secrets/github-app/rookrunner-app/`. The posting contract
+   only in `~/.config/rookrunner/keys/`. The posting contract
    is [check runs](../design/check-runs.md). This slice does not
    change the engine.
 7. **Limits.** The table already in this file. Nothing else.
@@ -2327,7 +2327,7 @@ The owner chose the credential on 2026-10-05:
    read. The installation token minted for a post requests Checks
    write and Commit statuses write only.
 3. **Key.** The private key lives only in
-   `~/Secrets/github-app/rookrunner-app/`. The operator passes that path.
+   `~/.config/rookrunner/keys/`. The operator passes that path.
    The key never enters the repository, a CI job, a log, or a run
    record. An installation token is minted at post time and discarded
    when the post returns.
@@ -2376,13 +2376,13 @@ The seven decisions and the proof for each pull request are in
    function.
 3. **p7-socket-lock.** Implemented. `worker --secrets` takes no path.
    `--docker-socket` combined with `worker --app-key` or
-   `worker --secrets` refuses unless the `~/Secrets` probe exits 0.
+   `worker --secrets` refuses unless the key-directory probe exits 0.
    The host-control warning names the key directory and the secret
    root. That pull request does not inject a secret and does not
    mint a job token.
 4. **p7-secret-env.** Implemented. Step `env` and `with` that are
    exactly `secrets.NAME` read
-   `~/Secrets/rookrunner-secrets/<owner>/<repo>/` when `--secrets`
+   `~/.config/rookrunner/files/<owner>/<repo>/` when `--secrets`
    is set and the allowlist matches. A missing name is an empty
    string. Call outputs use the secret registrations from the jobs
    inside the call. That pull request does not rewrite `run`. No
@@ -2444,7 +2444,7 @@ implemented. MB2090 accepted the amended answers on
    ([check runs](../design/check-runs.md)). The owner chose that App
    on 2026-10-05. It is not moonbase2090-agents. Permissions are
    Checks write, Commit statuses write, and Contents read. The private
-   key lives only in `~/Secrets/github-app/rookrunner-app/` and is passed
+   key lives only in `~/.config/rookrunner/keys/` and is passed
    by path. `--app-key` posts one check run and then the commit status
    with the installation token. Omitting the flag keeps the NS-40
    token file. The plan schema is unchanged. The capability version

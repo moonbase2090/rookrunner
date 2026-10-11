@@ -288,7 +288,7 @@ sign-off.
 | Tests are `unittest` modules under `tests/`. No pytest. | CI: PT stays off; a check rejects a pytest import |
 | A test does not pass `dir="/private/tmp"` to `TemporaryDirectory`. GitHub-hosted runners have no `/private/tmp`. | CI |
 | A test Git identity is `Fixture` and `fixture@example.invalid`. | Review |
-| A test does not read `~/Secrets` and does not contact `api.github.com`. `HOME` is a temp directory only when the test touches a key path. | CI for the two banned strings |
+| A test does not read the configured key directory and does not contact `api.github.com`. `HOME` is a temp directory only when the test touches a key path. | CI for the two banned strings |
 | Runtime dependencies are `pyyaml` only. Workflow YAML uses a `SafeLoader` subclass. `yaml.load`, `yaml.unsafe_load`, and `CLoader` stay unused. | CI |
 | User-facing JSON is `protocol.canonical`, printed from `cli.py`. | CI: T20, with `cli.py` as the listed print site |
 | The worker may print the host-control warning to stderr. That call is one row in `docs/lints.md`. | CI |
@@ -426,7 +426,7 @@ Secret scanning and push protection stay admin actions. Push
 protection is what stops a secret at push time. Scanning is
 what finds one already committed. Neither replaces the rule
 that the private key stays out of the repository. This plan
-does not read `~/Secrets` and does not start a sign-in.
+does not read the configured key directory and does not start a sign-in.
 
 Dependabot stays off under the recommendation. The alternative
 in question 5 is security updates only, with auto-merge left
@@ -545,6 +545,6 @@ The capability version stays 12. `write` stays rejected.
 `pyyaml==6.0.3` stays the only runtime dependency. This pull
 request does not edit `check.yml`, `pyproject.toml`, or
 `uv.lock`. The private key stays out of the repository. No
-file under `~/Secrets` is read. No sign-in is started. No
+file under the configured key directory is read. No sign-in is started. No
 repo setting is changed. M4 still owns the project license,
 public names, and the preview package.

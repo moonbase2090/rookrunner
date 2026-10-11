@@ -800,6 +800,7 @@ class Pass:
         ssh_host=None,
         places=None,
         allow_untrusted=(),
+        key_dir=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -807,6 +808,7 @@ class Pass:
         self.image = image
         self.credential_file = credential_file
         self.app_key = app_key
+        self.key_dir = key_dir
         self.list_token = list_token
         self.api_base = api_base
         self.state_dir = Path(state)
@@ -1632,6 +1634,7 @@ class Pass:
                 state_dir=self.state_dir,
                 repository_root=root,
                 clock=self.clock,
+                key_dir=self.key_dir,
             )
         except StatusError as error:
             if error.kind == "RATE_LIMITED" and error.retryable:
@@ -2127,6 +2130,7 @@ class Pass:
                 app_key=self.app_key,
                 state_dir=self.state_dir,
                 repository_root=self._credential_repository(described),
+                key_dir=self.key_dir,
             )
         except StatusError as error:
             if error.kind == "RATE_LIMITED" and error.retryable:
@@ -2241,6 +2245,7 @@ def poll_once(
     ssh_host=None,
     places=None,
     allow_untrusted=(),
+    key_dir=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -2261,6 +2266,7 @@ def poll_once(
         ssh_host=ssh_host,
         places=places,
         allow_untrusted=allow_untrusted,
+        key_dir=key_dir,
     ).run()
 
 
