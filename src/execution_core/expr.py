@@ -19,7 +19,8 @@ expressions for those shells are quoted. An unquoted value is wrapped
 in single quotes. A value inside double quotes escapes `"`, `$`, `\\`,
 and backticks. A value inside single quotes escapes `'`. Another
 shell, or a context the lexer cannot prove, is refused. An expression
-in `eval` or in a shell `-c` command is refused.
+in `eval` or in a shell `-c` command is refused. A brace group or an
+`if`, `while`, or `for` body does not hide it.
 `secrets.GITHUB_TOKEN`
 and `github.token` are the same alias and rewrite to
 `${RR_SECRET_GITHUB_TOKEN}`. `secrets` stays withheld
@@ -1295,6 +1296,29 @@ def quote_run_expressions(source, values, shell):
 
 _REPARSE_SHELLS = {"ash", "bash", "dash", "ksh", "sh", "zsh"}
 _COMMAND_PREFIXES = {"command", "env", "exec", "time"}
+_COMPOUND_WORDS = {
+    "!",
+    "{",
+    "}",
+    "[[",
+    "]]",
+    "case",
+    "coproc",
+    "do",
+    "done",
+    "elif",
+    "else",
+    "esac",
+    "fi",
+    "for",
+    "function",
+    "if",
+    "in",
+    "select",
+    "then",
+    "until",
+    "while",
+}
 
 
 def _refuse_reparsed_run(source, sites):
@@ -1325,6 +1349,14 @@ def _command_reparses(name, spans, source):
         if len(flag) >= 2 and flag[0] == "-" and flag[1] != "-" and "c" in flag[1:]:
             return True
     return False
+
+
+def _is_compound_word(text):
+    """Return whether `text` is a keyword, not the command that follows it."""
+
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        return False
+    return text in _COMPOUND_WORDS
 
 
 def _command_base(text):
@@ -1363,7 +1395,11 @@ def _effective_command(source, words):
 
 
 class _ReparseScan:
-    """Record simple commands, including commands nested in ``$( )`` and backticks."""
+    """Record simple commands, including commands nested in ``$( )`` and backticks.
+
+    Brace groups and ``if`` / ``while`` / ``for`` keywords are not commands.
+    The command that follows them is recorded on its own.
+    """
 
     def __init__(self, source):
         self.source = source
@@ -1397,9 +1433,19 @@ class _ReparseScan:
                 self.i += 1
                 self._sequence("subshell")
                 continue
+            if self.source[self.i] == ")":
+                self._emit(words)
+                words = []
+                self.i += 1
+                continue
             start = self.i
             if not self._word():
                 self.i += 1
+                continue
+            word = self.source[start : self.i]
+            if _is_compound_word(word):
+                self._emit(words)
+                words = []
                 continue
             words.append((start, self.i))
         self._emit(words)

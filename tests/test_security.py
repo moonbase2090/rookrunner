@@ -31,6 +31,7 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("A step cannot gain privileges through sudo.", TEXT)
         self.assertIn("An unquoted value is single-quoted.", TEXT)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", TEXT)
+        self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", TEXT)
         self.assertIn(
             "When that pull request changes a workflow file, or that diff cannot be read,",
             TEXT,

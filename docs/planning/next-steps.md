@@ -2132,7 +2132,8 @@ characters and inserts the string form of each `${{ }}`. A step
 single-quoted, a double-quoted value is escaped, and a single-quoted
 value escapes `'`. Another shell, or a context the lexer cannot
 prove, is refused. An expression in `eval` or in a shell `-c`
-command is refused. One expression
+command is refused. A brace group or an `if`, `while`, or `for`
+body does not hide it. One expression
 that is the whole stripped string drops the surrounding whitespace.
 `null` is empty. `true` and `false` are those words. The inserted text
 is not scanned again. An unclosed expression, a nested `${{` outside a

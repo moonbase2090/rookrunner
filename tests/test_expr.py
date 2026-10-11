@@ -345,3 +345,54 @@ class RunQuotingTests(unittest.TestCase):
             quote_run_expressions('echo "${{ env.MSG }} eval"', {"env": {"MSG": "ok"}}, "bash"),
             'echo "ok eval"',
         )
+
+    def test_a_grouped_value_stays_data_when_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        rendered = quote_run_expressions(
+            "{ printf '%s\\n' \"${{ env.MSG }}\"; }",
+            values,
+            "bash",
+        )
+        completed = subprocess.run(
+            ["bash", "-c", rendered],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, payload + "\n")
+        self.assertNotIn("INJECTED", completed.stderr)
+
+    def test_eval_after_a_compound_command_is_not_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            '{ eval "printf child\\n ${{ env.MSG }}"; }',
+            'if true; then eval "printf child\\n ${{ env.MSG }}"; fi',
+            'if false; then echo no; else eval "printf child\\n ${{ env.MSG }}"; fi',
+            'while false; do eval "printf child\\n ${{ env.MSG }}"; done',
+            'for item in one; do eval "printf child\\n ${{ env.MSG }}"; done',
+            '! eval "printf child\\n ${{ env.MSG }}"',
+            '( eval "printf child\\n ${{ env.MSG }}" )',
+        )
+        for source in scripts:
+            with self.subTest(source=source):
+                rendered = None
+                try:
+                    rendered = quote_run_expressions(source, values, "bash")
+                except ExprError as exc:
+                    self.assertEqual(str(exc), "run is not accepted")
+                if rendered is not None:
+                    completed = subprocess.run(
+                        ["bash", "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotIn("INJECTED", completed.stderr)
+                    self.assertNotIn("INJECTED", completed.stdout)
+                    self.fail("reparsed command was rendered")
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")

@@ -36,6 +36,7 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
         self.assertIn("An unquoted value is single-quoted.", PROSE)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
+        self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
         self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,

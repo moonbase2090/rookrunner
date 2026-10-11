@@ -47,7 +47,8 @@ text. An unquoted value is single-quoted. A value already inside
 double quotes is escaped. A value already inside single quotes
 escapes `'`. Another shell, or a context the script cannot prove,
 is refused. An expression in `eval` or in a shell `-c` command is
-refused.
+refused. A brace group or an `if`, `while`, or `for` body does not
+hide it.
 
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,
