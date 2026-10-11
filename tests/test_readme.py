@@ -37,6 +37,7 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("An unquoted value is single-quoted.", PROSE)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
         self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
+        self.assertIn("A backslash in that command name does not hide it either.", PROSE)
         self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,

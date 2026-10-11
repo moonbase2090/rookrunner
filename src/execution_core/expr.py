@@ -20,7 +20,8 @@ in single quotes. A value inside double quotes escapes `"`, `$`, `\\`,
 and backticks. A value inside single quotes escapes `'`. Another
 shell, or a context the lexer cannot prove, is refused. An expression
 in `eval` or in a shell `-c` command is refused. A brace group or an
-`if`, `while`, or `for` body does not hide it.
+`if`, `while`, or `for` body does not hide it. A backslash in that
+command name does not hide it either.
 `secrets.GITHUB_TOKEN`
 and `github.token` are the same alias and rewrite to
 `${RR_SECRET_GITHUB_TOKEN}`. `secrets` stays withheld
@@ -1345,10 +1346,52 @@ def _command_reparses(name, spans, source):
     if base not in _REPARSE_SHELLS:
         return False
     for begin, stop in spans[1:]:
-        flag = source[begin:stop]
+        flag = _shell_word(source[begin:stop])
         if len(flag) >= 2 and flag[0] == "-" and flag[1] != "-" and "c" in flag[1:]:
             return True
     return False
+
+
+def _shell_word(text):
+    """Return the word bash executes.
+
+    An unquoted backslash is removed. Inside double quotes, a backslash
+    is removed only before ``$``, a backtick, ``"``, ``\\``, or a newline.
+    Single quotes keep the backslash. A quoted word is not a keyword.
+    """
+
+    chars = []
+    index = 0
+    limit = len(text)
+    while index < limit:
+        char = text[index]
+        if char == "'":
+            index += 1
+            while index < limit and text[index] != "'":
+                chars.append(text[index])
+                index += 1
+            if index < limit:
+                index += 1
+            continue
+        if char == '"':
+            index += 1
+            while index < limit and text[index] != '"':
+                if text[index] == "\\" and index + 1 < limit and text[index + 1] in '$`"\\\n':
+                    chars.append(text[index + 1])
+                    index += 2
+                    continue
+                chars.append(text[index])
+                index += 1
+            if index < limit:
+                index += 1
+            continue
+        if char == "\\" and index + 1 < limit:
+            chars.append(text[index + 1])
+            index += 2
+            continue
+        chars.append(char)
+        index += 1
+    return "".join(chars)
 
 
 def _is_compound_word(text):
@@ -1360,9 +1403,7 @@ def _is_compound_word(text):
 
 
 def _command_base(text):
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
-        text = text[1:-1]
-    return text.rsplit("/", 1)[-1]
+    return _shell_word(text).rsplit("/", 1)[-1]
 
 
 def _is_assignment(text):

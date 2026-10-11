@@ -18,6 +18,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("A bash or sh `run` script quotes each `${{ }}` value.", PROSE)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
         self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
+        self.assertIn("A backslash in that command name does not hide it either.", PROSE)
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):

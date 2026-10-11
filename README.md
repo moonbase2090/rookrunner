@@ -70,6 +70,7 @@ escaped. A value already inside single quotes escapes `'`. Another
 shell, or a context the script cannot prove, is refused. An expression
 in `eval` or in a shell `-c` command is refused.
 A brace group or an `if`, `while`, or `for` body does not hide it.
+A backslash in that command name does not hide it either.
 
 ## Try the development contract
 
