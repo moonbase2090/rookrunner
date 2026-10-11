@@ -11,6 +11,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from execution_core.checks import _PKCS8_PEM_HEADER, _RSA_PEM_HEADER, _load_rsa
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".gitleaks.toml"
 # gitleaks 8.30.1 private-key rule, so the parser span can be checked in-process.
@@ -34,6 +36,47 @@ def _key_body():
     return _header() + "\n" + ("M" * 80) + "\n" + _footer() + "\n"
 
 
+def _openssl_materials():
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        pkcs1_path = directory / "pkcs1.pem"
+        pkcs8_path = directory / "pkcs8.pem"
+        subprocess.run(
+            ["openssl", "genrsa", "-traditional", "-out", str(pkcs1_path), "2048"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "pkcs8",
+                "-topk8",
+                "-nocrypt",
+                "-in",
+                str(pkcs1_path),
+                "-out",
+                str(pkcs8_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        modulus = subprocess.run(
+            ["openssl", "rsa", "-in", str(pkcs1_path), "-noout", "-modulus"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        line = modulus.stdout.strip()
+        prefix = "Modulus="
+        if not line.startswith(prefix):
+            raise RuntimeError("modulus")
+        return (
+            pkcs1_path.read_text(),
+            pkcs8_path.read_text(),
+            int(line[len(prefix) :], 16),
+        )
+
+
 class GitleaksAllowlistTests(unittest.TestCase):
     def test_allowlists_require_path_and_regex(self):
         data = tomllib.loads(CONFIG.read_text())
@@ -48,13 +91,35 @@ class GitleaksAllowlistTests(unittest.TestCase):
         self.assertEqual(len(parser["regexes"]), 1)
         pattern = re.compile(parser["regexes"][0])
         source = (ROOT / "src/execution_core/checks.py").read_text()
-        found = PRIVATE_KEY_RULE.search(source)
-        self.assertIsNotNone(found)
-        self.assertIsNotNone(pattern.search(found.group(0)))
+        self.assertIsNone(PRIVATE_KEY_RULE.search(source))
+        header_marker = re.compile("-----BEG" + "IN " + "[A-Z ]*" + "PRIVATE KE" + "Y-----")
+        self.assertIsNone(header_marker.search(source))
+        self.assertIsNotNone(header_marker.search(_RSA_PEM_HEADER))
+        self.assertIsNotNone(header_marker.search(_PKCS8_PEM_HEADER))
+        legacy = (
+            _header()
+            + '", "'
+            + ("-----BEGIN " + "PRIVATE KEY" + "-----")
+            + '"}'
+            + "\nb64decode\n_der_sequence(der)"
+        )
+        self.assertIsNotNone(pattern.search(legacy))
         self.assertIsNotNone(PRIVATE_KEY_RULE.search(_key_body()))
         self.assertIsNone(pattern.search(_key_body()))
         quoted = _header() + '"' + "\n" + ("M" * 80) + "\n" + _footer()
         self.assertIsNone(pattern.search(quoted))
+        pkcs1, pkcs8, expected = _openssl_materials()
+        self.assertEqual(pkcs1.splitlines()[0], _RSA_PEM_HEADER)
+        self.assertEqual(pkcs8.splitlines()[0], _PKCS8_PEM_HEADER)
+        modulus, private = _load_rsa(pkcs1.encode())
+        self.assertEqual(modulus, expected)
+        self.assertGreaterEqual(private.bit_length(), 2)
+        modulus_pkcs8, private_pkcs8 = _load_rsa(pkcs8.encode())
+        self.assertEqual(modulus_pkcs8, expected)
+        self.assertGreaterEqual(private_pkcs8.bit_length(), 2)
+        broken = pkcs1.replace(_RSA_PEM_HEADER, _RSA_PEM_HEADER + "x", 1)
+        with self.assertRaises(ValueError):
+            _load_rsa(broken.encode())
 
         self.assertEqual(fixtures["condition"], "AND")
         self.assertEqual(fixtures["regexTarget"], "line")

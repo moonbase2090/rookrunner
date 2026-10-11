@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The source distribution omits `tests` and `scripts`. The published
+  package keeps the same private-key header check without a header
+  line in `checks.py`.
 - The App private key directory is configurable. `--key-dir` overrides
   `ROOKRUNNER_KEY_DIR`. The default is `$XDG_CONFIG_HOME/rookrunner/keys`,
   or `~/.config/rookrunner/keys` when that variable is unset. The

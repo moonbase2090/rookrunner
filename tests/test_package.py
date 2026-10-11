@@ -2,8 +2,10 @@
 
 """The 0.1.3 tree builds a wheel and a source tarball."""
 
+import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -48,9 +50,21 @@ class PackageTests(unittest.TestCase):
             wheel = Path(directory) / produced[0]
             with zipfile.ZipFile(wheel) as archive:
                 metadata = archive.read("execution_core-0.1.3.dist-info/METADATA").decode()
+                checks = archive.read("execution_core/checks.py").decode()
             self.assertIn("Version: 0.1.3", metadata)
             self.assertIn("License-Expression: MPL-2.0", metadata)
             self.assertIn("Requires-Dist: pyyaml==6.0.3", metadata)
+            header = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+            self.assertNotRegex(checks, header)
+            self.assertIn("_RSA_PEM_HEADER", checks)
+            sdist = Path(directory) / produced[1]
+            with tarfile.open(sdist, "r:gz") as packed:
+                names = packed.getnames()
+            self.assertTrue(any(name.endswith("src/execution_core/checks.py") for name in names))
+            self.assertFalse(any("/tests/" in name or name.startswith("tests/") for name in names))
+            self.assertFalse(
+                any("/scripts/" in name or name.startswith("scripts/") for name in names)
+            )
 
 
 if __name__ == "__main__":
