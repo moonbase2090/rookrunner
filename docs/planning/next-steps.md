@@ -138,7 +138,7 @@ and the jobs it needs. Job containers use Docker network `bridge` by default.
 engine call uses the Docker context named `default` unless
 `worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
 An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the
-engine. The job
+engine. The scheduler thread uses that same context. The job
 container does not mount the Docker socket unless the worker is started
 with `--docker-socket`. That flag gives the job the host Docker service.
 The job keeps the caller user. When the socket is mounted, a private

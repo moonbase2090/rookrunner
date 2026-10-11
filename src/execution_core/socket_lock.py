@@ -11,7 +11,6 @@ refuses unless the key-directory probe reports that the directory is not
 shared. This module does not inject a secret and does not mint a token.
 """
 
-import contextvars
 import os
 from pathlib import Path
 import re
@@ -20,7 +19,8 @@ import subprocess
 
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _CONTEXT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
-_DOCKER_CONTEXT = contextvars.ContextVar("rookrunner_docker_context", default=None)
+# Process-wide. A ContextVar would not reach Worker.scheduler.
+_PINNED_CONTEXT = None
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?")
 _APP_KEY_MESSAGE = "worker --app-key accepts only private-key.pem in the configured key directory"
 # The command prints nothing. Exit 42 means the mount is a usable directory.
@@ -287,17 +287,28 @@ def resolve_docker_context(flag):
 
 
 def pin_docker_context(value):
-    return _DOCKER_CONTEXT.set(accept_docker_context(value))
+    """Pin one context for every thread. Returns the previous pin."""
+
+    global _PINNED_CONTEXT
+    previous = _PINNED_CONTEXT
+    _PINNED_CONTEXT = accept_docker_context(value)
+    return previous
 
 
 def reset_docker_context(token):
-    _DOCKER_CONTEXT.reset(token)
+    """Restore a previous pin. ``None`` clears it and returns the old pin."""
+
+    global _PINNED_CONTEXT
+    previous = _PINNED_CONTEXT
+    if token is not None:
+        accept_docker_context(token)
+    _PINNED_CONTEXT = token
+    return previous
 
 
 def docker_context():
-    chosen = _DOCKER_CONTEXT.get()
-    if chosen is not None:
-        return chosen
+    if _PINNED_CONTEXT is not None:
+        return _PINNED_CONTEXT
     return resolve_docker_context(None)
 
 

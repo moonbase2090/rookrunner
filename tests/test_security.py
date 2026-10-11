@@ -22,6 +22,7 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("The worker has no network listener.", TEXT)
         self.assertIn("Every engine call uses the Docker context named `default`", TEXT)
         self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", TEXT)
+        self.assertIn("The scheduler thread uses that same context.", TEXT)
         self.assertIn("memory limit of 4g", TEXT)
         self.assertIn("process limit of 1024", TEXT)
         self.assertIn("CPU limit of 2", TEXT)

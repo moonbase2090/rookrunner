@@ -76,7 +76,7 @@ head.
 Every engine call uses the Docker context named `default` unless
 `worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
 An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the
-engine.
+engine. The scheduler thread uses that same context.
 
 A bash or sh `run` script quotes each `${{ }}` value. An unquoted
 value is single-quoted. A value already inside double quotes is
