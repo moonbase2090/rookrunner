@@ -2,9 +2,10 @@
 
 """Job and service containers are created with limits and no new privileges."""
 
+from pathlib import Path
 import unittest
 
-from execution_core.run import _account_setup_args, _create_args, _service_create_args
+from execution_core.run import RunError, _account_setup_args, _create_args, _service_create_args
 
 _EXPECTED = {
     "--memory": "4g",
@@ -95,4 +96,48 @@ class ContainerLimitTests(unittest.TestCase):
         self.assertNotIn("--cap-drop", args)
         self.assertNotIn("--security-opt", args)
         self.assertNotIn("--privileged", args)
-        self.assertIn("chown 0:0 /runner-account/sudoers", args[-1])
+        self.assertIn("chown 0:0 /runner-account/passwd", args[-1])
+        self.assertNotIn("sudoers", args[-1])
+        self.assertNotIn("NOPASSWD", args[-1])
+        self.assertNotIn("command -v sudo", args[-1])
+
+    def test_passwordless_sudo_writes_sudoers_and_keeps_only_sudo_capabilities(self):
+        account = Path("/account")
+        setup = _account_setup_args("image@sha256:aa", account, True)
+        self.assertIn("command -v sudo", setup[-1])
+        self.assertIn("NOPASSWD: ALL", setup[-1])
+        self.assertIn("chown 0:0 /runner-account/sudoers", setup[-1])
+        self.assertNotIn("--cap-drop", setup)
+        job = _create_args(
+            "job",
+            "/workspace",
+            "/private",
+            "/commands",
+            "image@sha256:aa",
+            "bridge",
+            None,
+            None,
+            {
+                "home": "/home",
+                "runner-temp": "/temp",
+                "tool-cache": "/tools",
+            },
+            None,
+            None,
+            account=account,
+            passwordless_sudo=True,
+        )
+        self.assertNotIn("no-new-privileges", job)
+        self.assertEqual(_flag(job, "--cap-drop"), "ALL")
+        self.assertEqual(job.count("--cap-drop"), 1)
+        adds = [job[index + 1] for index, part in enumerate(job) if part == "--cap-add"]
+        self.assertEqual(adds, ["SETUID", "SETGID", "AUDIT_WRITE"])
+        self.assertTrue(any("destination=/etc/passwd,readonly" in part for part in job))
+        self.assertTrue(
+            any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)
+        )
+
+    def test_passwordless_sudo_rejects_a_non_boolean(self):
+        with self.assertRaises(RunError) as raised:
+            _account_setup_args("image@sha256:aa", "/account", "yes")
+        self.assertEqual(str(raised.exception), "passwordless sudo must be a boolean")

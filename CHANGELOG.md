@@ -11,8 +11,12 @@ This file does not reconstruct earlier milestones.
   and `--cap-drop ALL`. A service container keeps the engine's default
   capability set, including `CAP_CHOWN`, and sets no-new-privileges.
   It does not receive `--cap-drop` or `--cap-add`. The account-setup
-  container stays root so it can write passwd and sudoers. A step
-  cannot gain privileges through sudo.
+  container stays root so it can write passwd. Passwordless sudo is
+  off unless the worker is started with `--passwordless-sudo`. That
+  flag writes a sudoers file, omits no-new-privileges, keeps only
+  `SETUID`, `SETGID`, and `AUDIT_WRITE`, and warns that the job can
+  become root. With `--docker-socket` that is control of the host
+  engine. By default a step cannot gain privileges through sudo.
 - The App private key directory is configurable. `--key-dir` overrides
   `ROOKRUNNER_KEY_DIR`. The default is `$XDG_CONFIG_HOME/rookrunner/keys`,
   or `~/.config/rookrunner/keys` when that variable is unset. The

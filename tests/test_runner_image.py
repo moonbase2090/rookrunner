@@ -387,7 +387,7 @@ class RunnerAccountTests(unittest.TestCase):
         wrapper.chmod(0o755)
         self.docker = wrapper
 
-    def _run(self, workflow, image, runner_image):
+    def _run(self, workflow, image, runner_image, passwordless_sudo=False):
         snapshot, digest, workspace = _capture(self.root / "cap", workflow)
         result = run_job(
             snapshot,
@@ -398,18 +398,19 @@ class RunnerAccountTests(unittest.TestCase):
             EVENT,
             docker=str(self.docker),
             runner_image=runner_image,
+            passwordless_sudo=passwordless_sudo,
             step_timeout=60,
         )
         return result, workspace
 
-    def test_runner_image_sudo_uses_the_host_files(self):
+    def test_runner_image_default_does_not_install_sudoers(self):
         uid = os.getuid()
         workflow = _workflow(
             step=(
                 "uid=$(id -u)\n"
                 'printf \'%s\\n\' "$uid" > "$GITHUB_WORKSPACE/uid.txt"\n'
                 'test "$uid" != 0\n'
-                "if sudo -n true; then exit 4; fi\n"
+                "if sudo -n id; then exit 4; fi\n"
                 'apt-get --version > "$GITHUB_WORKSPACE/apt.txt"\n'
                 'test -s "$GITHUB_WORKSPACE/apt.txt"\n'
                 "test \"$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 1\n"
@@ -417,7 +418,7 @@ class RunnerAccountTests(unittest.TestCase):
                 " = 0000000000000000\n"
                 "if echo x >> /etc/passwd; then exit 4; fi\n"
                 'test "$(stat -c %u /etc/passwd)" = 0\n'
-                'test "$(stat -c %a /etc/sudoers.d/rookrunner)" = 440\n'
+                "test ! -e /etc/sudoers.d/rookrunner\n"
                 'grep "^runner-${uid}:" /etc/passwd > "$GITHUB_WORKSPACE/line.txt"\n'
             )
         )
@@ -429,7 +430,7 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertIn(f"runner-{uid}:", (workspace / "line.txt").read_text())
         account = workspace.parent / "runner-account"
         self.assertEqual((account / "passwd").stat().st_mode & 0o777, 0o644)
-        self.assertEqual((account / "sudoers").stat().st_mode & 0o777, 0o440)
+        self.assertFalse((account / "sudoers").exists())
         self.assertIn(f"runner-{uid}:", (account / "passwd").read_text())
         self.assertIn("/github/home", (account / "passwd").read_text())
         calls = _calls(self.log)
@@ -438,6 +439,7 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertNotIn("--privileged", setup)
         mounted = " ".join(setup)
         self.assertIn("destination=/runner-account", mounted)
+        self.assertNotIn("NOPASSWD", mounted)
         self.assertNotIn("/workspace", mounted)
         self.assertNotIn("docker.sock", mounted)
         job = next(call for call in calls if call and call[0] == "create")
@@ -448,11 +450,48 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertNotIn("--security-opt", setup)
         self.assertEqual(job[job.index("--security-opt") + 1], "no-new-privileges")
         self.assertEqual(job[job.index("--cap-drop") + 1], "ALL")
+        self.assertNotIn("--cap-add", job)
         self.assertTrue(any("destination=/etc/passwd,readonly" in part for part in job))
-        self.assertTrue(
+        self.assertFalse(
             any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)
         )
         self.assertNotIn("pull", [call[0] for call in calls if call])
+
+    def test_passwordless_sudo_reaches_uid_0(self):
+        uid = os.getuid()
+        workflow = _workflow(
+            step=(
+                'test "$(id -u)" != 0\n'
+                'sudo -n id -u > "$GITHUB_WORKSPACE/sudo-uid.txt"\n'
+                'test "$(stat -c %a /etc/sudoers.d/rookrunner)" = 440\n'
+                'test "$(stat -c %u /etc/sudoers.d/rookrunner)" = 0\n'
+                "sudo -n cat /etc/sudoers.d/rookrunner"
+                ' > "$GITHUB_WORKSPACE/sudoers.txt"\n'
+                "test \"$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 0\n"
+                "test \"$(awk '/^CapEff:/ { print $2 }' /proc/self/status)\""
+                " = 0000000000000000\n"
+            )
+        )
+        result, workspace = self._run(
+            workflow, self.sudo_image, self.sudo_image, passwordless_sudo=True
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual((workspace / "sudo-uid.txt").read_text().strip(), "0")
+        account = workspace.parent / "runner-account"
+        sudoers_path = account / "sudoers"
+        self.assertEqual(sudoers_path.stat().st_mode & 0o777, 0o440)
+        sudoers = (workspace / "sudoers.txt").read_text()
+        self.assertIn("NOPASSWD: ALL", sudoers)
+        self.assertIn(f"runner-{uid}", sudoers)
+        calls = _calls(self.log)
+        job = next(call for call in calls if call and call[0] == "create")
+        self.assertNotIn("no-new-privileges", job)
+        self.assertEqual(job[job.index("--cap-drop") + 1], "ALL")
+        adds = [job[index + 1] for index, part in enumerate(job) if part == "--cap-add"]
+        self.assertEqual(adds, ["SETUID", "SETGID", "AUDIT_WRITE"])
+        self.assertTrue(
+            any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)
+        )
 
     def test_a_different_image_does_not_gain_sudoers(self):
         workflow = _workflow(
@@ -471,7 +510,21 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertIn(self.plain_image, job)
         self.assertNotIn(self.sudo_image, job)
 
-    def test_missing_sudo_fails_before_a_step(self):
+    def test_a_runner_image_without_sudo_still_prepares_passwd(self):
+        workflow = _workflow(
+            step=(
+                "test ! -e /etc/sudoers.d/rookrunner\n"
+                'printf \'%s\\n\' "$(id -u)" > "$GITHUB_WORKSPACE/uid.txt"\n'
+            )
+        )
+        result, workspace = self._run(workflow, self.plain_image, self.plain_image)
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual((workspace / "uid.txt").read_text().strip(), str(os.getuid()))
+        account = workspace.parent / "runner-account"
+        self.assertTrue((account / "passwd").is_file())
+        self.assertFalse((account / "sudoers").exists())
+
+    def test_passwordless_sudo_fails_when_sudo_is_missing(self):
         workflow = _workflow(step='printf ran > "$GITHUB_WORKSPACE/marker.txt"')
         snapshot, digest, workspace = _capture(self.root / "cap", workflow)
         with self.assertRaises(RunError) as raised:
@@ -484,6 +537,7 @@ class RunnerAccountTests(unittest.TestCase):
                 EVENT,
                 docker=str(self.docker),
                 runner_image=self.plain_image,
+                passwordless_sudo=True,
                 step_timeout=60,
             )
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
@@ -579,8 +633,9 @@ class UbuntuRunnerImageTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "succeeded", result)
         self.assertEqual(result["exit_code"], 0)
-        passwd = workspace.parent / "runner-account" / "passwd"
-        self.assertEqual(passwd.stat().st_mode & 0o777, 0o644)
+        account = workspace.parent / "runner-account"
+        self.assertEqual((account / "passwd").stat().st_mode & 0o777, 0o644)
+        self.assertFalse((account / "sudoers").exists())
         calls = _calls(log)
         self.assertNotIn("pull", [call[0] for call in calls if call])
         self.assertNotIn("build", [call[0] for call in calls if call])

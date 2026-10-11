@@ -34,8 +34,13 @@ container is created with `--security-opt no-new-privileges` and keeps
 the engine's default capability set, including `CAP_CHOWN`. It does
 not receive `--cap-drop` or `--cap-add`. There is no workflow field
 that changes that set. The account-setup container still runs as root
-to write passwd and sudoers, and it does not receive those flags. A
-step cannot gain privileges through sudo.
+to write passwd, and it does not receive those flags. Passwordless
+sudo is off unless the worker is started with `--passwordless-sudo`.
+That flag writes a sudoers file for the caller, omits
+no-new-privileges on the job, keeps only `SETUID`, `SETGID`, and
+`AUDIT_WRITE`, and warns that the job can become root in its
+container. With `--docker-socket`, that is control of the host
+engine. A step cannot gain privileges through sudo.
 
 ## What this is not
 

@@ -16,7 +16,9 @@ that socket. `worker --node24 DIR` mounts that directory read-only at
 `worker --runner-image DIGEST` is the image for a submit or poll that
 omits `image` when every selected job has `runs-on: ubuntu-latest`.
 The worker does not pull, build, or publish it. An explicit `image`
-still wins.
+still wins. `worker --passwordless-sudo` is off by default. It writes
+passwordless sudo for the caller on that image and warns that the job
+can become root in its container.
 `worker --secrets` takes no path and requires `--github-repository`.
 `worker --app-key` accepts only the Rookrunner App key path. The worker
 opens that file only when a job mints a Contents-read token.
@@ -505,6 +507,7 @@ class Worker:
         *,
         network=DEFAULT_NETWORK,
         docker_socket=False,
+        passwordless_sudo=False,
         action_remote=None,
         node24=None,
         runner_image=None,
@@ -520,6 +523,8 @@ class Worker:
             raise ValueError("container network must be bridge or none")
         if type(docker_socket) is not bool:
             raise ValueError("docker socket must be a boolean")
+        if type(passwordless_sudo) is not bool:
+            raise ValueError("passwordless sudo must be a boolean")
         if action_remote is None:
             action_remote = DEFAULT_ACTION_REMOTE
         if action_remote != DEFAULT_ACTION_REMOTE:
@@ -531,6 +536,10 @@ class Worker:
             action_remote = str(remote_root)
         self.network = network
         self.docker_socket = docker_socket
+        self.passwordless_sudo = passwordless_sudo
+        self.passwordless_sudo_warning = (
+            passwordless_sudo_warning(docker_socket) if passwordless_sudo else None
+        )
         self.node24 = None if node24 is None else inspect_node24(node24)
         self.runner_image = _accept_runner_image(runner_image)
         self.runner_image_digest = (
@@ -1185,6 +1194,7 @@ class Worker:
             owner=owner,
             network=self.network,
             docker_socket=self.docker_socket,
+            passwordless_sudo=self.passwordless_sudo,
             event_name=event_name,
             node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
             actions=actions_root,
@@ -2552,6 +2562,17 @@ class Worker:
             self.close()
 
 
+def passwordless_sudo_warning(docker_socket):
+    """Warn that an opted-in job can become root in its container."""
+
+    if type(docker_socket) is not bool:
+        raise ValueError("docker socket must be a boolean")
+    text = "passwordless sudo lets a job become root inside its container"
+    if docker_socket:
+        text += "; with --docker-socket that is control of the host engine"
+    return text
+
+
 def _accept_runner_image(value):
     if value is None:
         return None
@@ -2592,6 +2613,7 @@ def serve(
     node24=None,
     runner_image=None,
     *,
+    passwordless_sudo=False,
     secrets=False,
     github_repository=None,
     app_key=None,
@@ -2606,6 +2628,7 @@ def serve(
         disk_budget,
         network=network,
         docker_socket=docker_socket,
+        passwordless_sudo=passwordless_sudo,
         node24=node24,
         runner_image=runner_image,
         secrets=secrets,
@@ -2619,6 +2642,12 @@ def serve(
     if worker.host_control_warning:
         print(  # noqa: T201  host-control warning on stderr
             worker.host_control_warning,
+            file=sys.stderr,
+            flush=True,
+        )
+    if worker.passwordless_sudo_warning:
+        print(  # noqa: T201  passwordless-sudo warning on stderr
+            worker.passwordless_sudo_warning,
             file=sys.stderr,
             flush=True,
         )

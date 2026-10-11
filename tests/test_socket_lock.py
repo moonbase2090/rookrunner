@@ -134,6 +134,20 @@ class FlagTests(_HomeTest):
             with self.assertRaisesRegex(ValueError, "worker --secret-pusher"):
                 self.worker(secret_pushers=[value])
 
+    def test_passwordless_sudo_is_off_unless_the_operator_opts_in(self):
+        worker = self.worker()
+        self.assertIs(worker.passwordless_sudo, False)
+        self.assertIsNone(worker.passwordless_sudo_warning)
+        opted = self.worker(passwordless_sudo=True)
+        self.assertIn("become root", opted.passwordless_sudo_warning)
+        self.assertNotIn("host engine", opted.passwordless_sudo_warning)
+        self.assertNotIn(str(self.home), opted.passwordless_sudo_warning)
+        both = self.worker(docker_socket=True, passwordless_sudo=True)
+        self.assertIn("host engine", both.passwordless_sudo_warning)
+        self.assertNotIn(str(self.home), both.passwordless_sudo_warning)
+        with self.assertRaisesRegex(ValueError, "passwordless sudo must be a boolean"):
+            self.worker(passwordless_sudo="yes")
+
     def test_docker_socket_alone_warns_and_names_both_directories(self):
         worker = self.worker(docker_socket=True)
         self.assertIs(worker.docker_socket, True)
