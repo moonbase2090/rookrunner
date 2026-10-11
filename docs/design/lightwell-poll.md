@@ -26,7 +26,7 @@ overlap, so the two locks do not submit the same job.
 
 ## x86_64
 
-Places, in order: Nexus, then Vertex. There is no Mac place. An x86_64
+Places, in order: linux-1, then linux-2. There is no Mac place. An x86_64
 package job does not fall back to the Mac.
 
 ```
@@ -34,8 +34,8 @@ poll --repository moonbase2090/lightwell
   --job .github/workflows/rookrunner.yml checks
   --job .github/workflows/rookrunner.yml linux-cli-x86_64
   --job .github/workflows/rookrunner.yml tauri-linux-artifact
-  --place {"name":"nexus","ssh":"nexus","state":"/var/lib/rookrunner/state","cap":4,"image":"<nexus lightwell image>"}
-  --place {"name":"vertex","ssh":"vertex","state":"/var/lib/rookrunner/state","cap":2,"image":"<vertex lightwell image>"}
+  --place {"name":"linux-1","ssh":"linux-1","state":"/var/lib/rookrunner/state","cap":4,"image":"<linux-1 lightwell image>"}
+  --place {"name":"linux-2","ssh":"linux-2","state":"/var/lib/rookrunner/state","cap":2,"image":"<linux-2 lightwell image>"}
 ```
 
 ## aarch64

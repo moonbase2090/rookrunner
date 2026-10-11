@@ -1,11 +1,11 @@
-# Vertex worker
+# Linux host worker
 
 Status: the install procedure is recorded. User linger stays off.
-This pull request does not run a command on Vertex and does not
+This pull request does not run a command on the second dogfood host and does not
 install the unit. The command list is
-[Vertex install](vertex-install.md).
+[Linux host install](linux-host-install.md).
 
-Vertex uses the same unit as any other host,
+The second dogfood host uses the same unit as any other host,
 [deploy/rookrunner-worker.service](../../deploy/rookrunner-worker.service).
 There is no second unit file. `Restart=always`, the engine checkout
 `/var/lib/rookrunner/engine`, and `PYTHONPATH` set to that
@@ -13,7 +13,7 @@ checkout's `src` stay as that file writes them.
 
 ## Linger
 
-User linger on Vertex is off. The install runs this command for the
+User linger on the second dogfood host is off. The install runs this command for the
 service user before it enables the user service:
 
     sudo loginctl enable-linger "$USER"
@@ -24,7 +24,7 @@ user service then stays up when the login session ends.
 
 ## Image
 
-The install builds Vertex's own x86_64 image and appends that
+The install builds the host's own x86_64 image and appends that
 digest to `ExecStart` on the host copy. The digest stays on the
 host. The unit in this repository has no digest.
 

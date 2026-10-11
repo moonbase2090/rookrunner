@@ -1,10 +1,10 @@
-# Nexus and Vertex day-to-day dogfood
+# Dogfood hosts
 
 Status: proposed. This document is a plan. It does not install a
 unit, load a timer, enable linger, copy a key, build an image, or
 start the status page. The hosts are running that install. The
 record is
-[Nexus and Vertex dogfood start](../validation/dogfood-nexus-vertex.md).
+[Dogfood start](../validation/dogfood.md).
 The 14-day window is open. Success criteria are written when the
 window ends. Paused items stay paused.
 
@@ -17,8 +17,8 @@ The worker unit is
 [deploy/rookrunner-worker.service](../../deploy/rookrunner-worker.service).
 It is a file in this repository. [Worker unit](../design/worker-unit.md)
 records that the file is not installed on a host by the change that
-added it. Nexus install is a later letter. The Vertex install
-procedure is [Vertex install](../design/vertex-install.md). Linger
+added it. The first dogfood host install is a later letter. The Linux host install
+procedure is [Linux host install](../design/linux-host-install.md). Linger
 stays off until that procedure's linger command is run on the host.
 This plan does not run it.
 
@@ -40,7 +40,7 @@ The Lightwell x86 configuration is
 `moonbase2090/lightwell`. The workflow is
 `.github/workflows/rookrunner.yml`. The jobs are `checks`,
 `linux-cli-x86_64`, and `tauri-linux-artifact`. Places, in order,
-are Nexus at cap 4, then Vertex at cap 2. There is no Mac place for
+are linux-1 at cap 4, then linux-2 at cap 2. There is no Mac place for
 those jobs. The interval is 900 seconds. `--image` is omitted, so
 each place image must equal that worker's runner image. That image
 is the lightwell image recorded on the host. It is not the lunatui
@@ -73,15 +73,15 @@ Untrusted code is not on that list.
 
 ## What to install
 
-The install runs two processes on Nexus and the same two processes
-on Vertex. This document does not install either process. What is
+The install runs two processes on the first dogfood host and the same two processes
+on the second dogfood host. This document does not install either process. What is
 running is the record linked above.
 
 ### Worker
 
 The worker is the unit file above, one service per box, one clone.
 The clone remote for this plan is `moonbase2090/lightwell`. The
-Vertex install document records a different clone remote. That
+Linux host install document records a different clone remote. That
 remote is not the clone this plan runs. The repository copy of the
 unit stays free of a digest, a key path, `--app-key`,
 `--docker-socket`, and a listen socket. The host copy appends that
@@ -95,11 +95,11 @@ resident service. Every 900 seconds it runs one `poll` pass and
 exits. The pass uses a poll state directory separate from the
 worker state directory, so `poll.json` is not the worker socket
 directory. The place has no `ssh` field. The worker socket is
-local. Nexus uses cap 4. Vertex uses cap 2. `--image` is omitted.
+local. linux-1 uses cap 4. linux-2 uses cap 2. `--image` is omitted.
 The place image is that host's lightwell runner image. The digest
 is not written in this document.
 
-Nexus:
+First dogfood host:
 
 ```text
 python3 -m execution_core
@@ -110,11 +110,11 @@ python3 -m execution_core
   --job .github/workflows/rookrunner.yml checks
   --job .github/workflows/rookrunner.yml linux-cli-x86_64
   --job .github/workflows/rookrunner.yml tauri-linux-artifact
-  --place {"name":"nexus","state":"/var/lib/rookrunner/state","cap":4,"image":"<nexus lightwell image>"}
+  --place {"name":"linux-1","state":"/var/lib/rookrunner/state","cap":4,"image":"<linux-1 lightwell image>"}
 ```
 
-Vertex uses the same command with `"name":"vertex"`, `"cap":2`, and
-`"<vertex lightwell image>"`.
+The second dogfood host uses the same command with `"name":"linux-2"`, `"cap":2`, and
+`"<linux-2 lightwell image>"`.
 
 The pass does not pass `--allow-untrusted`,
 `--credential-file`, `--docker-socket`, or `--ssh-host`. The
@@ -145,15 +145,15 @@ stopped that Mac place before the box timers started.
 ## Repositories
 
 Both boxes run one repository. One worker binds one clone, and the
-accepted x86 places are Nexus and Vertex for the same jobs.
+accepted x86 places are the dogfood hosts for the same jobs.
 
 | | |
 | --- | --- |
 | Repository | `moonbase2090/lightwell` |
 | Workflow | `.github/workflows/rookrunner.yml` |
 | Jobs on these boxes | `checks`, `linux-cli-x86_64`, `tauri-linux-artifact` |
-| Nexus cap | 4 |
-| Vertex cap | 2 |
+| First dogfood host cap | 4 |
+| Second dogfood host cap | 2 |
 | Interval | 900 seconds |
 | Sign-off | `signoff_absent` |
 
@@ -164,7 +164,7 @@ configuration.
 `moonbase2090/rookrunner` `.github/workflows/check.yml` is this
 product's own workflow. It has one job, `check`. Owner CI recorded
 one push and one pull request for that repository. It is not
-assigned to Nexus or Vertex. Assigning it would replace that box's
+assigned to a dogfood host. Assigning it would replace that box's
 lightwell clone. This plan leaves that workflow off these boxes.
 
 These boxes do not run lunatui for this dogfood. The lightwell
@@ -243,7 +243,7 @@ link only when the stored check URL is a GitHub actions run URL.
 Otherwise the cell is `not posted`. The page shows no filesystem
 path, home path, secret, token, or submission key.
 
-A page on the Mac that renders a Nexus or Vertex worker is a
+A page on the Mac that renders a a dogfood host worker is a
 non-goal. The record says the page is running on each box. This
 document does not start it.
 
@@ -282,8 +282,8 @@ not a successful run.
    `moonbase2090/lightwell`. The page shows no filesystem path,
    home path, secret, token, or submission key.
 3. During the 14 days, each of `checks`, `linux-cli-x86_64`, and
-   `tauri-linux-artifact` has a terminal run on Nexus and a
-   terminal run on Vertex. The operator records the state and the
+   `tauri-linux-artifact` has a terminal run on the first dogfood host and a
+   terminal run on the second dogfood host. The operator records the state and the
    exit code. `succeeded` with exit code 0 meets this criterion
    for that job and box. `failed` with an exit code and a check
    link also meets it, and the operator records the failure. A
@@ -295,7 +295,7 @@ not a successful run.
    untrusted SHA is seen, the warning names the reason and no run
    is created for that SHA.
 6. The queue and the concurrency groups render. The queue cap
-   stays 100. The place caps stay 4 on Nexus and 2 on Vertex.
+   stays 100. The place caps stay 4 on the first dogfood host and 2 on the second.
    Those caps are poll placement caps. They are not worker fields.
 7. At the end of the window the engine still rejects macOS jobs,
    `actions/cache`, Docker actions, `actions/setup-node`, and

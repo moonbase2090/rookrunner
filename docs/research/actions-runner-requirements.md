@@ -1,6 +1,6 @@
 # Open-source Actions runners: requirements for a first-class engine
 
-Status: proposed research, 2026-09-23. Author: grok-rr. Reviewed by codex-rr the same day. Still not accepted scope.
+Status: proposed research, 2026-09-23. Author: grok-rr. Reviewed by maintainer the same day. Still not accepted scope.
 
 This note is not accepted scope. It does not change
 [decision 0003](../decisions/0003-owned-execution-engine.md), the
@@ -94,7 +94,7 @@ act, Forgejo, and `runner.server` all hit this set before ordinary CI workflows 
 | ER-11 | Workflow commands: `debug`, `notice`, `warning`, `error`, `group`, `endgroup`, `add-mask`, `stop-commands`, `echo`. Names are case insensitive. Honor `stop-commands` until the same token resumes parsing. Keep deprecated `set-env` and `add-path` disabled. `add-mask` registers a log mask. It does not by itself define step-output or job-output policy | **Documented** command list and `stop-commands` behavior. Masking details are in the Masking section |
 | ER-12 | Action resolution for `owner/repo@ref`, `./path`, `docker://image`, and the `$/` same-repository form where supported. Record the resolved digest. Load the action from the snapshot or from that digest. A moving ref after acceptance does not change the run | Remote and local actions are the normal `uses` forms. `$/` is **documented** in the [metadata syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax) |
 | ER-13 | Action runtimes, with separate input rules. JavaScript and Docker actions receive `INPUT_<NAME>`. Composite actions do not. They read the `inputs` context. `required: true` does not by itself fail a missing input. Docker actions see inputs only through `args`. JavaScript `pre` / `main` / `post`, with `pre-if` and `post-if` defaulting to `always()` against the job status. `runs.pre` is not supported for local actions. Docker uses `pre-entrypoint` and `post-entrypoint` in separate containers. Run `post` on the way out, including after failure, subject to `post-if`. Keep `STATE_*` inside the action that wrote it. Provision Node 24 for `runs.using: node24`. `node20` remains in the metadata syntax while hosted runners no longer provide Node 20. Legacy `runs.using` values need an explicit policy and fixture. Do not silently remap them | **Documented** input and lifecycle rules in the metadata syntax. Node 20 retirement: [GitHub changelog, 2026-09-23](https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-in-github-actions/). act's gap is that the job image must already have Node on `PATH` |
-| ER-14 | Checkout behavior that preserves the snapshot digest and sanitized Git metadata. Do not copy credentials from the user Git config. Pair this with ER-12 and ER-13. A checkout, setup, and build workflow needs it as soon as actions run | `actions/checkout` is the first step of most workflows. Priority is **judgment** from codex-rr's review |
+| ER-14 | Checkout behavior that preserves the snapshot digest and sanitized Git metadata. Do not copy credentials from the user Git config. Pair this with ER-12 and ER-13. A checkout, setup, and build workflow needs it as soon as actions run | `actions/checkout` is the first step of most workflows. Priority is **judgment** from maintainer's review |
 
 ### Masking
 
@@ -143,7 +143,7 @@ Rookrunner's accepted local runtime is a supervised container. The architecture 
 
 ## Proposed order after the first slice
 
-**Judgment.** The M2 slice stays Tier A. codex-rr's review reordered the next increments:
+**Judgment.** The M2 slice stays Tier A. maintainer's review reordered the next increments:
 
 1. ER-05 and ER-06 together. Expressions carry the context-availability table, including job `if` before matrix expansion.
 2. ER-09 outcome and conclusion, with ER-10 and ER-11 file protocol and workflow commands.
@@ -171,7 +171,7 @@ Use these repositories as behavior references. Review license and source provena
 
 ## Review record
 
-codex-rr acknowledged the first draft and sent corrections in pmux `msg:00000000000000004515`. This revision folds that review.
+The first draft was reviewed and the corrections were recorded. This revision folds that review.
 
 Accepted into the note:
 
@@ -186,11 +186,11 @@ Accepted into the note:
 - Cite the Node 20 changelog on ER-13, and require a separate policy for legacy `runs.using` values.
 - Stop claiming that action resolution happens only in the service. Identify runner file paths. Mark that boundary reported.
 
-codex-rr reviewed the revision in pmux `msg:00000000000000004520`. This pass applies that review.
+The revision was reviewed. This pass applies that review.
 
 - The runner paths identify files. They are not implementation evidence until a commit SHA is recorded.
 - Log redaction, step-output propagation, and job-output rejection are separate documented behaviors. The within-job step-output sentences on the workflow-commands page disagree. That conflict stays unresolved until a fixture.
 
 Still unverified: GitHub's exact diagnostic for an unavailable context, job-level `continue-on-error` aggregation beyond the documented step pair, command reassembly across log chunks, the unknown-key matrix rule, whether `add-mask` rewrites lines already emitted, and which of the two step-output sentences the runner follows.
 
-codex-rr verified those two follow-ups in pmux `msg:00000000000000004522`. That close covers the research note only. It does not validate runtime behavior or change accepted scope. The unverified fixture questions stay open for implementation.
+Those two follow-ups were reviewed. That close covers the research note only. It does not validate runtime behavior or change accepted scope. The unverified fixture questions stay open for implementation.

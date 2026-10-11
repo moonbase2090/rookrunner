@@ -1,7 +1,7 @@
-# Nexus and Vertex dogfood start
+# Dogfood start
 
 Date: 2026-10-10. This is the host install named by
-[Nexus and Vertex day-to-day dogfood](../planning/dogfood-nexus-vertex.md).
+[Dogfood hosts](../planning/dogfood.md).
 It records what is running. It does not change the engine. The
 capability version stays 12. `.github/workflows/check.yml` is
 unchanged.
@@ -13,7 +13,7 @@ open. Paused items stay paused. No finding here unlocks one.
 
 ## What is running
 
-On Nexus and on Vertex:
+On the first dogfood host and on the second dogfood host:
 
 - The worker is the repository unit. The host copy appends the
   lightwell image digest. The unit has no `--app-key`, no
@@ -21,7 +21,7 @@ On Nexus and on Vertex:
 - The status page command is `status-page` with state
   `/var/lib/rookrunner/state`. It binds `127.0.0.1:8765`.
 - The poll timer runs one pass every 900 seconds and exits. The
-  place is local. Nexus cap is 4. Vertex cap is 2. `--image` is
+  place is local. The first dogfood host cap is 4. The second dogfood host cap is 2. `--image` is
   omitted. The place image is the digest below.
 - The repository is `moonbase2090/lightwell`. The workflow is
   `.github/workflows/rookrunner.yml`. The jobs are `checks`,
@@ -65,8 +65,8 @@ path, home path, secret, or token.
 
 | Box | Worker | Ready | Version | Last poll | Repository |
 | --- | --- | --- | --- | --- | --- |
-| Nexus | `up` | `true` | `0.0.1` | `2026-10-10T03:42:58.018587+00:00` | `moonbase2090/lightwell` |
-| Vertex | `up` | `true` | `0.0.1` | `2026-10-10T03:42:54.508801+00:00` | `moonbase2090/lightwell` |
+| First dogfood host | `up` | `true` | `0.0.1` | `2026-10-10T03:42:58.018587+00:00` | `moonbase2090/lightwell` |
+| Second dogfood host | `up` | `true` | `0.0.1` | `2026-10-10T03:42:54.508801+00:00` | `moonbase2090/lightwell` |
 
 The runner image on both pages is the digest above. The package
 version is the page's version. The capability version stays 12
@@ -75,7 +75,7 @@ and is not a field on the page.
 A second `status-page` process on each box exited 1. Its stderr
 was `status page could not bind 127.0.0.1:8765`.
 
-The queue and the concurrency groups rendered. At the Vertex read,
+The queue and the concurrency groups rendered. At the second dogfood host read,
 queued was 0 and running was 0.
 
 ## Runs for `3d394a9a`
@@ -83,7 +83,7 @@ queued was 0 and running was 0.
 A run is successful only when its state is `succeeded` and its
 exit code is 0. These runs use the image digest above.
 
-### Nexus
+### First dogfood host
 
 | Job | Run | Accepted | Finished | State | Exit | Check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -91,14 +91,14 @@ exit code is 0. These runs use the image digest above.
 | `linux-cli-x86_64` | `3fda883b-67dc-49b8-a3ee-941ed220a7a9` | `2026-10-10T03:09:49.481070+00:00` | `2026-10-10T03:12:14.612144+00:00` | `succeeded` | 0 | [114117392228](https://github.com/moonbase2090/lightwell/runs/114117392228) `success` |
 | `tauri-linux-artifact` | `b395bc9e-e750-48e2-abe1-1a8f3c6faeee` | `2026-10-10T03:09:56.416099+00:00` | `2026-10-10T03:15:13.996817+00:00` | `succeeded` | 0 | [114117411937](https://github.com/moonbase2090/lightwell/runs/114117411937) `success` |
 
-### Vertex
+### Second dogfood host
 
 | Job | Run | Accepted | Finished | State | Exit | Check |
 | --- | --- | --- | --- | --- | --- | --- |
 | `checks` | `6b854b90-027b-482c-89de-bfc4b8db96de` | `2026-10-10T03:12:13.584073+00:00` | `2026-10-10T03:14:57.473649+00:00` | `succeeded` | 0 | [114117829065](https://github.com/moonbase2090/lightwell/runs/114117829065) `success` |
 | `linux-cli-x86_64` | `2a0baf4e-7c96-4eda-8aeb-4b9b311550b2` | `2026-10-10T03:12:16.614111+00:00` | `2026-10-10T03:16:03.112495+00:00` | `succeeded` | 0 | [114117839063](https://github.com/moonbase2090/lightwell/runs/114117839063) `success` |
 
-Vertex has no `tauri-linux-artifact` run for this commit. The
+The second dogfood host has no `tauri-linux-artifact` run for this commit. The
 place cap is 2. That job stays inside the open window.
 
 ## Install checks before those posts
@@ -108,9 +108,9 @@ their check cell as `not posted`.
 
 | Box | Run | Job | Accepted | Finished | State | Exit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Nexus | `2e4bb543-52ce-4a8a-b2c3-74f6bfb0b587` | `checks` | `2026-10-10T02:23:57.804784+00:00` | `2026-10-10T02:24:00.242408+00:00` | `failed` | none |
-| Nexus | `2c381e52-a1ad-4f71-bca8-f2ebe59aeea7` | `checks` | `2026-10-10T02:28:30.157343+00:00` | `2026-10-10T02:30:19.711941+00:00` | `succeeded` | 0 |
-| Vertex | `98e6cf3f-83e2-44fd-925e-6a2a08744331` | `checks` | `2026-10-10T02:23:56.727876+00:00` | `2026-10-10T02:26:28.676746+00:00` | `succeeded` | 0 |
+| First dogfood host | `2e4bb543-52ce-4a8a-b2c3-74f6bfb0b587` | `checks` | `2026-10-10T02:23:57.804784+00:00` | `2026-10-10T02:24:00.242408+00:00` | `failed` | none |
+| First dogfood host | `2c381e52-a1ad-4f71-bca8-f2ebe59aeea7` | `checks` | `2026-10-10T02:28:30.157343+00:00` | `2026-10-10T02:30:19.711941+00:00` | `succeeded` | 0 |
+| Second dogfood host | `98e6cf3f-83e2-44fd-925e-6a2a08744331` | `checks` | `2026-10-10T02:23:56.727876+00:00` | `2026-10-10T02:26:28.676746+00:00` | `succeeded` | 0 |
 
 `2e4bb543` ended `SETUP_FAILED` with `image digest will not
 resolve`. The worker's Docker socket is
@@ -133,7 +133,7 @@ items is missing. This record does not implement them.
 ## Still open
 
 - The window's end, and the success-criteria writeup.
-- A terminal `tauri-linux-artifact` run on Vertex for a commit in
+- A terminal `tauri-linux-artifact` run on the second dogfood host for a commit in
   the window.
 - A later finding that meets the plan's unlock rule. The same
   record does not start that work.

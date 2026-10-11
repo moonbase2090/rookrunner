@@ -9,7 +9,7 @@
       "horizon": "Now",
       "outcome": "A developer can execute captured local workflow inputs and trust the reported terminal result.",
       "exit_evidence": "RR-7 records end-to-end success, failure, captured-input isolation, cancellation and restart evidence; all M2 stories satisfy their acceptance criteria.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "parser",
@@ -22,7 +22,7 @@
             "Validate the entire workflow; document explicit event, single Linux job, Bash, static env/defaults and sequential run-step limits."
           ],
           "depends_on": [],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "enabler",
           "id": "RR-2"
@@ -40,7 +40,7 @@
           "depends_on": [
             "parser"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-3"
@@ -58,7 +58,7 @@
           "depends_on": [
             "snapshot"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-4"
@@ -77,7 +77,7 @@
             "snapshot",
             "runtime"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-5"
@@ -96,7 +96,7 @@
             "runtime",
             "durable"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "L",
           "kind": "story",
           "id": "RR-6"
@@ -115,7 +115,7 @@
             "durable",
             "recovery"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "verification",
           "id": "RR-7"
@@ -162,7 +162,7 @@
       "horizon": "Next",
       "outcome": "Authors can use conditions, contexts, step outputs and dependent jobs with explainable outcomes.",
       "exit_evidence": "A supported fixture suite proves each semantic feature and explicitly lists unsupported cases.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "expressions",
@@ -178,7 +178,7 @@
             "parser",
             "research"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "L",
           "kind": "story",
           "id": "RR-11"
@@ -197,7 +197,7 @@
             "runtime",
             "research"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-12"
@@ -216,7 +216,7 @@
             "expressions",
             "files"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-13"
@@ -234,7 +234,7 @@
           "depends_on": [
             "outcomes"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-14"
@@ -249,7 +249,7 @@
       "horizon": "Now",
       "outcome": "Authors can run a checkout/setup/build workflow with owned action resolution and runtimes.",
       "exit_evidence": "A pinned checkout plus setup plus build fixture completes with action provenance, lifecycle and cleanup evidence.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "resolve",
@@ -265,7 +265,7 @@
             "parser",
             "research"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-16",
@@ -287,7 +287,7 @@
             "resolve",
             "snapshot"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-17",
@@ -310,7 +310,7 @@
             "resolve",
             "files"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-18",
@@ -335,7 +335,7 @@
             "expressions",
             "files"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-19"
@@ -556,7 +556,7 @@
       "horizon": "Later",
       "outcome": "Teams can incrementally adopt more complex workflows without silent omissions.",
       "exit_evidence": "Every enabled capability has bounded-resource and failure/cleanup fixtures plus a compatibility entry.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "matrix",
@@ -571,7 +571,7 @@
           "depends_on": [
             "dag"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "L",
           "kind": "story",
           "id": "RR-21"
@@ -590,7 +590,7 @@
             "dag",
             "resolve"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "L",
           "kind": "story",
           "id": "RR-22"
@@ -609,7 +609,7 @@
             "resolve",
             "recovery"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-23"
@@ -628,7 +628,7 @@
             "recovery",
             "dag"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-24"
@@ -643,7 +643,7 @@
       "horizon": "Next",
       "outcome": "Maintainers and users can see exactly which behavior is supported and how it was validated.",
       "exit_evidence": "Each advertised capability links to fixtures, source versions, local evidence and reference status.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "catalog",
@@ -677,7 +677,7 @@
             "catalog",
             "m2proof"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-27"
@@ -711,7 +711,7 @@
       "horizon": "Later",
       "outcome": "Agents can submit, reconnect, inspect and cancel through the same contract as CLI users.",
       "exit_evidence": "CLI and MCP agree on identifiers, outcomes, bounded logs and errors in end-to-end fixtures.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "mcp",
@@ -726,7 +726,7 @@
           "depends_on": [
             "durable"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-30"
@@ -744,7 +744,7 @@
           "depends_on": [
             "mcp"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-31"
@@ -763,7 +763,7 @@
             "mcp",
             "recovery"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-32"
@@ -778,7 +778,7 @@
       "horizon": "Later",
       "outcome": "A developer can understand queue, results and recovery from a usable local dashboard.",
       "exit_evidence": "Selected runnable design passes visible install-to-result, reconnect and cancellation scenarios.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "uidesign",
@@ -791,7 +791,7 @@
             "Record the selected direction before production UI implementation."
           ],
           "depends_on": [],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "spike",
           "id": "RR-34"
@@ -810,7 +810,7 @@
             "uidesign",
             "evidence"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-35"
@@ -829,7 +829,7 @@
             "uiview",
             "recovery"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-36"
@@ -844,7 +844,7 @@
       "horizon": "Later",
       "outcome": "A new user can install independently and complete the documented first workflow run.",
       "exit_evidence": "P01-P12 acceptance passes from the packaged artifact and an external user completes the flow.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "license",
@@ -876,7 +876,7 @@
             "m2proof",
             "license"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-39"
@@ -894,7 +894,7 @@
           "depends_on": [
             "package"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "story",
           "id": "RR-40"
@@ -915,7 +915,7 @@
             "uicancel",
             "compatdocs"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "verification",
           "id": "RR-41"
@@ -930,7 +930,7 @@
       "horizon": "Discovery",
       "outcome": "Decide whether and how to extend local execution to authenticated private machines.",
       "exit_evidence": "A reviewed proposal identifies trust boundaries, protocol/lifecycle changes, success criteria and a go/no-go decision.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "remotecontract",
@@ -961,7 +961,7 @@
           "depends_on": [
             "remotecontract"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "spike",
           "id": "RR-44"
@@ -976,7 +976,7 @@
       "horizon": "Discovery",
       "outcome": "Decide whether a managed multi-customer service is viable as a separate product milestone.",
       "exit_evidence": "A reviewed proposal separates tenant isolation, service operations and economics from local/remote worker scope.",
-      "owner": "codex-rr",
+      "owner": "maintainer",
       "stories": [
         {
           "key": "tenant",
@@ -1007,7 +1007,7 @@
           "depends_on": [
             "tenant"
           ],
-          "owner": "codex-rr",
+          "owner": "maintainer",
           "size": "M",
           "kind": "spike",
           "id": "RR-47"

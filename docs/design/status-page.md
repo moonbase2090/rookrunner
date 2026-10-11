@@ -11,7 +11,7 @@ a host.
 
 ## Overview
 
-Nexus and Vertex each run one worker. The operator on that
+The dogfood hosts each run one worker. The operator on that
 machine has no read-only page of the worker, the last poll, the
 recent runs, or the queue. The M3 dashboard is a different
 program. It is a terminal client, it can cancel, and it binds no
@@ -74,7 +74,7 @@ Poll is not a resident service. `Pass.run` loads
 end of the pass. That file has no completed-at field. Its mtime
 changes on a checkpoint, before the pass has finished. For the
 Lightwell x86 pass, poll runs on the Mac and the worker state on
-Nexus and Vertex is `/var/lib/rookrunner/state`. `poll.json` is
+the dogfood hosts is `/var/lib/rookrunner/state`. `poll.json` is
 not in that directory. The unit file binds no listen socket. The
 poller stays on the Mac.
 
@@ -84,7 +84,7 @@ ascending. `eligible` skips a queued run whose casefolded
 concurrency groups intersect a running run. `queue: max` keeps at
 most `MAX_PENDING`, 100, pending runs in a group. The scheduler
 thread runs one picked run to completion before it picks another.
-The Lightwell place caps, 4 on Nexus and 2 on Vertex, are poll
+The Lightwell place caps, 4 on the first dogfood host and 2 on the second, are poll
 placement caps. They are not worker fields.
 
 The M3 command is `dashboard`. `serve_terminal` binds no port.
@@ -122,7 +122,7 @@ page must not invent a second success label.
 - An authentication scheme beyond the loopback bind and the Host
   check below. No token, cookie, or second user.
 - A multi-user service, a remote reader, SSH from the page, or
-  a page on the Mac that renders a Nexus worker.
+  a page on the Mac that renders a dogfood-host worker.
 - Reading `runs.sqlite3` or `poll.json` from the page process.
 - Printing a filesystem path, a home path, a secret, a
   credential, a token, an environment value, a submission key,
@@ -450,8 +450,8 @@ Group names are text. They are never placed in an href.
 
 On main, nothing on the worker records that a poll pass
 finished. `poll.json` is the wrong file for this page: it has no
-completed-at field, checkpoints move its mtime, and on Nexus and
-Vertex it is not in the worker state directory.
+completed-at field, checkpoints move its mtime, and on the dogfood
+hosts it is not in the worker state directory.
 
 Proposed: at the end of `Pass.run`, after the post loop and
 before the final `_save_state`, the pass calls `poll.record` on
@@ -695,7 +695,7 @@ contract and does not write the run store. Reading
 `runs.sqlite3` while the worker writes it races, and the
 `request` column is the event, which includes a login. Rendering
 that column is how a secret-shaped string would reach the page.
-`poll.json` is not on the Nexus or Vertex worker state. Its mtime
+`poll.json` is not on a dogfood host's worker state. Its mtime
 is not a finished pass.
 
 ### Listen inside Worker.serve
@@ -834,7 +834,7 @@ still has the check.
 5. The last poll is two metadata keys written by `poll.record`
    at the end of a pass. A place is stamped only when
    `remote_repository` is set, which is the origin match. It is
-   not the mtime of `poll.json`. Nexus and Vertex do not have
+   not the mtime of `poll.json`. The dogfood hosts do not have
    that file. `skip != "repository"` is not the rule.
 6. `run.get` does not gain check fields. The link is built inside
    `status.view` from `check_posts.check_run_id` and is null
@@ -873,9 +873,9 @@ a second option left open.
 - [Worker unit](worker-unit.md). The unit binds no listen socket.
   State is `/var/lib/rookrunner/state`. The repository path in
   the unit is `/var/lib/rookrunner/clone`.
-- [Vertex worker](vertex-worker.md). The poller stays on the Mac.
+- [Linux host worker](linux-host-worker.md). The poller stays on the Mac.
   The host copy has no listen socket.
-- [Lightwell poll](lightwell-poll.md). Nexus then Vertex, over
+- [Lightwell poll](lightwell-poll.md). linux-1 then linux-2, over
   SSH, with worker state `/var/lib/rookrunner/state`.
 - [Check runs](check-runs.md). `run.get` does not gain check
   fields. The response body is not stored.

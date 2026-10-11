@@ -22,12 +22,12 @@ class LightwellPollTests(unittest.TestCase):
         self.x86 = _section(self.text, "## x86_64")
         self.arm = _section(self.text, "## aarch64")
 
-    def test_x86_jobs_use_nexus_then_vertex_and_skip_the_mac(self):
+    def test_x86_jobs_use_linux_1_then_linux_2_and_skip_the_mac(self):
         self.assertLess(self.text.index("## x86_64"), self.text.index("## aarch64"))
         for job in ("checks", "linux-cli-x86_64", "tauri-linux-artifact"):
             self.assertIn(f"rookrunner.yml {job}", self.x86)
         self.assertNotIn("linux-cli-aarch64", self.x86)
-        self.assertLess(self.x86.index('"name":"nexus"'), self.x86.index('"name":"vertex"'))
+        self.assertLess(self.x86.index('"name":"linux-1"'), self.x86.index('"name":"linux-2"'))
         self.assertNotIn('"name":"mac"', self.x86)
         self.assertIn('"cap":4', self.x86)
         self.assertIn('"cap":2', self.x86)
