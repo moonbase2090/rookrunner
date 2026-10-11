@@ -463,6 +463,10 @@ class RunnerAccountTests(unittest.TestCase):
             step=(
                 'test "$(id -u)" != 0\n'
                 'sudo -n id -u > "$GITHUB_WORKSPACE/sudo-uid.txt"\n'
+                'test "$(stat -c %a /etc/sudoers.d/rookrunner)" = 440\n'
+                'test "$(stat -c %u /etc/sudoers.d/rookrunner)" = 0\n'
+                "sudo -n cat /etc/sudoers.d/rookrunner"
+                ' > "$GITHUB_WORKSPACE/sudoers.txt"\n'
                 "test \"$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 0\n"
                 "test \"$(awk '/^CapEff:/ { print $2 }' /proc/self/status)\""
                 " = 0000000000000000\n"
@@ -474,8 +478,9 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded", result)
         self.assertEqual((workspace / "sudo-uid.txt").read_text().strip(), "0")
         account = workspace.parent / "runner-account"
-        sudoers = (account / "sudoers").read_text()
-        self.assertEqual((account / "sudoers").stat().st_mode & 0o777, 0o440)
+        sudoers_path = account / "sudoers"
+        self.assertEqual(sudoers_path.stat().st_mode & 0o777, 0o440)
+        sudoers = (workspace / "sudoers.txt").read_text()
         self.assertIn("NOPASSWD: ALL", sudoers)
         self.assertIn(f"runner-{uid}", sudoers)
         calls = _calls(self.log)
