@@ -56,7 +56,9 @@ The template unit itself still omits those flags.
 The first dogfood host install letter creates `/var/lib/rookrunner/engine`,
 `/var/lib/rookrunner/state`, and `/var/lib/rookrunner/clone`, copies
 this file into the user unit directory, and appends that host's
-image digest to `ExecStart`. The Linux host install uses the
+image digest to `ExecStart`. A host whose jobs need egress also
+adds `--network bridge` on that copy. Cargo and pip need it. The
+repository unit omits the flag. The Linux host install uses the
 same unit. [Linux host worker](linux-host-worker.md) records
 `sudo loginctl enable-linger "$USER"` for the service user and
 records the host's own image digest on the host copy. Linger stays

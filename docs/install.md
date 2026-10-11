@@ -52,6 +52,17 @@ tar -xzf execution_core-0.1.1.tar.gz -C /var/lib/rookrunner/engine --strip-compo
 5. The clone, the image, and starting the user service stay
    operator steps. Copy the repository unit as it is, and append
    only that host's image digest on the `ExecStart` line.
+   When that host's jobs need egress, also add `--network bridge`
+   on that line. Cargo and pip need it. The repository unit omits
+   the flag, so a copied unit has no egress until the host adds it.
+
+## Upgrade
+
+Replacing the engine tree does not change a unit that is already
+running. Before restarting the worker on a tree whose job network
+defaults to `none`, add `--network bridge` to the host copy's
+`ExecStart` when jobs need egress. This page does not edit a
+running unit.
 
 Do not copy a private key into the engine tree. Do not mount the
 Docker socket unless the worker is started with `--docker-socket`.

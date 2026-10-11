@@ -10,6 +10,15 @@ PROSE = " ".join(TEXT.split())
 
 
 class InstallDocTests(unittest.TestCase):
+    def test_an_upgrade_that_needs_egress_adds_network_bridge(self):
+        self.assertIn(
+            "add `--network bridge` to the host copy's `ExecStart` when jobs need egress.",
+            PROSE,
+        )
+        self.assertIn("Cargo and pip need it.", PROSE)
+        self.assertIn("The repository unit omits the flag", PROSE)
+        self.assertIn("This page does not edit a running unit.", PROSE)
+
     def test_developer_installs_the_wheel_without_pythonpath(self):
         self.assertIn("execution_core-0.1.1-py3-none-any.whl", TEXT)
         self.assertIn("Do not set `PYTHONPATH`.", TEXT)

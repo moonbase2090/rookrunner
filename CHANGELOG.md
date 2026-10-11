@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A host that upgrades onto a tree where the job network defaults
+  to `none` adds `--network bridge` on that host's unit when jobs
+  need egress. Cargo and pip need it. The repository unit omits
+  the flag.
 - Job containers use Docker network `none` by default.
   `worker --network bridge` opts in to egress. Service containers start
   only with that opt-in.

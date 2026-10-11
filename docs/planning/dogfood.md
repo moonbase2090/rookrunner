@@ -27,6 +27,8 @@ One worker binds one repository clone. The unit's
 `/var/lib/rookrunner/engine/src`. `ExecStart` is `/usr/bin/python3 -m execution_core`
 with `--state /var/lib/rookrunner/state`, the `worker` command, and
 `--repository /var/lib/rookrunner/clone`.
+A host copy whose jobs need egress adds `--network bridge`. Cargo
+and pip need it. The repository unit omits that flag.
 `Restart=always`. `NoNewPrivileges=yes`. `WantedBy=default.target`.
 The unit has no `User=` line, no home directory, and no `%h`. It has
 no private-key path, no `--app-key`, no `--docker-socket`, and no
