@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -438,6 +439,46 @@ class RunQuotingTests(unittest.TestCase):
                 "bash",
             ),
             "echo $(printf eval) '; id'",
+        )
+
+    def test_a_glob_command_name_is_not_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            'e* "printf child\\n ${{ env.MSG }}"',
+            '?val "printf child\\n ${{ env.MSG }}"',
+            'e[v]al "printf child\\n ${{ env.MSG }}"',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "eval").write_text("")
+            for source in scripts:
+                with self.subTest(source=source):
+                    rendered = None
+                    try:
+                        rendered = quote_run_expressions(source, values, "bash")
+                    except ExprError as exc:
+                        self.assertEqual(str(exc), "run is not accepted")
+                    if rendered is not None:
+                        completed = subprocess.run(
+                            ["bash", "-c", rendered],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            cwd=directory,
+                        )
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
+                        self.fail("glob command name was rendered")
+                    with self.assertRaises(ExprError) as raised:
+                        check_step_run(source, "bash")
+                    self.assertEqual(str(raised.exception), "run is not accepted")
+        self.assertEqual(
+            quote_run_expressions("echo * ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "echo * '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions("'e*' ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "'e*' '; id'",
         )
 
     def test_a_shell_command_without_c_stays_quoted(self):

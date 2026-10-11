@@ -23,6 +23,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn(
             "`$'eval'`, `$\"eval\"`, and a command substitution used as the command", PROSE
         )
+        self.assertIn("An unquoted `*`, `?`, or `[` in that command name is refused", PROSE)
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):

@@ -52,6 +52,8 @@ hide it. A backslash in that command name does not hide it either.
 A backslash before a newline is not part of that name.
 `$'eval'`, `$"eval"`, and a command substitution used as the command
 name are refused when that command contains an expression.
+An unquoted `*`, `?`, or `[` in that command name is refused the same
+way.
 
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,

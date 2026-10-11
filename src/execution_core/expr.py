@@ -1369,10 +1369,11 @@ def _shell_word(text):
 
     An unquoted backslash is removed. A backslash before a newline is
     removed entirely. ``$'...'`` is decoded. ``$"..."``, ``$(...)``,
-    ``${...}``, and an unquoted ``$`` or backtick are not a fixed word,
-    so this returns ``None``. Inside double quotes, a backslash is
-    removed only before ``$``, a backtick, ``"``, ``\\``, or a newline.
-    Single quotes keep the backslash. A quoted word is not a keyword.
+    ``${...}``, an unquoted ``$`` or backtick, and an unquoted ``*``,
+    ``?``, or ``[`` are not a fixed word, so this returns ``None``.
+    Inside double quotes, a backslash is removed only before ``$``, a
+    backtick, ``"``, ``\\``, or a newline. Single quotes keep the
+    backslash. A quoted word is not a keyword.
     """
 
     chars = []
@@ -1427,6 +1428,8 @@ def _shell_word(text):
             chars.append(text[index + 1])
             index += 2
             continue
+        if char in "*?[":
+            return None
         chars.append(char)
         index += 1
     return "".join(chars)
