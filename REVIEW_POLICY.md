@@ -69,3 +69,12 @@ These are the no-tautological-tests rules in `AGENTS.md`.
 - Releases and tags need owner approval.
 - A pull request that changes a path in `.github/CODEOWNERS` also needs the `mb2090-signoff` label. `.github/signoff.py` enforces it.
 - A successful run is a terminal succeeded result with `exit_code=0` for the identified input snapshot. Queued, running, interrupted, and unknown outcomes are not successful runs (`AGENTS.md`).
+
+## Review exceptions
+
+These rules narrow when a fresh review is needed. They replace nothing above unless they say so.
+
+- **Docs-only and changelog-only PRs** may merge on green checks plus the release-text check, with no review. A PR qualifies only if every changed file is documentation or the changelog; any code, config, CI, or workflow change makes it a normal PR.
+- **A SHIP carries over** a clean rebase or a label-only change, as long as the PR's own diff is unchanged. Compare the old and new tips with `git range-diff` or the patch-id (`git diff <base>...<tip> | git patch-id --stable`). If the diff changed at all, the PR needs a new review at the new tip.
+- **Leaf Windows fixes** merge on a code SHIP and green CI. Windows runtime proof for them is batched and recorded before each release instead of blocking each PR.
+- **Still need a full cross-family review at the exact tip**: security and red-team fixes, trunk PRs, CI and workflow changes, release PRs, and public-API changes. The reviewer is a different model family than the author, and the review names the tip SHA.
