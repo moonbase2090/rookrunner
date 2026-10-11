@@ -34,6 +34,8 @@ class ReadmeTests(unittest.TestCase):
             PROSE,
         )
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn("Every engine call uses the Docker context named `default`", PROSE)
+        self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", PROSE)
         self.assertIn("An unquoted value is single-quoted.", PROSE)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
         self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)

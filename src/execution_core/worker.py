@@ -141,7 +141,12 @@ from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .secrets import SecretAccess
-from .socket_lock import accept_socket_flags, host_control_warning
+from .socket_lock import (
+    accept_socket_flags,
+    host_control_warning,
+    pin_docker_context,
+    resolve_docker_context,
+)
 from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
@@ -2621,7 +2626,9 @@ def serve(
     secret_pushers=None,
     api_base=None,
     key_dir=None,
+    docker_context=None,
 ):
+    pin_docker_context(resolve_docker_context(docker_context))
     worker = Worker(
         repository,
         state,

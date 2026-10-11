@@ -601,6 +601,15 @@ def main():
         ),
     )
     worker.add_argument(
+        "--docker-context",
+        help=(
+            "Docker context for every engine call. "
+            "The default is the context named default. "
+            "ROOKRUNNER_DOCKER_CONTEXT names one when this flag is omitted. "
+            "An inherited DOCKER_CONTEXT or DOCKER_HOST does not select the engine."
+        ),
+    )
+    worker.add_argument(
         "--docker-socket",
         action="store_true",
         help=(
@@ -954,6 +963,7 @@ def main():
                 secret_pushers=args.secret_pusher,
                 api_base=args.api_base,
                 key_dir=args.key_dir,
+                docker_context=args.docker_context,
             )
             return
         if args.command == "describe":

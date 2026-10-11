@@ -134,7 +134,11 @@ Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
 and the jobs it needs. Job containers use Docker network `bridge` by default.
-`worker --network none` turns public internet access off. The job
+`worker --network none` turns public internet access off. Every
+engine call uses the Docker context named `default` unless
+`worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
+An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the
+engine. The job
 container does not mount the Docker socket unless the worker is started
 with `--docker-socket`. That flag gives the job the host Docker service.
 The job keeps the caller user. When the socket is mounted, a private

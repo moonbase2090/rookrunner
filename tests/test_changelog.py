@@ -15,6 +15,8 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("## [Unreleased]", TEXT)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
         self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
+        self.assertIn("Every engine call uses the Docker context named `default`", PROSE)
+        self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", PROSE)
         self.assertIn("A bash or sh `run` script quotes each `${{ }}` value.", PROSE)
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
         self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
