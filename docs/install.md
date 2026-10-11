@@ -55,6 +55,7 @@ tar -xzf execution_core-0.1.1.tar.gz -C /var/lib/rookrunner/engine --strip-compo
    When that host's jobs need egress, also add `--network bridge`
    on that line. Cargo and pip need it. The repository unit omits
    the flag, so a copied unit has no egress until the host adds it.
+   A host copy of the worker unit must set `NoNewPrivileges=yes`.
 
 ## Upgrade
 
@@ -63,6 +64,11 @@ running. Before restarting the worker on a tree whose job network
 defaults to `none`, add `--network bridge` to the host copy's
 `ExecStart` when jobs need egress. This page does not edit a
 running unit.
+
+A host copy of the worker unit must set `NoNewPrivileges=yes`.
+The repository unit sets that directive. A copy that omits it
+is reported by systemd as `NoNewPrivileges=no` and must be set
+to `yes`. This page does not edit a running unit.
 
 Do not copy a private key into the engine tree. Do not mount the
 Docker socket unless the worker is started with `--docker-socket`.

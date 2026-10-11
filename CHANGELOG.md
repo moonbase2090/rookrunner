@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A host copy of the worker unit must set `NoNewPrivileges=yes`.
+  The repository unit sets that directive. A copy that omits it
+  is reported by systemd as `NoNewPrivileges=no` and must be set
+  to `yes`. This note does not edit a running unit.
 - A host that upgrades onto a tree where the job network defaults
   to `none` adds `--network bridge` on that host's unit when jobs
   need egress. Cargo and pip need it. The repository unit omits

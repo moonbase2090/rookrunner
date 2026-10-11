@@ -14,6 +14,17 @@ DOC = ROOT / "docs" / "design" / "linux-host-worker.md"
 
 
 class LinuxHostWorkerTests(unittest.TestCase):
+    def test_a_host_copy_must_set_no_new_privileges(self):
+        prose = " ".join(DOC.read_text(encoding="utf-8").split())
+        self.assertIn(
+            "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
+            "The repository unit sets that directive. "
+            "A copy that omits it is reported by systemd as "
+            "`NoNewPrivileges=no` and must be set to `yes`. "
+            "This page does not edit a running unit.",
+            prose,
+        )
+
     def test_the_shared_unit_has_no_linger_directive(self):
         text = UNIT.read_text(encoding="utf-8")
         self.assertIn("Restart=always\n", text)

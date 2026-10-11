@@ -30,6 +30,12 @@ with `--state /var/lib/rookrunner/state`, the `worker` command, and
 A host copy whose jobs need egress adds `--network bridge`. Cargo
 and pip need it. The repository unit omits that flag.
 `Restart=always`. `NoNewPrivileges=yes`. `WantedBy=default.target`.
+
+A host copy of the worker unit must set `NoNewPrivileges=yes`.
+The repository unit sets that directive. A copy that omits it
+is reported by systemd as `NoNewPrivileges=no` and must be set
+to `yes`. This page does not edit a running unit.
+
 The unit has no `User=` line, no home directory, and no `%h`. It has
 no private-key path, no `--app-key`, no `--docker-socket`, and no
 `ListenStream`. It has no image digest. A host digest is appended
@@ -132,6 +138,10 @@ record linked above. These constraints stay in force:
   listen socket. The repository copy of the unit stays free of a
   digest and a key path. The host copy appends that host's
   lightwell image digest.
+- A host copy of the worker unit must set `NoNewPrivileges=yes`.
+  The repository unit sets that directive. A copy that omits it
+  is reported by systemd as `NoNewPrivileges=no` and must be set
+  to `yes`. This page does not edit a running unit.
 - Each box's poller uses its own App key at the path the engine
   already accepts. The Mac key stays on the Mac.
 - The Mac place for these three jobs stays stopped, so it does not

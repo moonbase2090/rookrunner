@@ -14,6 +14,14 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("The format is Keep a Changelog.", TEXT)
         self.assertIn("## [Unreleased]", TEXT)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
+        self.assertIn(
+            "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
+            "The repository unit sets that directive. "
+            "A copy that omits it is reported by systemd as "
+            "`NoNewPrivileges=no` and must be set to `yes`. "
+            "This note does not edit a running unit.",
+            PROSE,
+        )
         self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
         self.assertIn(
             "A host that upgrades onto a tree where the job network defaults to `none`",
