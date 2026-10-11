@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A bash or sh `run` script quotes each `${{ }}` value. An unquoted
+  value is single-quoted. A value already inside double quotes is
+  escaped. A value already inside single quotes escapes `'`. Another
+  shell, or a context the script cannot prove, is refused.
 - A pull request that changes a workflow file is refused. The pass
   reads the diff from the base to the head and does not run
   `refs/pull/<number>/merge` for that pull request unless

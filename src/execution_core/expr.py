@@ -8,13 +8,18 @@ context-availability table for the workflow key being checked. An
 unavailable context or function is an error. A missing property of an
 available value is an empty string. `hashFiles` is not implemented.
 
-`run`, `env`, `with`, and step and job `name` accept mixed text. Each
-`${{ }}` is inserted as text. A whole-string expression drops the
+`env`, `with`, and step and job `name` accept mixed text. Each
+`${{ }}` there is inserted as text. A whole-string expression drops the
 surrounding whitespace and is stringified the same way. The inserted
 text is not scanned again. Step `env` and `with` accept an expression
 that is exactly `secrets.NAME`. Step `run` rewrites that expression to
 `${RR_SECRET_NAME}` when the shell is bash or sh and a small lexer
-proves an unquoted or double-quoted context. `secrets.GITHUB_TOKEN`
+proves an unquoted or double-quoted context. Other step `run`
+expressions for those shells are quoted. An unquoted value is wrapped
+in single quotes. A value inside double quotes escapes `"`, `$`, `\\`,
+and backticks. A value inside single quotes escapes `'`. Another
+shell, or a context the lexer cannot prove, is refused.
+`secrets.GITHUB_TOKEN`
 and `github.token` are the same alias and rewrite to
 `${RR_SECRET_GITHUB_TOKEN}`. `secrets` stays withheld
 in names, `if`, job `env`, workflow `env`, and concurrency.
@@ -1228,9 +1233,60 @@ def _shell_accepts_rewrite(shell):
 
 
 def check_step_run(source, shell):
-    """Reject a step `run` whose secrets cannot be rewritten. Does not keep the text."""
+    """Reject a step `run` whose secrets or other expressions are not safe."""
 
-    rewrite_run_secrets(source, shell)
+    rewritten, _names = rewrite_run_secrets(source, shell)
+    _run_expression_sites(rewritten, shell)
+
+
+def _run_expression_sites(source, shell):
+    """Return expression sites that a bash or sh `run` may quote.
+
+    A script with no expression is empty. Another shell, or a context
+    other than unquoted, double-quoted, or single-quoted, is refused.
+    """
+
+    if not isinstance(source, str) or "${{" not in source:
+        return ()
+    if not _shell_accepts_rewrite(shell):
+        raise ExprError("run is not accepted")
+    sites = _RunLexer(source).scan()
+    for _start, _end, body, context in sites:
+        if context not in {"unquoted", "double", "single"}:
+            raise ExprError("run is not accepted")
+        _check(_parse(body), STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
+    return tuple(sites)
+
+
+def quote_run_expressions(source, values, shell):
+    """Quote each remaining ``${{ }}`` in a bash or sh `run` script.
+
+    The returned text is what the shell receives. An unquoted value is
+    one single-quoted word. A value already inside double quotes escapes
+    the characters that would leave those quotes. A value already inside
+    single quotes escapes `'`. The inserted text is not scanned again.
+    """
+
+    sites = _run_expression_sites(source, shell)
+    if not sites:
+        return source
+    parts = []
+    cursor = 0
+    for start, end, body, context in sites:
+        if start < cursor:
+            raise ExprError("run is not accepted")
+        inserted = _insert_text(evaluate(body, values))
+        if context == "unquoted":
+            replacement = "'" + inserted.replace("'", "'\\''") + "'"
+        elif context == "double":
+            replacement = "".join("\\" + char if char in '\\"$`' else char for char in inserted)
+        else:
+            replacement = inserted.replace("'", "'\\''")
+        parts.append(source[cursor:start])
+        parts.append(replacement)
+        cursor = end
+    parts.append(source[cursor:])
+    return "".join(parts)
 
 
 def rewrite_run_secrets(source, shell):

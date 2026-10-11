@@ -34,6 +34,7 @@ class ReadmeTests(unittest.TestCase):
             PROSE,
         )
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn("An unquoted value is single-quoted.", PROSE)
         self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,

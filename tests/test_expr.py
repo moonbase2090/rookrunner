@@ -11,14 +11,17 @@ from execution_core.expr import (
     check_job_name,
     check_job_output,
     check_step_if,
+    check_step_run,
     check_step_text,
     check_workflow_env,
     evaluate,
     job_is_enabled,
     mentions_context,
+    quote_run_expressions,
     render_text,
     step_is_enabled,
 )
+from execution_core.run import _render_run
 from execution_core import expr
 
 
@@ -225,3 +228,50 @@ class TextExpressionTests(unittest.TestCase):
         self.assertIn("context is not available: secrets", str(raised.exception))
         check_job_name("build ${{ matrix.os }}")
         check_workflow_env("${{ github.workflow }}")
+
+
+class RunQuotingTests(unittest.TestCase):
+    def test_an_unquoted_run_value_is_single_quoted(self):
+        values = {"env": {"MSG": "; id"}}
+        self.assertEqual(
+            quote_run_expressions("echo ${{ env.MSG }}", values, "bash"),
+            "echo '; id'",
+        )
+        rendered, secret_env = _render_run("echo ${{ env.MSG }}", values, "bash", None)
+        self.assertEqual(rendered, "echo '; id'")
+        self.assertEqual(secret_env, {})
+
+    def test_an_unquoted_apostrophe_stays_one_word(self):
+        rendered = quote_run_expressions(
+            "echo ${{ env.MSG }}",
+            {"env": {"MSG": "it's"}},
+            None,
+        )
+        self.assertEqual(rendered, "echo 'it'\\''s'")
+
+    def test_a_double_quoted_run_value_cannot_leave_the_quotes(self):
+        rendered = quote_run_expressions(
+            'echo "${{ env.MSG }}"',
+            {"env": {"MSG": 'a$(id)"`b'}},
+            "bash",
+        )
+        self.assertEqual(rendered, 'echo "a\\$(id)\\"\\`b"')
+
+    def test_a_single_quoted_run_value_escapes_a_quote(self):
+        rendered = quote_run_expressions(
+            "echo '${{ env.MSG }}'",
+            {"env": {"MSG": "it's"}},
+            "sh",
+        )
+        self.assertEqual(rendered, "echo 'it'\\''s'")
+
+    def test_a_heredoc_expression_is_refused(self):
+        with self.assertRaises(ExprError) as raised:
+            check_step_run("cat <<EOF\n${{ env.MSG }}\nEOF\n", "bash")
+        self.assertEqual(str(raised.exception), "run is not accepted")
+
+    def test_another_shell_cannot_quote_a_run_expression(self):
+        with self.assertRaises(ExprError) as raised:
+            check_step_run("echo ${{ env.MSG }}", "pwsh")
+        self.assertEqual(str(raised.exception), "run is not accepted")
+        check_step_run("echo hi", "pwsh")

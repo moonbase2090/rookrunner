@@ -64,6 +64,11 @@ same way. The fetched merge commit is checked out only when its
 first parent is the listed base and its second parent is the listed
 head.
 
+A bash or sh `run` script quotes each `${{ }}` value. An unquoted
+value is single-quoted. A value already inside double quotes is
+escaped. A value already inside single quotes escapes `'`. Another
+shell, or a context the script cannot prove, is refused.
+
 ## Try the development contract
 
 Requires Linux and Python 3.11+ (validated on Python 3.14.6). Synthetic

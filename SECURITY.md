@@ -42,6 +42,12 @@ no-new-privileges on the job, keeps only `SETUID`, `SETGID`, and
 container. With `--docker-socket`, that is control of the host
 engine. A step cannot gain privileges through sudo.
 
+A bash or sh `run` script does not insert a `${{ }}` value as raw
+text. An unquoted value is single-quoted. A value already inside
+double quotes is escaped. A value already inside single quotes
+escapes `'`. Another shell, or a context the script cannot prove,
+is refused.
+
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,
 the pass refuses it unless `--allow-pr-workflow` names the pull
