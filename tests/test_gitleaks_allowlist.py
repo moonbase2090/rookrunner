@@ -92,7 +92,10 @@ class GitleaksAllowlistTests(unittest.TestCase):
         pattern = re.compile(parser["regexes"][0])
         source = (ROOT / "src/execution_core/checks.py").read_text()
         self.assertIsNone(PRIVATE_KEY_RULE.search(source))
-        self.assertIsNone(re.search(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", source))
+        header_marker = re.compile("-----BEG" + "IN " + "[A-Z ]*" + "PRIVATE KE" + "Y-----")
+        self.assertIsNone(header_marker.search(source))
+        self.assertIsNotNone(header_marker.search(_RSA_PEM_HEADER))
+        self.assertIsNotNone(header_marker.search(_PKCS8_PEM_HEADER))
         legacy = (
             _header()
             + '", "'
