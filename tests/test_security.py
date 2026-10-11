@@ -33,6 +33,7 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", TEXT)
         self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", TEXT)
         self.assertIn("A backslash in that command name does not hide it either.", TEXT)
+        self.assertIn("A backslash before a newline is not part of that name.", TEXT)
         self.assertIn(
             "When that pull request changes a workflow file, or that diff cannot be read,",
             TEXT,

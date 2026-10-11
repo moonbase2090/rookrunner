@@ -2134,7 +2134,8 @@ value escapes `'`. Another shell, or a context the lexer cannot
 prove, is refused. An expression in `eval` or in a shell `-c`
 command is refused. A brace group or an `if`, `while`, or `for`
 body does not hide it. A backslash in that command name does not
-hide it either. One expression
+hide it either. A backslash before a newline is not part of that
+name. One expression
 that is the whole stripped string drops the surrounding whitespace.
 `null` is empty. `true` and `false` are those words. The inserted text
 is not scanned again. An unclosed expression, a nested `${{` outside a

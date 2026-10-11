@@ -366,6 +366,36 @@ class RunQuotingTests(unittest.TestCase):
             "echo \\eval '; id'",
         )
 
+    def test_a_continued_command_name_is_not_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            'e\\\nval "printf child\\n ${{ env.MSG }}"',
+            'b\\\nash -c "printf child\\n ${{ env.MSG }}"',
+            'bash -\\\nc "printf child\\n ${{ env.MSG }}"',
+            'd\\\no eval "printf child\\n ${{ env.MSG }}"',
+        )
+        for source in scripts:
+            with self.subTest(source=source):
+                rendered = None
+                try:
+                    rendered = quote_run_expressions(source, values, "bash")
+                except ExprError as exc:
+                    self.assertEqual(str(exc), "run is not accepted")
+                if rendered is not None:
+                    completed = subprocess.run(
+                        ["bash", "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotIn("INJECTED", completed.stderr)
+                    self.assertNotIn("INJECTED", completed.stdout)
+                    self.fail("continued reparsed command was rendered")
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+
     def test_a_shell_command_without_c_stays_quoted(self):
         values = {"env": {"MSG": "; id"}}
         self.assertEqual(

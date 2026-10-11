@@ -49,6 +49,7 @@ escapes `'`. Another shell, or a context the script cannot prove,
 is refused. An expression in `eval` or in a shell `-c` command is
 refused. A brace group or an `if`, `while`, or `for` body does not
 hide it. A backslash in that command name does not hide it either.
+A backslash before a newline is not part of that name.
 
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,

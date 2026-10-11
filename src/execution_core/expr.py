@@ -1355,9 +1355,10 @@ def _command_reparses(name, spans, source):
 def _shell_word(text):
     """Return the word bash executes.
 
-    An unquoted backslash is removed. Inside double quotes, a backslash
-    is removed only before ``$``, a backtick, ``"``, ``\\``, or a newline.
-    Single quotes keep the backslash. A quoted word is not a keyword.
+    An unquoted backslash is removed. A backslash before a newline is
+    removed entirely. Inside double quotes, a backslash is removed only
+    before ``$``, a backtick, ``"``, ``\\``, or a newline. Single quotes
+    keep the backslash. A quoted word is not a keyword.
     """
 
     chars = []
@@ -1376,16 +1377,24 @@ def _shell_word(text):
         if char == '"':
             index += 1
             while index < limit and text[index] != '"':
-                if text[index] == "\\" and index + 1 < limit and text[index + 1] in '$`"\\\n':
-                    chars.append(text[index + 1])
-                    index += 2
-                    continue
+                if text[index] == "\\" and index + 1 < limit:
+                    nxt = text[index + 1]
+                    if nxt == "\n":
+                        index += 2
+                        continue
+                    if nxt in '$`"\\':
+                        chars.append(nxt)
+                        index += 2
+                        continue
                 chars.append(text[index])
                 index += 1
             if index < limit:
                 index += 1
             continue
         if char == "\\" and index + 1 < limit:
+            if text[index + 1] == "\n":
+                index += 2
+                continue
             chars.append(text[index + 1])
             index += 2
             continue
@@ -1399,7 +1408,7 @@ def _is_compound_word(text):
 
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
         return False
-    return text in _COMPOUND_WORDS
+    return _shell_word(text) in _COMPOUND_WORDS
 
 
 def _command_base(text):

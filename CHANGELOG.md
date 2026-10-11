@@ -14,6 +14,7 @@ This file does not reconstruct earlier milestones.
   expression in `eval` or in a shell `-c` command is refused.
   A brace group or an `if`, `while`, or `for` body does not hide it.
   A backslash in that command name does not hide it either.
+  A backslash before a newline is not part of that name.
 - A pull request that changes a workflow file is refused. The pass
   reads the diff from the base to the head and does not run
   `refs/pull/<number>/merge` for that pull request unless
