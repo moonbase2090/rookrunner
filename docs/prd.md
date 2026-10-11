@@ -133,11 +133,12 @@ Implemented:
   and planning. The worker records an attempt, then executes it with `run_job`
   in one caller-pinned container. Success is `succeeded` and exit code 0. A
   nonzero step is `failed`. A setup failure is `failed`, with a null exit
-  code and a structured error. The job container uses Docker network `bridge`
-  by default, so it can reach the public internet. GitHub-hosted runners have
-  that access by default
+  code and a structured error. The job container uses Docker network `none`
+  by default. `worker --network bridge` opts in to egress. Service
+  containers start only with that opt-in. GitHub-hosted runners have
+  public internet access by default
   (https://docs.github.com/en/actions/concepts/runners/private-networking).
-  `worker --network none` turns it off. The Docker socket stays unmounted
+  The Docker socket stays unmounted
   unless the worker is started with `--docker-socket`. That mount gives the
   job the host Docker service. The job keeps the caller user. When the
   socket is mounted, a private Docker volume is mounted into the job at

@@ -592,12 +592,13 @@ def main():
     worker.add_argument(
         "--network",
         choices=["bridge", "none"],
-        default="bridge",
+        default="none",
         help=(
-            "Docker network for job containers (default bridge). "
+            "Docker network for job containers (default none). "
+            "none leaves the job with no egress. "
+            "bridge opts in to the public internet and starts service containers. "
             "GitHub-hosted runners have public internet access by default "
-            "(https://docs.github.com/en/actions/concepts/runners/private-networking). "
-            "none turns that access off."
+            "(https://docs.github.com/en/actions/concepts/runners/private-networking)."
         ),
     )
     worker.add_argument(

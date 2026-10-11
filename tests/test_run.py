@@ -1773,7 +1773,7 @@ jobs:
         self.assertEqual(len(creates), 1)
         create = creates[0]
         self.assertIn("--network", create)
-        self.assertEqual(create[create.index("--network") + 1], "bridge")
+        self.assertEqual(create[create.index("--network") + 1], "none")
         self.assertNotIn("--privileged", create)
         rendered = "\n".join(repr(call) for call in calls)
         self.assertNotIn("docker.sock", rendered)
@@ -3009,6 +3009,7 @@ jobs:
             EVENT,
             docker=str(self.docker),
             step_timeout=60,
+            network=kwargs.pop("network", "bridge"),
             **kwargs,
         )
         return result, workspace
@@ -3210,6 +3211,7 @@ jobs:
                 EVENT,
                 docker=str(self.docker),
                 step_timeout=60,
+                network="bridge",
             )
         self.assertEqual(raised.exception.kind, "SETUP_FAILED")
         self.assertIn("service container", str(raised.exception))
@@ -3347,6 +3349,7 @@ jobs:
             docker=str(self.docker),
             step_timeout=60,
             owner=owner,
+            network="bridge",
         )
         thread.join(40)
         self.assertFalse(thread.is_alive())

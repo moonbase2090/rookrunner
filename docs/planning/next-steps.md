@@ -133,8 +133,9 @@ The act pin stays historical.
 Development `run.submit` stays version 0 and fixture-only. Version 1 accepts
 one selected job. The CLI
 submits that job and follows its status and logs. The worker runs that job
-and the jobs it needs. Job containers use Docker network `bridge` by default.
-`worker --network none` turns public internet access off. Every
+and the jobs it needs. Job containers use Docker network `none` by default.
+`worker --network bridge` opts in to egress. Service containers start
+only with that opt-in. Every
 engine call uses the Docker context named `default` unless
 `worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
 An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the
@@ -254,10 +255,11 @@ Omitted shell, `bash`, and `sh` follow the Linux runner commands reviewed
 Workflow env is overridden by job env, then by step env. The runner then
 sets `GITHUB_WORKSPACE` and `ROOKRUNNER_EVENT`. The event file is the
 caller's canonical JSON, not a GitHub event delivery. The container uses
-Docker network `bridge` by default, so the job can reach the public internet.
-GitHub-hosted runners have that access by default
+Docker network `none` by default. `worker --network bridge` opts in to
+egress. Service containers start only with that opt-in.
+GitHub-hosted runners have public internet access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-The worker flag `--network none` turns it off. The Docker socket stays
+The Docker socket stays
 unmounted unless the worker is started with `--docker-socket`. That job
 keeps the caller user and can open the engine socket. When the socket
 is mounted, a private Docker volume is mounted into the job at that
@@ -952,8 +954,9 @@ The service label is one hostname label. For a job that declares
 services, the runner creates a user-defined bridge network and connects
 the job container to it. The label is the service hostname. Containers
 on that network reach each other without a published host port. The
-default `bridge` network has no such DNS, so a job with no services stays
-on `bridge`. `worker --network none` does not start service containers.
+default network is `none`, which has no such DNS, so a job with no
+services stays on `none`. Service containers start only when the worker
+was started with `--network bridge`.
 There is no separate numeric cap on how many services a job may declare.
 
 The service container does not receive the engine socket, the workspace,

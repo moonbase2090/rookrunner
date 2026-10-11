@@ -7,8 +7,8 @@ or reads a workflow. Version 1 stages the repository, plans one selected job, co
 history when that plan has fetch-depth 0, publishes and verifies the
 snapshot, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
-caller-pinned container. That container uses Docker network `bridge` unless
-this worker was started with network `none`. It mounts the Docker engine
+caller-pinned container. That container uses Docker network `none` unless
+this worker was started with network `bridge`. It mounts the Docker engine
 socket only when this worker was started with the docker socket flag. The
 job then keeps the caller uid and is added to the groups that can open
 that socket. `worker --node24 DIR` mounts that directory read-only at
@@ -524,7 +524,7 @@ class Worker:
         api_base=None,
         key_dir=None,
     ):
-        if network not in {DEFAULT_NETWORK, "none"}:
+        if network not in {"bridge", "none"}:
             raise ValueError("container network must be bridge or none")
         if type(docker_socket) is not bool:
             raise ValueError("docker socket must be a boolean")

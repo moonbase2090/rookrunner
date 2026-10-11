@@ -95,12 +95,12 @@ The worker records an attempt and executes that plan. Success is `succeeded`
 with exit code 0. A nonzero step is `failed` with that exit code. A setup
 failure is `failed`, with a null exit code and a structured error. Closing
 the client does not stop the container. The job container is attached to
-Docker network `bridge` unless the worker was started with `--network none`.
-`bridge` gives the job outbound access to the public internet. GitHub-hosted
-runners have that access by default
+Docker network `none` unless the worker was started with `--network bridge`.
+`none` gives the job no outbound access. `bridge` opts in to the public
+internet, and service containers start only with that opt-in. GitHub-hosted
+runners have public internet access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-`none` is the documented way to turn it off. Other network names are
-rejected. The Docker socket stays unmounted unless the worker is started
+Other network names are rejected. The Docker socket stays unmounted unless the worker is started
 with `--docker-socket`. That flag bind-mounts the engine socket this worker
 already uses into the job at `/var/run/docker.sock`. The job keeps the
 caller uid. It is added to the socket's group and to group 0, because the
