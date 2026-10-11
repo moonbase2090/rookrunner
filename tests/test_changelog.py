@@ -14,6 +14,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("The format is Keep a Changelog.", TEXT)
         self.assertIn("## [Unreleased]", TEXT)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
+        self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):
         self.assertIn("The current package version is 0.1.1.", TEXT)

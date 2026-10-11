@@ -37,6 +37,13 @@ that changes that set. The account-setup container still runs as root
 to write passwd and sudoers, and it does not receive those flags. A
 step cannot gain privileges through sudo.
 
+A pull request is tested from `refs/pull/<number>/merge`. When that
+pull request changes a workflow file, or that diff cannot be read,
+the pass refuses it unless `--allow-pr-workflow` names the pull
+request's author association. The accepted values are `OWNER`,
+`MEMBER`, and `COLLABORATOR`. A missing association does not match.
+The flag is not stored.
+
 ## What this is not
 
 Local mode is not a sandbox for arbitrary hostile repositories.

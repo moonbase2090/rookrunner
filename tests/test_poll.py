@@ -318,11 +318,11 @@ class PollTests(unittest.TestCase):
             raise PollError("WORKER_ERROR", "run.submit reply was lost")
         return reply["result"]
 
-    def poll(self, clock=None, **extra):
+    def poll(self, clock=None, jobs=None, **extra):
         return poll_once(
             repository="acme/demo",
             clone=self.clone,
-            jobs=[JOB],
+            jobs=[JOB] if jobs is None else jobs,
             image=IMAGE,
             credential_file=self.credential,
             api_base=self.base,
@@ -366,6 +366,87 @@ class PollTests(unittest.TestCase):
         )
         _git(self.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
         return tip, head
+
+    def _publish_feature(self, number, mutate):
+        tip = self._tip()
+        name = f"feature-{number}"
+        _git(self.seed, "checkout", "-b", name)
+        mutate(self.seed)
+        _git(self.seed, "add", "-A")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "feature",
+        )
+        _git(self.seed, "push", "origin", name)
+        head = _git(self.seed, "rev-parse", name).stdout.strip()
+        _git(self.seed, "checkout", "main")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            name,
+            "-m",
+            "merge",
+        )
+        _git(self.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
+        return tip, head
+
+    def _open_feature(self, number, mutate, association="COLLABORATOR", base=None):
+        tip, head = self._publish_feature(number, mutate)
+        item = {
+            "number": number,
+            "user": {"login": "Mona"},
+            "head": {
+                "sha": head,
+                "ref": f"feature-{number}",
+                "repo": {"id": 5150, "full_name": "acme/demo"},
+            },
+            "base": {
+                "sha": tip if base is None else base,
+                "ref": "main",
+                "repo": {"id": 5150, "full_name": "acme/demo"},
+            },
+        }
+        if association is not None:
+            item["author_association"] = association
+        self.server.pulls = [item]
+        self.server.etags["pulls"] = "pulls-2"
+        return tip, head
+
+    def _assert_workflow_refused(self, result, head, message, reason="workflow_changed"):
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(result["skipped"], [{"reason": reason, "number": 9}])
+        self.assertEqual(
+            result["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": reason,
+                    "message": message,
+                }
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("allow_pr_workflow", saved)
+        self.assertNotIn("pulls", saved["etags"])
+        self.assertEqual(
+            saved["workflow_refusals"],
+            [{"number": 9, "head_sha": head, "reason": reason}],
+        )
 
     def posts(self):
         return [item for item in self.server.requests if item["method"] == "POST"]
@@ -1289,6 +1370,215 @@ class PollTests(unittest.TestCase):
         self.assertEqual(result["warnings"], [])
         record = self.worker.get(result["submitted"][0]["run_id"])
         self.assertNotIn("untrusted_override", record)
+
+    def test_a_collaborator_workflow_edit_is_refused_until_that_association_is_named(self):
+        def mutate(seed):
+            path = seed / ".github/workflows/check.yml"
+            path.write_text(WORKFLOW + "# edited\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        refused = self.poll()
+        self._assert_workflow_refused(
+            refused,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml",
+        )
+        self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+        again = self.poll()
+        self.assertEqual(again["warnings"], [])
+        self.assertEqual(again["skipped"], [])
+        self.assertEqual(self.runs(), 0)
+        allowed = self.poll(allow_pr_workflow=["COLLABORATOR"])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(allowed["submitted"][0]["event"], "pull_request")
+        self.assertEqual(
+            allowed["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "allowed",
+                    "reason": "workflow_changed",
+                    "message": (
+                        "pull request workflow change allowed for COLLABORATOR: "
+                        ".github/workflows/check.yml"
+                    ),
+                }
+            ],
+        )
+        self.assertIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("allow_pr_workflow", saved)
+        self.server.etags["pulls"] = "pulls-3"
+        repeat = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(repeat["warnings"], [])
+
+    def test_another_workflow_file_and_a_yaml_suffix_are_refused(self):
+        def mutate(seed):
+            for name in ("other.yml", "other.yaml"):
+                path = seed / ".github/workflows" / name
+                path.write_text("name: other\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        result = self.poll()
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request changes a workflow file: "
+            ".github/workflows/other.yaml, .github/workflows/other.yml",
+        )
+        self.assertFalse((self.clone / ".github/workflows/other.yml").exists())
+
+    def test_a_nested_workflow_path_still_runs(self):
+        def mutate(seed):
+            path = seed / ".github/workflows/nested/other.yml"
+            path.parent.mkdir(parents=True)
+            path.write_text("name: nested\n")
+
+        self._open_feature(9, mutate)
+        result = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(result["warnings"], [])
+        self.assertTrue((self.clone / ".github/workflows/nested/other.yml").is_file())
+
+    def test_renaming_a_workflow_file_out_of_the_directory_is_refused(self):
+        def mutate(seed):
+            (seed / "docs").mkdir()
+            _git(seed, "mv", ".github/workflows/check.yml", "docs/check.yml")
+
+        _tip, head = self._open_feature(9, mutate)
+        result = self.poll()
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml",
+        )
+        self.assertTrue((self.clone / ".github/workflows/check.yml").is_file())
+
+    def test_deleting_a_workflow_file_is_refused(self):
+        def mutate(seed):
+            (seed / ".github/workflows/check.yml").unlink()
+
+        _tip, head = self._open_feature(9, mutate)
+        result = self.poll()
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml",
+        )
+        self.assertTrue((self.clone / ".github/workflows/check.yml").is_file())
+
+    def test_a_configured_job_path_outside_the_workflows_directory_is_refused(self):
+        def mutate(seed):
+            path = seed / "ci/job.yml"
+            path.parent.mkdir()
+            path.write_text("name: job\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        result = self.poll(jobs=[("ci/job.yml", "check")])
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request changes a workflow file: ci/job.yml",
+        )
+        self.assertFalse((self.clone / "ci/job.yml").exists())
+
+    def test_a_missing_association_does_not_match_allow_pr_workflow(self):
+        def mutate(seed):
+            path = seed / ".github/workflows/check.yml"
+            path.write_text(WORKFLOW + "# edited\n")
+
+        _tip, head = self._open_feature(9, mutate, association=None)
+        result = self.poll(allow_pr_workflow=["OWNER"])
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml",
+        )
+
+    def test_a_pull_request_whose_workflow_diff_is_unavailable_is_refused(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, base="ab" * 20)
+        result = self.poll()
+        self._assert_workflow_refused(
+            result,
+            head,
+            "pull request workflow diff is not available",
+            "workflow_diff_unavailable",
+        )
+        self.assertFalse((self.clone / "feature-9.txt").exists())
+
+    def test_six_workflow_paths_are_capped_in_the_warning(self):
+        names = [f".github/workflows/{letter}.yml" for letter in "abcdef"]
+
+        def mutate(seed):
+            for name in names:
+                path = seed / name
+                path.write_text("name: extra\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        result = self.poll()
+        shown = ", ".join(names[:5]) + ", ..."
+        self._assert_workflow_refused(
+            result,
+            head,
+            f"pull request changes a workflow file: {shown}",
+        )
+
+    def test_allow_pr_workflow_rejects_an_unknown_association(self):
+        for value in ("owner", "CONTRIBUTOR", "collaborator", ""):
+            with self.assertRaises(PollError) as caught:
+                self.poll(allow_pr_workflow=[value])
+            self.assertEqual(caught.exception.kind, "INVALID_PARAMS")
+            self.assertEqual(str(caught.exception), "allow-pr-workflow association is not accepted")
+        with self.assertRaises(PollError) as caught:
+            self.poll(allow_pr_workflow=5)
+        self.assertEqual(str(caught.exception), "allow-pr-workflow association is not accepted")
+        result = self.poll(allow_pr_workflow=["OWNER", "MEMBER", "COLLABORATOR", "OWNER"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_feature_file_does_not_warn_when_the_workflow_flag_is_set(self):
+        tip, head = self._merged_head(9)
+        self.server.pulls = [
+            {
+                "number": 9,
+                "user": {"login": "Mona"},
+                "author_association": "MEMBER",
+                "head": {
+                    "sha": head,
+                    "ref": "feature-9",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+                "base": {
+                    "sha": tip,
+                    "ref": "main",
+                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                },
+            }
+        ]
+        self.server.etags["pulls"] = "pulls-2"
+        result = self.poll(allow_pr_workflow=["MEMBER"])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(result["warnings"], [])
+
+    def test_a_push_of_a_workflow_file_still_runs(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.poll()
+        self.assertEqual(self.runs(), 1)
+        self._write(WORKFLOW + "# pushed\n")
+        _git(self.seed, "push", "origin", "main")
+        updated = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": updated}}]
+        self.server.etags["branches"] = "branches-2"
+        result = self.poll()
+        self.assertEqual(self.runs(), 2)
+        self.assertEqual(result["warnings"], [])
+        self.assertIn("# pushed", (self.clone / ".github/workflows/check.yml").read_text())
 
     def test_a_non_collaborator_committer_is_refused_until_that_sha_is_named(self):
         tip = self._tip()

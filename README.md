@@ -55,6 +55,13 @@ not stored and it is not the default. The run record stores the override and
 the reason. A missing association is not a rejection. See
 [the roadmap](docs/roadmap.md#planned-paused).
 
+A pull request that changes a workflow file is also refused. No run is
+created unless `--allow-pr-workflow` names that pull request's author
+association. `OWNER`, `MEMBER`, and `COLLABORATOR` are the accepted
+names. A missing association does not match. The flag is not stored
+and it is not the default. A diff that cannot be read is refused the
+same way.
+
 ## Try the development contract
 
 Requires Linux and Python 3.11+ (validated on Python 3.14.6). Synthetic

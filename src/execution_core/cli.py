@@ -428,6 +428,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             ssh_host=getattr(args, "ssh_host", None),
             places=places,
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
+            allow_pr_workflow=getattr(args, "allow_pr_workflow", ()) or (),
             key_dir=getattr(args, "key_dir", None),
         )
     finally:
@@ -865,6 +866,16 @@ def main():
         help=(
             "SHA of one untrusted pull-request head or push tip that may run. "
             "Repeat for each run. Omit it to refuse untrusted code."
+        ),
+    )
+    poll.add_argument(
+        "--allow-pr-workflow",
+        action="append",
+        default=[],
+        help=(
+            "author association that may run a pull request which changes a "
+            "workflow file. OWNER, MEMBER, or COLLABORATOR. Repeat for each "
+            "association. Omit it to refuse those pull requests."
         ),
     )
     poll.add_argument(
