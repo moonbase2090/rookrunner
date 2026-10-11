@@ -3073,6 +3073,51 @@ jobs:
         )
         self.assertEqual(left.stdout.strip(), "")
 
+    def test_a_service_can_chown_with_the_default_capability_set(self):
+        command = (
+            "python -c \"import os,pathlib,socket; p=pathlib.Path('/tmp/owned'); "
+            "p.mkdir(); os.chown(p, 1, 1); body=str(p.stat().st_uid).encode(); "
+            "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
+            "s.bind(('0.0.0.0', 8080)); s.listen(1); "
+            '[(c.sendall(body), c.close()) for c, _ in iter(s.accept, None)]"'
+        )
+        workflow = self._service_workflow(
+            f"""\
+    services:
+      owner:
+        image: {self.image}
+        command: {command}
+    steps:
+      - run: |
+          python -c 'import socket, time
+          last=None
+          for _ in range(50):
+            try:
+              s=socket.create_connection(("owner", 8080), 2)
+              data=s.recv(16)
+              s.close()
+              if data != b"1":
+                raise SystemExit(data)
+              raise SystemExit(0)
+            except OSError as exc:
+              last=exc
+              time.sleep(0.2)
+          raise SystemExit(last)'
+"""
+        )
+        result, _workspace = self._run_service(workflow)
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["steps"][0]["exit_code"], 0)
+        creates = [call for call in self._calls() if call and call[0] == "create"]
+        service = [call for call in creates if "--label" in call]
+        job = [call for call in creates if "--label" not in call]
+        self.assertEqual(len(service), 1)
+        self.assertEqual(len(job), 1)
+        self.assertNotIn("--cap-drop", service[0])
+        self.assertNotIn("--cap-add", service[0])
+        self.assertEqual(service[0][service[0].index("--security-opt") + 1], "no-new-privileges")
+        self.assertEqual(job[0][job[0].index("--cap-drop") + 1], "ALL")
+
     def test_skipped_job_does_not_start_a_service(self):
         workflow = self._service_workflow(
             f"""\

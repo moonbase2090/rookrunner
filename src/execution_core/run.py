@@ -6,8 +6,10 @@ This is the library later worker code can call. It is not a protocol method.
 The caller supplies the image digest. This module does not select a default
 image. When `runner_image` is that same digest, this module does not pull
 it. It writes the caller uid and passwordless sudo into the attempt
-directory `runner-account` and bind-mounts those files read-only. A
-different digest keeps today's image.
+directory `runner-account` and bind-mounts those files read-only. The
+job container drops every capability and sets no-new-privileges, so
+that sudoers file cannot raise the step's privileges. A different
+digest keeps today's image.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -51,7 +53,13 @@ Pass network `none` to turn it off. Other network names are rejected. A
 job container and a service container are created with `--memory 4g`,
 `--memory-swap 4g`, `--pids-limit 1024`, and `--cpus 2`. The swap
 limit matches the memory limit, so the container does not add swap
-beyond that cap. The
+beyond that cap. A job container is created with `--security-opt
+no-new-privileges` and `--cap-drop ALL`. A service container is
+created with `--security-opt no-new-privileges` and keeps the engine
+default capability set, including `CAP_CHOWN`. It does not receive
+`--cap-drop` or `--cap-add`. There is no workflow field that changes
+that set. The one-shot account setup container stays root so it can
+write passwd and sudoers. It does not receive those flags. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the engine socket this process already uses, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -80,7 +88,8 @@ hostname. Containers on that network reach each other without a published
 host port. `credentials`, `volumes`, `options`, and `ports` are rejected.
 GitHub warns that `--network` is not supported in service `options`; this
 engine does not accept the key. The service container does not receive the
-engine socket, the workspace, or privilege. It is ready when it is running,
+engine socket, the workspace, or a capability outside the engine default
+set. It is ready when it is running,
 or healthy when the image defines a health check. If it exits, or it is not
 ready before the job deadline, setup fails and steps do not run. The wait
 uses that deadline. There is no separate health timeout. Cancel and restart
@@ -1381,24 +1390,34 @@ def _account_script(uid, gid):
     )
 
 
+def _account_setup_args(reference, account):
+    """Return `docker run` args that write passwd and sudoers as root.
+
+    This container is not a job. It keeps its capabilities so `chown`
+    can finish. The job container receives `_job_isolation_args` instead.
+    """
+
+    return [
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--entrypoint",
+        "sh",
+        "--mount",
+        f"type=bind,source={account},destination=/runner-account",
+        reference,
+        "-c",
+        _account_script(os.getuid(), os.getgid()),
+    ]
+
+
 def _prepare_runner_account(docker, reference, account, deadline):
     """Create the host identity files. `--rm` deletes the container, not the files."""
 
     code, _stdout, _stderr = _invoke_within(
         docker,
-        [
-            "run",
-            "--rm",
-            "--user",
-            "0:0",
-            "--entrypoint",
-            "sh",
-            "--mount",
-            f"type=bind,source={account},destination=/runner-account",
-            reference,
-            "-c",
-            _account_script(os.getuid(), os.getgid()),
-        ],
+        _account_setup_args(reference, account),
         60,
         deadline,
     )
@@ -1423,6 +1442,36 @@ def _limit_args():
         _CONTAINER_PIDS,
         "--cpus",
         _CONTAINER_CPUS,
+    ]
+
+
+def _job_isolation_args():
+    """Drop every capability and refuse new privileges for a job container.
+
+    The account-setup container is separate. It runs as root so it can
+    write passwd and sudoers, and it does not receive these flags.
+    """
+
+    return [
+        "--security-opt",
+        "no-new-privileges",
+        "--cap-drop",
+        "ALL",
+    ]
+
+
+def _service_isolation_args():
+    """Keep the engine default capability set for a service container.
+
+    That set includes ``CAP_CHOWN``, so a root entrypoint can chown a
+    data directory. ``no-new-privileges`` blocks a setuid gain above
+    the capabilities the process already has. There is no workflow
+    field for a different set, and ``options`` stays rejected.
+    """
+
+    return [
+        "--security-opt",
+        "no-new-privileges",
     ]
 
 
@@ -1453,6 +1502,7 @@ def _create_args(
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         *_limit_args(),
+        *_job_isolation_args(),
     ]
     if socket_path is not None:
         # The engine socket is often mode 0660. The host gid opens a native
@@ -1738,7 +1788,7 @@ def _retire_services(docker, job_name, service_names, network_name, connected):
 
 
 def _service_create_args(service_name, network_name, service, job_name):
-    """Build `docker create` args. No socket, workspace, user, or privilege."""
+    """Build `docker create` args. No socket, workspace, user, or added capability."""
 
     args = [
         "create",
@@ -1753,6 +1803,7 @@ def _service_create_args(service_name, network_name, service, job_name):
         "--label",
         f"rookrunner.owner={job_name}",
         *_limit_args(),
+        *_service_isolation_args(),
     ]
     for key in sorted(service.get("env") or {}):
         args.extend(["--env", f"{key}={service['env'][key]}"])

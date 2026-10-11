@@ -409,9 +409,12 @@ class RunnerAccountTests(unittest.TestCase):
                 "uid=$(id -u)\n"
                 'printf \'%s\\n\' "$uid" > "$GITHUB_WORKSPACE/uid.txt"\n'
                 'test "$uid" != 0\n'
-                "sudo -n true\n"
-                'sudo apt-get --version > "$GITHUB_WORKSPACE/apt.txt"\n'
+                "if sudo -n true; then exit 4; fi\n"
+                'apt-get --version > "$GITHUB_WORKSPACE/apt.txt"\n'
                 'test -s "$GITHUB_WORKSPACE/apt.txt"\n'
+                "test \"$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 1\n"
+                "test \"$(awk '/^CapEff:/ { print $2 }' /proc/self/status)\""
+                " = 0000000000000000\n"
                 "if echo x >> /etc/passwd; then exit 4; fi\n"
                 'test "$(stat -c %u /etc/passwd)" = 0\n'
                 'test "$(stat -c %a /etc/sudoers.d/rookrunner)" = 440\n'
@@ -441,6 +444,10 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertIn("--user", job)
         self.assertIn(f"{uid}:{os.getgid()}", job)
         self.assertNotIn("--privileged", job)
+        self.assertNotIn("--cap-drop", setup)
+        self.assertNotIn("--security-opt", setup)
+        self.assertEqual(job[job.index("--security-opt") + 1], "no-new-privileges")
+        self.assertEqual(job[job.index("--cap-drop") + 1], "ALL")
         self.assertTrue(any("destination=/etc/passwd,readonly" in part for part in job))
         self.assertTrue(
             any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)
@@ -531,13 +538,18 @@ class UbuntuRunnerImageTests(unittest.TestCase):
     def tearDownClass(cls):
         subprocess.run(["docker", "rmi", "-f", cls.tag], capture_output=True)
 
-    def test_the_operator_image_runs_sudo_and_apt_as_the_caller(self):
+    def test_the_operator_image_refuses_sudo_and_runs_as_the_caller(self):
         temp = tempfile.TemporaryDirectory(prefix="runner-ubuntu-")
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
         workflow = _workflow(
             step=(
-                'test "$(id -u)" != 0; sudo -n true; sudo apt-get --version; '
+                'test "$(id -u)" != 0; '
+                "if sudo -n true; then exit 4; fi; "
+                "apt-get --version; "
+                "test \"$(awk '/^NoNewPrivs:/ { print $2 }' /proc/self/status)\" = 1; "
+                "test \"$(awk '/^CapEff:/ { print $2 }' /proc/self/status)\""
+                " = 0000000000000000; "
                 "docker --version; git --version; test -f /etc/ssl/certs/ca-certificates.crt"
             )
         )

@@ -232,10 +232,11 @@ The implementation takes each recommendation below.
    `CAPABILITY_UNSUPPORTED`, names `runs-on`, and creates no run.
 5. A digest that is not present locally is `SETUP_FAILED`. The engine
    does not pull it.
-6. On the runner image, the step uid is the caller uid, `sudo -n true`
-   exits 0, and `sudo apt-get --version` exits 0. The step is not uid
-   0. The container is not privileged. The passwd and sudoers the step
-   uses are the host files under `runner-account`, bind-mounted
+6. On the runner image, the step uid is the caller uid. `sudo -n true`
+   does not exit 0. `apt-get --version` without sudo exits 0. The step
+   is not uid 0. `NoNewPrivs` is 1 and the effective capability set is
+   empty. The container is not privileged. The passwd and sudoers the
+   step uses are the host files under `runner-account`, bind-mounted
    read-only. Removing the root container does not remove them.
 7. A different caller image does not gain a sudoers entry.
 8. The capability version stays 12. `.github/workflows/check.yml` is
