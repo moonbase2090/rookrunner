@@ -39,6 +39,18 @@ Local rules, not GitHub-equivalence claims:
   when both are integers and equal. A null head repository is a fork.
   The full name is not the comparison. A missing association is not a
   collaborator rejection. OWNER, MEMBER, and COLLABORATOR are.
+- A pull request that changes a workflow file is refused with a
+  warning that names the path. A workflow file is a configured job
+  path, or a file directly in ``.github/workflows/`` whose name ends
+  in ``.yml`` or ``.yaml``. A nested path does not count. The diff is
+  the pull base against the head. When that diff cannot be read, the
+  pull request is refused. The fetched merge commit is checked out
+  only when its first parent is the listed base and its second parent
+  is the listed head. Any other commit is left unchecked and creates
+  no run. ``--allow-pr-workflow ASSOCIATION`` runs
+  that pull request when the author association is the named
+  ``OWNER``, ``MEMBER``, or ``COLLABORATOR``. A missing association
+  does not match. The flag is not stored and it is not the default.
 - A repository with ``.github/CODEOWNERS`` at the pull base or head
   gets a ``rookrunner/signoff`` status on the head SHA. Patterns are
   the union of the two blobs. A protected path without
@@ -300,6 +312,83 @@ def _allow_untrusted(values):
             raise PollError("INVALID_PARAMS", "allow-untrusted must be a commit SHA")
         allowed.append(item)
     return frozenset(allowed)
+
+
+_PR_WORKFLOW_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
+_WORKFLOW_DIR = ".github/workflows/"
+_WORKFLOW_PATH_LIMIT = 5
+
+
+def _allow_pr_workflow(values):
+    """Return the association set for one invocation. It is not read from state."""
+
+    if values is None:
+        values = ()
+    if not isinstance(values, list | tuple):
+        raise PollError("INVALID_PARAMS", "allow-pr-workflow association is not accepted")
+    allowed = []
+    for item in values:
+        if item not in _PR_WORKFLOW_ASSOCIATIONS:
+            raise PollError("INVALID_PARAMS", "allow-pr-workflow association is not accepted")
+        allowed.append(item)
+    return frozenset(allowed)
+
+
+def _workflow_definition(path, configured):
+    """A configured job path, or a workflow file directly in the workflows directory."""
+
+    if path in configured:
+        return True
+    if not path.startswith(_WORKFLOW_DIR):
+        return False
+    name = path[len(_WORKFLOW_DIR) :]
+    if "/" in name or name == "":
+        return False
+    return name.endswith((".yml", ".yaml"))
+
+
+def _changed_names(clone, before, after):
+    """Return changed paths with both sides of a rename, or None."""
+
+    files = _git(
+        clone,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "--diff-filter=ACDMRTUXB",
+        before,
+        after,
+        check=False,
+    )
+    if files.returncode != 0:
+        return None
+    text = _stdout(files)
+    names = [] if text == "" else text.split("\n")
+    if names and names[-1] == "":
+        names.pop()
+    if len(names) > MAX_CHANGED_FILES:
+        return None
+    return names
+
+
+def _show_paths(paths):
+    shown = ", ".join(paths[:_WORKFLOW_PATH_LIMIT])
+    if len(paths) > _WORKFLOW_PATH_LIMIT:
+        shown += ", ..."
+    return shown
+
+
+def _workflow_message(kind, paths, association):
+    if association is None and kind == "unavailable":
+        return "pull request workflow diff is not available"
+    if association is None:
+        return f"pull request changes a workflow file: {_show_paths(paths)}"
+    if kind == "unavailable":
+        return (
+            f"pull request workflow change allowed for {association}: "
+            "workflow diff is not available"
+        )
+    return f"pull request workflow change allowed for {association}: {_show_paths(paths)}"
 
 
 def _event_repository(configured, body):
@@ -604,6 +693,21 @@ def _fetch_sha(clone, ref):
     return sha
 
 
+def _merge_parents(clone, sha):
+    """Return the two parents of one merge commit, or None."""
+
+    listed = _git(clone, "rev-parse", f"{sha}^1", f"{sha}^2", check=False)
+    if listed.returncode != 0:
+        return None
+    text = _stdout(listed)
+    parents = [] if text == "" else text.split("\n")
+    if parents and parents[-1] == "":
+        parents.pop()
+    if len(parents) != 2 or any(_SHA.fullmatch(parent) is None for parent in parents):
+        return None
+    return parents[0], parents[1]
+
+
 def _digest(value):
     if isinstance(value, str) and _IMAGE_DIGEST.fullmatch(value):
         return value
@@ -800,6 +904,7 @@ class Pass:
         ssh_host=None,
         places=None,
         allow_untrusted=(),
+        allow_pr_workflow=(),
         key_dir=None,
     ):
         self.repository = _repository_name(repository)
@@ -817,6 +922,7 @@ class Pass:
         self.ssh_host = ssh_host
         self.places = places
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
+        self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
         self.hold_branches = False
         self.hold_pulls = False
         self.remote_repository = None
@@ -1472,12 +1578,18 @@ class Pass:
         if merge is None:
             self._record_absent(number, head_sha)
             return True
+        parents = _merge_parents(self.clone, merge)
+        if parents != (base_sha, head_sha):
+            self._record_merge_mismatch(number, head_sha)
+            return True
+        changed = _diff(self.clone, base_sha, head_sha)
+        if not self._accept_pr_workflow(number, head_sha, item, base_sha, changed):
+            return True
         _checkout(self.clone, merge)
         repo = self._repository_body()
         if repo is None:
             return False
         activity = "opened" if seen is None else "synchronize"
-        changed = _diff(self.clone, base_sha, head_sha)
         pull_request = {
             "head": {
                 "sha": head_sha,
@@ -1682,6 +1794,74 @@ class Pass:
             rows.append(row)
             self.result["skipped"].append({"reason": "untrusted", "number": number})
             self.result["warnings"].append(self._warning(number, head_sha, reason, False))
+            self._checkpoint()
+        self.hold_pulls = True
+
+    def _accept_pr_workflow(self, number, head_sha, item, base_sha, changed):
+        """Refuse a pull request whose diff changes a workflow file.
+
+        Return true when its jobs may be submitted. An allowed author
+        association records a warning and still returns true.
+        """
+
+        kind, paths = self._pr_workflow_change(base_sha, head_sha, changed)
+        if kind is None:
+            return True
+        association = _association(item.get("author_association"))
+        allowed = association in self.allow_pr_workflow
+        reason = "workflow_changed" if kind == "changed" else "workflow_diff_unavailable"
+        message = _workflow_message(kind, paths, association if allowed else None)
+        entry = {
+            "number": number,
+            "sha": head_sha,
+            "action": "allowed" if allowed else "refused",
+            "reason": reason,
+            "message": message,
+        }
+        if allowed:
+            self.result["warnings"].append(entry)
+            return True
+        self._record_workflow_refusal(number, head_sha, reason, entry)
+        return False
+
+    def _pr_workflow_change(self, base_sha, head_sha, changed):
+        if changed is None:
+            return "unavailable", ()
+        names = _changed_names(self.clone, base_sha, head_sha)
+        if names is None:
+            return "unavailable", ()
+        configured = tuple(workflow for workflow, _job_id in self.jobs)
+        paths = tuple(sorted({name for name in names if _workflow_definition(name, configured)}))
+        if not paths:
+            return None, ()
+        return "changed", paths
+
+    def _record_merge_mismatch(self, number, head_sha):
+        """Do not check out a merge commit that is not the listed base and head."""
+
+        row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
+        rows = self.state.setdefault("workflow_refusals", [])
+        entry = {
+            "number": number,
+            "sha": head_sha,
+            "action": "refused",
+            "reason": "merge_commit_mismatch",
+            "message": "fetched merge commit does not match the listed head",
+        }
+        if row not in rows:
+            rows.append(row)
+            self.result["skipped"].append({"reason": "merge_commit_mismatch", "number": number})
+            self.result["warnings"].append(entry)
+            self._checkpoint()
+        self.hold_pulls = True
+
+    def _record_workflow_refusal(self, number, head_sha, reason, entry):
+        row = {"number": number, "head_sha": head_sha, "reason": reason}
+        rows = self.state.setdefault("workflow_refusals", [])
+        if row not in rows:
+            rows.append(row)
+            self.result["skipped"].append({"reason": reason, "number": number})
+            self.result["warnings"].append(entry)
             self._checkpoint()
         self.hold_pulls = True
 
@@ -2245,6 +2425,7 @@ def poll_once(
     ssh_host=None,
     places=None,
     allow_untrusted=(),
+    allow_pr_workflow=(),
     key_dir=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
@@ -2266,6 +2447,7 @@ def poll_once(
         ssh_host=ssh_host,
         places=places,
         allow_untrusted=allow_untrusted,
+        allow_pr_workflow=allow_pr_workflow,
         key_dir=key_dir,
     ).run()
 

@@ -29,6 +29,15 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("A poll refuses untrusted code.", PROSE)
         self.assertIn("`--allow-untrusted` with that commit's SHA is the only override.", PROSE)
         self.assertIn("No run is created.", PROSE)
+        self.assertIn(
+            "A pull request that changes a workflow file is also refused.",
+            PROSE,
+        )
+        self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn(
+            "The fetched merge commit is checked out only when its first parent is the listed base",
+            PROSE,
+        )
 
 
 if __name__ == "__main__":

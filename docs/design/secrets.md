@@ -156,7 +156,13 @@ the head SHA, and the run records the override. The flag is not a
 default and it is not stored. A same-repository pull request still
 runs when the author association is missing or is OWNER, MEMBER, or
 COLLABORATOR. Any other association is refused the same way. The
-comparison does not use the full name.
+comparison does not use the full name. A same-repository pull request
+that changes a workflow file is refused even for those associations,
+unless that invocation passes `--allow-pr-workflow` with the author
+association. A missing association does not match that flag. A diff
+that cannot be read is refused the same way. The fetched merge
+commit is checked out only when its first parent is the listed base
+and its second parent is the listed head.
 
 The poll copies `repository.id` and `repository.default_branch`
 from the repository object into the event it already stores. The

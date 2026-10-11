@@ -171,7 +171,7 @@ The 14-day window is open. Do not plan or implement these yet.
 - `actions/cache` and Docker actions.
 - `actions/setup-node` and `hashFiles`.
 
-Untrusted code is not in this list. A run of untrusted code is refused with a warning unless the operator gives an explicit per-run override.
+Untrusted code is not in this list. A run of untrusted code is refused with a warning unless the operator gives an explicit per-run override. A pull request that changes a workflow file is refused unless `--allow-pr-workflow` names that author association. The fetched merge commit is checked out only when its parents are the listed base and head.
 
 ## M3 — Agent and human access
 

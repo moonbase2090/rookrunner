@@ -29,6 +29,15 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("including `CAP_CHOWN`", TEXT)
         self.assertIn("not receive `--cap-drop` or `--cap-add`", TEXT)
         self.assertIn("A step cannot gain privileges through sudo.", TEXT)
+        self.assertIn(
+            "When that pull request changes a workflow file, or that diff cannot be read,",
+            TEXT,
+        )
+        self.assertIn("A missing association does not match.", TEXT)
+        self.assertIn(
+            "The fetched merge commit is checked out only when its first parent is the listed base",
+            TEXT,
+        )
 
     def test_local_mode_is_not_a_sandbox(self):
         self.assertIn(

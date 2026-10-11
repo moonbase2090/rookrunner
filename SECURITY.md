@@ -42,6 +42,16 @@ no-new-privileges on the job, keeps only `SETUID`, `SETGID`, and
 container. With `--docker-socket`, that is control of the host
 engine. A step cannot gain privileges through sudo.
 
+A pull request is tested from `refs/pull/<number>/merge`. When that
+pull request changes a workflow file, or that diff cannot be read,
+the pass refuses it unless `--allow-pr-workflow` names the pull
+request's author association. The accepted values are `OWNER`,
+`MEMBER`, and `COLLABORATOR`. A missing association does not match.
+The flag is not stored. The fetched merge commit is checked out
+only when its first parent is the listed base and its second parent
+is the listed head. A different commit is not checked out and
+creates no run.
+
 ## What this is not
 
 Local mode is not a sandbox for arbitrary hostile repositories.
