@@ -85,15 +85,18 @@ def _commit_user(login, ident):
 
 
 def _commit_record(server, sha):
-    """One commit. Author and committer default to Mona, who can write."""
+    """One commit. Author and committer default to Mona, who can write.
+
+    A server another test module built without these fields gets the defaults.
+    """
 
     return {
         "sha": sha,
-        "author": _commit_user(server.authors.get(sha, "Mona"), 1),
-        "committer": _commit_user(server.committers.get(sha, "Mona"), 2),
+        "author": _commit_user(getattr(server, "authors", {}).get(sha, "Mona"), 1),
+        "committer": _commit_user(getattr(server, "committers", {}).get(sha, "Mona"), 2),
         "commit": {
             "message": "hidden-message",
-            "verification": {"verified": sha in server.verified},
+            "verification": {"verified": sha in getattr(server, "verified", set())},
         },
     }
 
@@ -101,6 +104,8 @@ def _commit_record(server, sha):
 def _pull_shas(server, number):
     """The commits a listed pull request's head has and its base does not reach."""
 
+    if getattr(server, "remote", None) is None:
+        return []
     for item in server.pulls:
         if item.get("number") != number:
             continue
@@ -191,7 +196,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if kind == "pull_commits":
             number = int(path.rsplit("/", 2)[-2])
-            listed = self.server.pull_commits.get(number)
+            listed = getattr(self.server, "pull_commits", {}).get(number)
             if listed is None:
                 listed = [
                     _commit_record(self.server, sha) for sha in _pull_shas(self.server, number)
@@ -204,7 +209,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if kind == "permission":
             login = urllib.parse.unquote(path.rsplit("/", 2)[-2])
-            permission = self.server.permissions.get(login, "write")
+            permission = getattr(self.server, "permissions", {}).get(login, "write")
             if isinstance(permission, int):
                 self._send(permission, b'{"message": "refused"}', None, remaining)
                 return

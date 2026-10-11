@@ -92,6 +92,7 @@ class SignoffPostTests(unittest.TestCase):
         _git(self.host.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
         item = {
             "number": number,
+            "author_association": "COLLABORATOR",
             "head": {
                 "sha": head,
                 "ref": "feature",
