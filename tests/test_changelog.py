@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""CHANGELOG records 0.1.1 and still has no published 0.1.0 section."""
+"""CHANGELOG records 0.1.3 and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -52,8 +52,28 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("its first parent is the listed base", PROSE)
 
+    def test_0_1_3_records_the_network_default_and_the_upgrade(self):
+        self.assertIn("The current package version is 0.1.3.", TEXT)
+        self.assertIn("## [0.1.3] - 2026-10-11", TEXT)
+        self.assertNotIn("## [0.1.2]", TEXT)
+        section = TEXT.split("## [0.1.3] - 2026-10-11", 1)[1].split("## [0.1.1]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("Job containers use Docker network `none` by default.", prose)
+        self.assertIn("`worker --network bridge` opts in to egress.", prose)
+        self.assertIn("Service containers start only with that opt-in.", prose)
+        self.assertIn(
+            "A host that upgrades onto a tree where the job network defaults to `none`",
+            prose,
+        )
+        self.assertIn(
+            "adds `--network bridge` on that host's unit when jobs need egress.",
+            prose,
+        )
+        self.assertIn("Cargo and pip need it.", prose)
+        self.assertIn("The repository unit omits the flag.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+
     def test_0_1_1_records_the_tag_fetch_fix(self):
-        self.assertIn("The current package version is 0.1.1.", TEXT)
         self.assertIn("## [0.1.1] - 2026-10-10", TEXT)
         self.assertIn("fetches the annotated tag", TEXT)
         self.assertIn("names the wheel and tarball hashes", PROSE)
