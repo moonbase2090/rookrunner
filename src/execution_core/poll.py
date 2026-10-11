@@ -1437,21 +1437,58 @@ class Pass:
     def _pull_commits_gate(self, number, base_sha, head_sha, override):
         """Return ``(verdict, override)`` for every commit on a pull request.
 
-        The verdict is ``"run"``, ``"refused"``, or ``"stop"``. A refusal is
-        recorded here. When ``--allow-untrusted`` names the head, the
-        verdict is ``"run"`` and the override gains the commit reason.
+        The verdict is ``"trusted"``, ``"allowed"``, ``"refused"``, or
+        ``"stop"``. A refusal is recorded here. When ``--allow-untrusted``
+        names the head, the verdict is ``"allowed"`` and the override gains
+        the commit reason.
         """
 
         reason = self._pull_commits_reason(number, base_sha, head_sha)
         if reason is _STOPPED:
             return "stop", override
         if reason is None:
-            return "run", override
+            return "trusted", override
         if head_sha not in self.allow_untrusted:
             self._record_untrusted(number, head_sha, reason)
             return "refused", override
         self.result["warnings"].append(self._warning(number, head_sha, reason, True))
-        return "run", reason if override is None else f"{override}; {reason}"
+        return "allowed", reason if override is None else f"{override}; {reason}"
+
+    def _fetch_pull_merge(self, number, base_sha, head_sha):
+        """Fetch a pull request's merge commit, or record why it is not used.
+
+        The merge is used only when its parents are the listed base and head.
+        """
+
+        merge = _fetch_sha(self.clone, f"refs/pull/{number}/merge")
+        if merge is None:
+            self._record_absent(number, head_sha)
+            return None
+        if _merge_parents(self.clone, merge) != (base_sha, head_sha):
+            self._record_merge_mismatch(number, head_sha)
+            return None
+        return merge
+
+    def _seen_pull(self, number, base_sha, head_sha, item, override, seen):
+        """Post signoff for a pull request whose head and base already ran.
+
+        The stored entry holds that head's commit verdict. Only ``trusted``
+        skips the gate. An entry from poll state written before the gate,
+        or from a run that ``--allow-untrusted`` let through, goes through
+        the gate again, and a refusal posts no signoff.
+        """
+
+        if seen.get("commits") != "trusted":
+            if self._fetch_pull_merge(number, base_sha, head_sha) is None:
+                return True
+            verdict, _override = self._pull_commits_gate(number, base_sha, head_sha, override)
+            if verdict == "stop":
+                return False
+            if verdict == "refused":
+                return True
+            seen["commits"] = verdict
+            self._checkpoint()
+        return self._signoff(number, head_sha, base_sha, item)
 
     def _list(self, kind, path):
         """Return (body, etag) when a new list should be applied.
@@ -1778,15 +1815,10 @@ class Pass:
             override = reason
         seen = self.state["pulls"].get(str(number))
         if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
-            return self._signoff(number, head_sha, base_sha, item)
+            return self._seen_pull(number, base_sha, head_sha, item, override, seen)
         ref = f"refs/pull/{number}/merge"
-        merge = _fetch_sha(self.clone, ref)
+        merge = self._fetch_pull_merge(number, base_sha, head_sha)
         if merge is None:
-            self._record_absent(number, head_sha)
-            return True
-        parents = _merge_parents(self.clone, merge)
-        if parents != (base_sha, head_sha):
-            self._record_merge_mismatch(number, head_sha)
             return True
         verdict, override = self._pull_commits_gate(number, base_sha, head_sha, override)
         if verdict == "stop":
@@ -1840,6 +1872,7 @@ class Pass:
                 "head": head_sha,
                 "base": base_sha,
                 "merge": merge,
+                "commits": verdict,
             }
             self._checkpoint()
         if not self._signoff(number, head_sha, base_sha, item):
