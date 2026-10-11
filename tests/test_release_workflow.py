@@ -72,6 +72,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("git verify-tag", script)
         self.assertNotIn("|| true", script)
 
+    def test_0_1_3_notes_call_out_the_network_default(self):
+        notes = (ROOT / ".github" / "v0.1.3-release-notes.md").read_text()
+        prose = " ".join(notes.split())
+        self.assertIn("The version string is 0.1.3.", notes)
+        self.assertIn("The capability version is 12.", notes)
+        self.assertIn("Job containers use Docker network `none` by default.", prose)
+        self.assertIn("`worker --network bridge` opts in to egress.", prose)
+        self.assertIn(
+            "adds `--network bridge` on that host's unit when jobs need egress.",
+            prose,
+        )
+        self.assertIn("This file does not create a tag.", notes)
+
     def test_notes_and_signers_match_the_preview_plan(self):
         self.assertIn("This artifact is a preview.", NOTES)
         self.assertIn("The version string is 0.1.1.", NOTES)
@@ -265,22 +278,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 check=False,
             )
 
-        match = run("v0.1.1")
+        match = run("v0.1.3")
         self.assertEqual(match.returncode, 0, match.stderr)
         self.assertIn(
-            "RELEASE_WHEEL=execution_core-0.1.1-py3-none-any.whl",
+            "RELEASE_WHEEL=execution_core-0.1.3-py3-none-any.whl",
             match.stdout,
         )
-        self.assertIn("RELEASE_SDIST=execution_core-0.1.1.tar.gz", match.stdout)
-        self.assertIn("RELEASE_TITLE=v0.1.1 preview", match.stdout)
+        self.assertIn("RELEASE_SDIST=execution_core-0.1.3.tar.gz", match.stdout)
+        self.assertIn("RELEASE_TITLE=v0.1.3 preview", match.stdout)
         self.assertIn(
-            "RELEASE_NOTES=.github/v0.1.1-release-notes.md",
+            "RELEASE_NOTES=.github/v0.1.3-release-notes.md",
             match.stdout,
         )
         mismatch = run("v0.1.0")
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("does not match", mismatch.stderr)
-        bare = run("0.1.1")
+        bare = run("0.1.3")
         self.assertNotEqual(bare.returncode, 0)
 
 
