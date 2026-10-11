@@ -190,12 +190,15 @@ The refusal reasons are:
   When both ids are integers and differ, the reason is that the
   head repository is not the owner repository. Any other mismatch
   is a fork.
-- An author association other than `OWNER`, `MEMBER`, or
-  `COLLABORATOR`.
-- A committer association other than `OWNER`, `MEMBER`, or
-  `COLLABORATOR`.
+- A pull request author association other than `OWNER`, `MEMBER`,
+  or `COLLABORATOR`, including a missing or unrecognized one.
+- A pushed tip commit, or any commit on a pull request, whose author
+  or committer does not have `write` or `admin` permission on the
+  repository. A commit without a GitHub account has none. The
+  `web-flow` committer passes only on a commit whose signature GitHub
+  verified.
 
-A missing association is not a refusal. `pull_request_target` is
+A missing association is a refusal. `pull_request_target` is
 not evaluated. `write` stays rejected. A local Docker run is not a
 sandbox for hostile code. GitHub's secure-use guidance says a
 self-hosted runner should almost never run a pull request from a

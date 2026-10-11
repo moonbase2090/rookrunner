@@ -46,6 +46,7 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("The `[` command stays accepted.", PROSE)
         self.assertIn("An unquoted `{` in that command name is refused", PROSE)
         self.assertIn("`builtin eval` is refused the same way.", PROSE)
+        self.assertIn("A missing or unrecognized author association is refused.", PROSE)
         self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,

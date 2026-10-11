@@ -153,9 +153,11 @@ an id. A missing head repository, including a null `head.repo`, is
 a fork. A fork is refused with a warning that names the reason. It
 runs only when that poll invocation passes `--allow-untrusted` with
 the head SHA, and the run records the override. The flag is not a
-default and it is not stored. A same-repository pull request still
-runs when the author association is missing or is OWNER, MEMBER, or
-COLLABORATOR. Any other association is refused the same way. The
+default and it is not stored. A same-repository pull request runs
+only when the author association is OWNER, MEMBER, or COLLABORATOR
+and every commit on it has an author and a committer with write or
+admin permission on the repository. A missing, unrecognized, or other
+association is refused the same way. The
 comparison does not use the full name. A same-repository pull request
 that changes a workflow file is refused even for those associations,
 unless that invocation passes `--allow-pr-workflow` with the author

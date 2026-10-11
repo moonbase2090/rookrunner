@@ -92,6 +92,7 @@ class SignoffPostTests(unittest.TestCase):
         _git(self.host.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
         item = {
             "number": number,
+            "author_association": "COLLABORATOR",
             "head": {
                 "sha": head,
                 "ref": "feature",
@@ -184,6 +185,61 @@ class SignoffPostTests(unittest.TestCase):
         self.assertEqual(saved["signoffs"]["4"]["head"], head)
         self.assertEqual(saved["signoffs"]["4"]["labeled"], True)
         self.assertEqual(saved["signoffs"]["4"]["state"], "success")
+
+    def _ran_without_a_commit_verdict(self):
+        """Open a protected change, run it, then drop the stored commit verdict.
+
+        Poll state written before the commit gate has no verdict.
+        """
+
+        self._owners()
+        head = self._pull(
+            4,
+            lambda: (self.host.seed / "pyproject.toml").write_text("[project]\nname = 'changed'\n"),
+            labels=[{"name": "ready"}],
+        )
+        self.host.poll()
+        self.assertEqual(
+            [body for _item, body in self._signoff_posts()],
+            [{"context": "rookrunner/signoff", "state": "failure"}],
+        )
+        path = self.host.state / "poll.json"
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["pulls"]["4"]["commits"], "trusted")
+        del saved["pulls"]["4"]["commits"]
+        path.write_text(json.dumps(saved))
+        self.host.server.pulls[0]["labels"] = [
+            {"name": "ready"},
+            {"name": "mb2090-signoff"},
+        ]
+        self.host.server.etags["pulls"] = "pulls-3"
+        self.host.server.requests.clear()
+        return head, path
+
+    def test_cached_state_without_a_commit_verdict_posts_no_signoff_for_a_reader(self):
+        head, path = self._ran_without_a_commit_verdict()
+        self.host.server.authors[head] = "outsider"
+        self.host.server.permissions = {"outsider": "read"}
+        refused = self.host.poll()
+        self.assertEqual(self._signoff_posts(), [])
+        self.assertEqual(refused["statuses"], [])
+        self.assertEqual(self.host.runs(), 1)
+        self.assertEqual(
+            [item["message"] for item in refused["warnings"]],
+            ["untrusted code refused: commit author cannot write to the repository"],
+        )
+        self.assertNotIn("commits", json.loads(path.read_text())["pulls"]["4"])
+
+    def test_cached_state_without_a_commit_verdict_posts_signoff_once_checked(self):
+        _head, path = self._ran_without_a_commit_verdict()
+        labeled = self.host.poll()
+        self.assertEqual(
+            [body for _item, body in self._signoff_posts()],
+            [{"context": "rookrunner/signoff", "state": "success"}],
+        )
+        self.assertEqual(labeled["warnings"], [])
+        self.assertEqual(self.host.runs(), 1)
+        self.assertEqual(json.loads(path.read_text())["pulls"]["4"]["commits"], "trusted")
 
     def test_an_unprotected_file_posts_success(self):
         self._owners()

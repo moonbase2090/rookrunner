@@ -30,15 +30,27 @@ Local rules, not GitHub-equivalence claims:
   is recorded as skipped and the pass continues. The tip is still
   stored. A workflow that is not a regular file, and any other capture
   failure, stops the pass.
-- A fork, a head repository other than the owner repository, or an
-  author or committer who is not a collaborator is refused with a
-  warning that names the reason. It is not silently skipped.
-  ``--allow-untrusted SHA`` runs that one pull-request head or push
-  tip and the run records the override. The flag is not stored and
-  it is not the default. The head and base repository ids match only
-  when both are integers and equal. A null head repository is a fork.
-  The full name is not the comparison. A missing association is not a
-  collaborator rejection. OWNER, MEMBER, and COLLABORATOR are.
+- A fork, a head repository other than the owner repository, or
+  untrusted code is refused with a warning that names the reason. It
+  is not silently skipped. ``--allow-untrusted SHA`` runs that one
+  pull-request head or push tip and the run records the override. The
+  flag is not stored and it is not the default. The head and base
+  repository ids match only when both are integers and equal. A null
+  head repository is a fork. The full name is not the comparison.
+- A pull request's author association must be OWNER, MEMBER, or
+  COLLABORATOR. A missing association, and one GitHub does not list,
+  is refused.
+- A pushed tip commit, and every commit on a pull request, needs an
+  author and a committer with write or admin permission on the
+  repository, as ``/collaborators/{login}/permission`` reports it. A
+  commit identity without a GitHub account is refused. So is a
+  permission request that GitHub answers with 401, 403, or 404.
+  Without ``--app-key`` that request carries no credential and GitHub
+  answers 401. The committer ``web-flow`` passes only when GitHub
+  verified the commit signature, and the author is still checked.
+  GitHub's commit list for a pull request must name exactly the
+  commits the head has and the base does not reach in the clone. It
+  lists at most 250 commits, and a longer pull request is refused.
 - A pull request that changes a workflow file is refused with a
   warning that names the path. A workflow file is a configured job
   path, or a file directly in ``.github/workflows/`` whose name ends
@@ -254,6 +266,23 @@ def _same_repository(head, base):
 
 
 _COLLABORATOR_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
+# Every author association GitHub lists. Another string is not recognized.
+# https://docs.github.com/en/graphql/reference/enums#commentauthorassociation
+_KNOWN_ASSOCIATIONS = _COLLABORATOR_ASSOCIATIONS | frozenset(
+    {"CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"}
+)
+# Repository permissions that can push. read, triage, and none cannot.
+# https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user
+_WRITE_PERMISSIONS = frozenset({"admin", "write"})
+_PERMISSION_REFUSED = frozenset({401, 403, 404})
+# GitHub commits a pull-request merge or a web edit as this account and
+# signs it with its own key.
+_WEB_FLOW_LOGIN = "web-flow"
+_WEB_FLOW_ID = 19864447
+# GitHub lists at most 250 commits for one pull request.
+# https://docs.github.com/en/rest/pulls/pulls#list-commits-on-a-pull-request
+_PULL_COMMIT_LIMIT = 250
+_STOPPED = object()
 
 
 def _association(value):
@@ -264,19 +293,14 @@ def _association(value):
     return value
 
 
-def _user_association(user):
-    if not isinstance(user, dict):
-        return None
-    return _association(user.get("author_association"))
-
-
-def untrusted_reason(head, base, author_association=None, committer_association=None):
-    """Return why this code is untrusted, or None when it may run.
+def untrusted_reason(head, base, author_association):
+    """Return why this pull request is untrusted, or None when it may run.
 
     The repository comparison is ``_same_repository``. When that is false
     and both ids are integers, the head repository is not the owner
-    repository. Any other mismatch is a fork. A missing association is
-    not a reason. OWNER, MEMBER, and COLLABORATOR are collaborators.
+    repository. Any other mismatch is a fork. A missing association and
+    one GitHub does not list are reasons. OWNER, MEMBER, and COLLABORATOR
+    are collaborators.
     """
 
     if (head is not None or base is not None) and not _same_repository(head, base):
@@ -287,16 +311,28 @@ def untrusted_reason(head, base, author_association=None, committer_association=
         if head_id is not None and base_id is not None and head_id != base_id:
             return "head repository is not the owner repository"
         return "pull request is from a fork"
-    reasons = []
-    author = _association(author_association)
-    committer = _association(committer_association)
-    if author is not None and author not in _COLLABORATOR_ASSOCIATIONS:
-        reasons.append("author is not a repository collaborator")
-    if committer is not None and committer not in _COLLABORATOR_ASSOCIATIONS:
-        reasons.append("committer is not a repository collaborator")
-    if not reasons:
-        return None
-    return "; ".join(reasons)
+    association = _association(author_association)
+    if association is None:
+        return "author association is missing"
+    if association not in _KNOWN_ASSOCIATIONS:
+        return "author association is not recognized"
+    if association not in _COLLABORATOR_ASSOCIATIONS:
+        return "author is not a repository collaborator"
+    return None
+
+
+def _github_committed(user, commit):
+    """Return whether GitHub itself committed and signed this commit.
+
+    The committer must be the ``web-flow`` account by login and id, and
+    GitHub must report the signature as verified.
+    """
+
+    if _login(user) != _WEB_FLOW_LOGIN or _integer_id(user.get("id")) != _WEB_FLOW_ID:
+        return False
+    detail = commit.get("commit") if isinstance(commit, dict) else None
+    verification = detail.get("verification") if isinstance(detail, dict) else None
+    return isinstance(verification, dict) and verification.get("verified") is True
 
 
 def _allow_untrusted(values):
@@ -518,11 +554,13 @@ def _remaining_stop(code, headers):
     return header_remaining(headers) == 0
 
 
-def _get_json(api_base, path, etag, token=None):
+def _get_json(api_base, path, etag, token=None, refused=frozenset()):
     """GET one list. 304 returns a null body.
 
     ``token`` is the installation token for an ``--app-key`` pass.
-    The credential-file path passes none.
+    The credential-file path passes none. A status in ``refused`` returns
+    a null body and that status as ``refused`` instead of raising. A
+    rate-limit stop is checked first.
     """
 
     # status_url validates the origin. The SHA is discarded with the path.
@@ -565,6 +603,14 @@ def _get_json(api_base, path, etag, token=None):
                 "etag": None,
                 "remaining": 0,
                 "exhausted": True,
+            }
+        if code in refused:
+            return {
+                "modified": False,
+                "body": None,
+                "etag": None,
+                "remaining": header_remaining(headers),
+                "refused": code,
             }
         raise PollError("API_REJECTED", f"GitHub request failed with HTTP {code}") from None
     except (urllib.error.URLError, TimeoutError, OSError):
@@ -691,6 +737,20 @@ def _fetch_sha(clone, ref):
     if _SHA.fullmatch(sha) is None:
         raise PollError("GIT_FAILED", "git fetch did not resolve a commit")
     return sha
+
+
+def _rev_list(clone, base, head):
+    """Return the commits ``head`` has that ``base`` does not reach, or None."""
+
+    if _SHA.fullmatch(base or "") is None or _SHA.fullmatch(head or "") is None:
+        return None
+    listed = _git(clone, "rev-list", f"{base}..{head}", check=False)
+    if listed.returncode != 0:
+        return None
+    shas = [line for line in _stdout(listed).split("\n") if line != ""]
+    if any(_SHA.fullmatch(sha) is None for sha in shas):
+        return None
+    return shas
 
 
 def _merge_parents(clone, sha):
@@ -930,6 +990,8 @@ class Pass:
         self.state = None
         self.lock_fd = None
         self.repository_body = None
+        # Login to repository permission for this pass. None is unreadable.
+        self.permissions = {}
         self.signoff_seen = False
         self.signoff_present = False
         self.result = {
@@ -1239,6 +1301,195 @@ class Pass:
         quoted = urllib.parse.quote(sha, safe="")
         return self._object(f"/repos/{self.repository}/commits/{quoted}")
 
+    def _array(self, path):
+        """GET one JSON list, or None when the rate-limit budget stopped the pass."""
+
+        if self.budget.stopped:
+            return None
+        got = _get_json(self.api_base, path, None, self.list_token)
+        self.budget.observe(got["remaining"])
+        if got.get("exhausted") or self.budget.stopped:
+            self.budget.stopped = True
+            return None
+        if not isinstance(got["body"], list):
+            raise PollError("API_REJECTED", "GitHub response is not a list")
+        return got["body"]
+
+    def _permission(self, login):
+        """Return the repository permission GitHub reports for one login.
+
+        None means GitHub answered 401, 403, or 404, or sent no
+        permission. A pass without ``--app-key`` sends no credential, and
+        GitHub answers 401. ``_STOPPED`` means the rate-limit budget
+        stopped the pass. One pass asks once per login.
+        """
+
+        if login in self.permissions:
+            return self.permissions[login]
+        if self.budget.stopped:
+            return _STOPPED
+        quoted = urllib.parse.quote(login, safe="")
+        got = _get_json(
+            self.api_base,
+            f"/repos/{self.repository}/collaborators/{quoted}/permission",
+            None,
+            self.list_token,
+            refused=_PERMISSION_REFUSED,
+        )
+        self.budget.observe(got["remaining"])
+        if got.get("exhausted") or self.budget.stopped:
+            self.budget.stopped = True
+            return _STOPPED
+        body = got["body"]
+        permission = body.get("permission") if isinstance(body, dict) else None
+        if not isinstance(permission, str) or permission == "":
+            permission = None
+        self.permissions[login] = permission
+        return permission
+
+    def _identity_reason(self, role, user, commit):
+        """Return why one commit author or committer is untrusted.
+
+        None means that identity passes. ``_STOPPED`` means the pass stopped.
+        """
+
+        login = _login(user)
+        if login is None:
+            return f"commit {role} is not a GitHub user"
+        if role == "committer" and _github_committed(user, commit):
+            return None
+        permission = self._permission(login)
+        if permission is _STOPPED:
+            return _STOPPED
+        if permission is None:
+            return f"commit {role} permission is not readable"
+        if permission not in _WRITE_PERMISSIONS:
+            return f"commit {role} cannot write to the repository"
+        return None
+
+    def _commit_reason(self, commit):
+        """Return why one commit is untrusted, None, or ``_STOPPED``.
+
+        The author and the committer each need write or admin permission
+        on this repository. A committer that ``_github_committed`` accepts
+        is GitHub, and its author is still checked.
+        """
+
+        reasons = []
+        for role in ("author", "committer"):
+            reason = self._identity_reason(role, commit.get(role), commit)
+            if reason is _STOPPED:
+                return _STOPPED
+            if reason is not None:
+                reasons.append(reason)
+        return "; ".join(reasons) if reasons else None
+
+    def _pull_commits_reason(self, number, base_sha, head_sha):
+        """Return why a pull request's commits are untrusted, None, or ``_STOPPED``.
+
+        GitHub's commit list must name exactly the commits that ``head``
+        has and ``base`` does not reach in the clone, so a commit the list
+        leaves out is not skipped. Every one of them goes through
+        ``_commit_reason``. GitHub lists at most 250 commits, and a longer
+        pull request is refused.
+        """
+
+        expected = _rev_list(self.clone, base_sha, head_sha)
+        if expected is None:
+            return "pull request commits are not readable"
+        if len(expected) > _PULL_COMMIT_LIMIT:
+            return "pull request has more commits than GitHub lists"
+        listed = self._pull_commit_list(number)
+        if listed is None:
+            return _STOPPED
+        by_sha = {}
+        for item in listed:
+            if not isinstance(item, dict):
+                raise PollError("API_REJECTED", "GitHub pull request commits are not usable")
+            by_sha.setdefault(_sha(item.get("sha")), item)
+        if len(by_sha) != len(listed) or set(by_sha) != set(expected):
+            return "pull request commits do not match the listed head"
+        reasons = []
+        for sha in expected:
+            reason = self._commit_reason(by_sha[sha])
+            if reason is _STOPPED:
+                return _STOPPED
+            if reason is not None and reason not in reasons:
+                reasons.append(reason)
+        return "; ".join(reasons) if reasons else None
+
+    def _pull_commit_list(self, number):
+        """Return GitHub's commit list for one pull request, or None when the pass stopped."""
+
+        listed = []
+        page = 1
+        while True:
+            body = self._array(
+                f"/repos/{self.repository}/pulls/{number}/commits?per_page=100&page={page}"
+            )
+            if body is None:
+                return None
+            listed.extend(body)
+            if len(body) < 100 or len(listed) >= _PULL_COMMIT_LIMIT:
+                return listed
+            page += 1
+
+    def _pull_commits_gate(self, number, base_sha, head_sha, override):
+        """Return ``(verdict, override)`` for every commit on a pull request.
+
+        The verdict is ``"trusted"``, ``"allowed"``, ``"refused"``, or
+        ``"stop"``. A refusal is recorded here. When ``--allow-untrusted``
+        names the head, the verdict is ``"allowed"`` and the override gains
+        the commit reason.
+        """
+
+        reason = self._pull_commits_reason(number, base_sha, head_sha)
+        if reason is _STOPPED:
+            return "stop", override
+        if reason is None:
+            return "trusted", override
+        if head_sha not in self.allow_untrusted:
+            self._record_untrusted(number, head_sha, reason)
+            return "refused", override
+        self.result["warnings"].append(self._warning(number, head_sha, reason, True))
+        return "allowed", reason if override is None else f"{override}; {reason}"
+
+    def _fetch_pull_merge(self, number, base_sha, head_sha):
+        """Fetch a pull request's merge commit, or record why it is not used.
+
+        The merge is used only when its parents are the listed base and head.
+        """
+
+        merge = _fetch_sha(self.clone, f"refs/pull/{number}/merge")
+        if merge is None:
+            self._record_absent(number, head_sha)
+            return None
+        if _merge_parents(self.clone, merge) != (base_sha, head_sha):
+            self._record_merge_mismatch(number, head_sha)
+            return None
+        return merge
+
+    def _seen_pull(self, number, base_sha, head_sha, item, override, seen):
+        """Post signoff for a pull request whose head and base already ran.
+
+        The stored entry holds that head's commit verdict. Only ``trusted``
+        skips the gate. An entry from poll state written before the gate,
+        or from a run that ``--allow-untrusted`` let through, goes through
+        the gate again, and a refusal posts no signoff.
+        """
+
+        if seen.get("commits") != "trusted":
+            if self._fetch_pull_merge(number, base_sha, head_sha) is None:
+                return True
+            verdict, _override = self._pull_commits_gate(number, base_sha, head_sha, override)
+            if verdict == "stop":
+                return False
+            if verdict == "refused":
+                return True
+            seen["commits"] = verdict
+            self._checkpoint()
+        return self._signoff(number, head_sha, base_sha, item)
+
     def _list(self, kind, path):
         """Return (body, etag) when a new list should be applied.
 
@@ -1504,12 +1755,9 @@ class Pass:
         login = _login(commit.get("author"))
         if login is not None:
             event["commits"] = [{"author": {"login": login}}]
-        reason = untrusted_reason(
-            None,
-            None,
-            _user_association(commit.get("author")),
-            _user_association(commit.get("committer")),
-        )
+        reason = self._commit_reason(commit)
+        if reason is _STOPPED:
+            return False
         if reason is not None and sha not in self.allow_untrusted:
             self._record_push_refusal(ref, sha, reason)
             return True
@@ -1551,12 +1799,7 @@ class Pass:
         ):
             raise PollError("API_REJECTED", "GitHub pull request list is not usable")
         head_repo = head.get("repo")
-        reason = untrusted_reason(
-            head,
-            base,
-            _association(item.get("author_association")),
-            None,
-        )
+        reason = untrusted_reason(head, base, item.get("author_association"))
         override = None
         if reason is not None and head_sha not in self.allow_untrusted:
             full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
@@ -1572,15 +1815,15 @@ class Pass:
             override = reason
         seen = self.state["pulls"].get(str(number))
         if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
-            return self._signoff(number, head_sha, base_sha, item)
+            return self._seen_pull(number, base_sha, head_sha, item, override, seen)
         ref = f"refs/pull/{number}/merge"
-        merge = _fetch_sha(self.clone, ref)
+        merge = self._fetch_pull_merge(number, base_sha, head_sha)
         if merge is None:
-            self._record_absent(number, head_sha)
             return True
-        parents = _merge_parents(self.clone, merge)
-        if parents != (base_sha, head_sha):
-            self._record_merge_mismatch(number, head_sha)
+        verdict, override = self._pull_commits_gate(number, base_sha, head_sha, override)
+        if verdict == "stop":
+            return False
+        if verdict == "refused":
             return True
         changed = _diff(self.clone, base_sha, head_sha)
         if not self._accept_pr_workflow(number, head_sha, item, base_sha, changed):
@@ -1629,6 +1872,7 @@ class Pass:
                 "head": head_sha,
                 "base": base_sha,
                 "merge": merge,
+                "commits": verdict,
             }
             self._checkpoint()
         if not self._signoff(number, head_sha, base_sha, item):

@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 
 import execution_core.poll as poll_module
 from execution_core.checks import list_token_body
@@ -67,16 +68,63 @@ def _request(method, params):
     ).encode()
 
 
-def _commit_user(login, association, ident):
-    if login is None and association is None:
-        return None
-    user = {"id": ident}
-    if isinstance(login, str):
-        user["login"] = login
-        user["email"] = "hidden@example.invalid"
-    if isinstance(association, str):
-        user["author_association"] = association
-    return user
+_WEB_FLOW_ID = 19864447
+
+
+def _commit_user(login, ident):
+    """A commit author or committer as GitHub's commits API returns it.
+
+    GitHub sends no ``author_association`` there. None is a commit whose
+    email has no GitHub account. A dict is sent as given.
+    """
+
+    if login is None or isinstance(login, dict):
+        return login
+    ident = _WEB_FLOW_ID if login == "web-flow" else ident
+    return {"login": login, "id": ident, "email": "hidden@example.invalid"}
+
+
+def _commit_record(server, sha):
+    """One commit. Author and committer default to Mona, who can write.
+
+    A server another test module built without these fields gets the defaults.
+    """
+
+    return {
+        "sha": sha,
+        "author": _commit_user(getattr(server, "authors", {}).get(sha, "Mona"), 1),
+        "committer": _commit_user(getattr(server, "committers", {}).get(sha, "Mona"), 2),
+        "commit": {
+            "message": "hidden-message",
+            "verification": {"verified": sha in getattr(server, "verified", set())},
+        },
+    }
+
+
+def _pull_shas(server, number):
+    """The commits a listed pull request's head has and its base does not reach."""
+
+    if getattr(server, "remote", None) is None:
+        return []
+    for item in server.pulls:
+        if item.get("number") != number:
+            continue
+        listed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(server.remote),
+                "rev-list",
+                "--reverse",
+                f"{item['base']['sha']}..{item['head']['sha']}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if listed.returncode == 0:
+            return listed.stdout.split()
+    return []
 
 
 def _git(repo, *args, check=True):
@@ -110,6 +158,10 @@ class _Handler(BaseHTTPRequestHandler):
             kind = "branches"
         elif path.endswith("/pulls"):
             kind = "pulls"
+        elif "/pulls/" in path and path.endswith("/commits"):
+            kind = "pull_commits"
+        elif "/collaborators/" in path and path.endswith("/permission"):
+            kind = "permission"
         elif "/commits/" in path:
             kind = "commit"
         elif path.startswith("/repos/") and path.count("/") == 3:
@@ -140,18 +192,28 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if kind == "commit":
             sha = path.rsplit("/", 1)[-1]
-            login = self.server.authors.get(sha)
-            associations = getattr(self.server, "associations", {}).get(sha, {})
-            author = _commit_user(login, associations.get("author"), 1)
-            committer = _commit_user(None, associations.get("committer"), 2)
-            body = json.dumps(
-                {
-                    "sha": sha,
-                    "author": author,
-                    "committer": committer,
-                    "commit": {"message": "hidden-message"},
-                }
-            ).encode()
+            self._send(200, json.dumps(_commit_record(self.server, sha)).encode(), None, remaining)
+            return
+        if kind == "pull_commits":
+            number = int(path.rsplit("/", 2)[-2])
+            listed = getattr(self.server, "pull_commits", {}).get(number)
+            if listed is None:
+                listed = [
+                    _commit_record(self.server, sha) for sha in _pull_shas(self.server, number)
+                ]
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            size = int(query.get("per_page", ["30"])[0])
+            page = int(query.get("page", ["1"])[0])
+            body = json.dumps(listed[(page - 1) * size : page * size]).encode()
+            self._send(200, body, None, remaining)
+            return
+        if kind == "permission":
+            login = urllib.parse.unquote(path.rsplit("/", 2)[-2])
+            permission = getattr(self.server, "permissions", {}).get(login, "write")
+            if isinstance(permission, int):
+                self._send(permission, b'{"message": "refused"}', None, remaining)
+                return
+            body = json.dumps({"permission": permission, "role_name": permission}).encode()
             self._send(200, body, None, remaining)
             return
         if kind == "repository":
@@ -262,7 +324,11 @@ class PollTests(unittest.TestCase):
             "default_branch": "main",
         }
         self.server.authors = {}
-        self.server.associations = {}
+        self.server.committers = {}
+        self.server.verified = set()
+        self.server.permissions = {}
+        self.server.pull_commits = {}
+        self.server.remote = self.remote
         self.server.etags = {"branches": "branches-1", "pulls": "pulls-1"}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -551,6 +617,7 @@ class PollTests(unittest.TestCase):
         self.server.pulls = [
             {
                 "number": 7,
+                "author_association": "COLLABORATOR",
                 "head": {
                     "sha": head,
                     "ref": "feature",
@@ -638,6 +705,7 @@ class PollTests(unittest.TestCase):
             },
             {
                 "number": 8,
+                "author_association": "COLLABORATOR",
                 "head": {
                     "sha": "ef" * 20,
                     "ref": "feature",
@@ -820,6 +888,7 @@ class PollTests(unittest.TestCase):
         self.server.pulls = [
             {
                 "number": 9,
+                "author_association": "COLLABORATOR",
                 "user": {"login": "Mona", "id": 3, "email": "hidden@example.invalid"},
                 "head": {
                     "sha": head,
@@ -901,10 +970,11 @@ class PollTests(unittest.TestCase):
         )
         _git(self.seed, "push", "origin", "dev")
         dev = self._tip("refs/heads/dev")
+        self.server.authors[dev] = None
         self.server.branches = [{"name": "dev", "commit": {"sha": dev}}]
         self.server.etags["branches"] = "branches-2"
         self.submits.clear()
-        self.poll()
+        self.poll(allow_untrusted=[dev])
         dev_event = self.submits[0]["event"]
         self.assertEqual(dev_event["ref"], "refs/heads/dev")
         self.assertNotIn("commits", dev_event)
@@ -1131,6 +1201,7 @@ class PollTests(unittest.TestCase):
         self.server.pulls = [
             {
                 "number": 7,
+                "author_association": "COLLABORATOR",
                 "head": {
                     "sha": head,
                     "ref": "feature",
@@ -1572,18 +1643,43 @@ class PollTests(unittest.TestCase):
         )
         self.assertFalse((self.clone / "ci/job.yml").exists())
 
-    def test_a_missing_association_does_not_match_allow_pr_workflow(self):
+    def test_a_missing_association_is_refused_and_does_not_match_allow_pr_workflow(self):
         def mutate(seed):
             path = seed / ".github/workflows/check.yml"
             path.write_text(WORKFLOW + "# edited\n")
 
         _tip, head = self._open_feature(9, mutate, association=None)
-        result = self.poll(allow_pr_workflow=["OWNER"])
-        self._assert_workflow_refused(
-            result,
-            head,
-            "pull request changes a workflow file: .github/workflows/check.yml",
+        refused = self.poll(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(refused["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            [item["message"] for item in refused["warnings"]],
+            ["untrusted code refused: author association is missing"],
         )
+        overridden = self.poll(allow_pr_workflow=["OWNER"], allow_untrusted=[head])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(overridden["skipped"], [{"reason": "workflow_changed", "number": 9}])
+        self.assertEqual(
+            [item["message"] for item in overridden["warnings"]],
+            [
+                "untrusted code allowed by override: author association is missing",
+                "pull request changes a workflow file: .github/workflows/check.yml",
+            ],
+        )
+
+    def test_an_unrecognized_association_is_refused(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, association="MAINTAINER")
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(refused["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            [item["message"] for item in refused["warnings"]],
+            ["untrusted code refused: author association is not recognized"],
+        )
+        self.assertEqual(refused["warnings"][0]["sha"], head)
 
     def test_a_listed_base_that_is_not_the_merge_parent_is_not_checked_out(self):
         def mutate(seed):
@@ -1691,19 +1787,210 @@ class PollTests(unittest.TestCase):
         self.assertEqual(result["warnings"], [])
         self.assertIn("# pushed", (self.clone / ".github/workflows/check.yml").read_text())
 
-    def test_a_non_collaborator_committer_is_refused_until_that_sha_is_named(self):
+    def _push_main(self, name):
+        (self.seed / name).write_text(name + "\n")
+        self._commit_all(name)
+        _git(self.seed, "push", "origin", "main")
+        return self._tip()
+
+    def _messages(self, result):
+        return [item["message"] for item in result["warnings"]]
+
+    def test_a_pushed_commit_without_a_github_account_is_refused(self):
+        tip = self._tip()
+        self.server.authors[tip] = None
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(
+            self._messages(refused),
+            ["untrusted code refused: commit author is not a GitHub user"],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("refs/heads/main", saved["tips"])
+
+    def test_an_unreadable_permission_is_refused_and_asked_once_per_login(self):
+        tip = self._tip()
+        self.server.permissions = {"Mona": 401}
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            self._messages(refused),
+            [
+                "untrusted code refused: commit author permission is not readable; "
+                "commit committer permission is not readable"
+            ],
+        )
+        asked = [item["path"] for item in self.server.requests if "/collaborators/" in item["path"]]
+        self.assertEqual(asked, ["/repos/acme/demo/collaborators/Mona/permission"])
+
+    def test_an_exhausted_permission_response_stops_the_pass_without_a_refusal(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.server.remaining_by_kind = {"permission": 0}
+        stopped = self.poll()
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(stopped["warnings"], [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("refs/heads/main", saved["tips"])
+        self.assertEqual(saved.get("refusals", []), [])
+        self.server.remaining_by_kind = {}
+        resumed = self.poll()
+        self.assertFalse(resumed["stopped"])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_github_signed_merge_committer_passes_and_its_author_is_checked(self):
+        tip = self._tip()
+        self.server.committers[tip] = "web-flow"
+        self.server.verified.add(tip)
+        self.server.permissions = {"Mona": "write", "web-flow": "read", "outsider": "read"}
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        ran = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(ran["warnings"], [])
+        self.assertFalse(any("/web-flow/" in item["path"] for item in self.server.requests))
+
+        unsigned = self._push_main("unsigned.txt")
+        self.server.committers[unsigned] = "web-flow"
+        self.server.branches = [{"name": "main", "commit": {"sha": unsigned}}]
+        self.server.etags["branches"] = "branches-2"
+        self.assertEqual(
+            self._messages(self.poll()),
+            ["untrusted code refused: commit committer cannot write to the repository"],
+        )
+
+        spoofed = self._push_main("spoofed.txt")
+        self.server.committers[spoofed] = {"login": "web-flow", "id": 7}
+        self.server.verified.add(spoofed)
+        self.server.branches = [{"name": "main", "commit": {"sha": spoofed}}]
+        self.server.etags["branches"] = "branches-3"
+        self.assertEqual(
+            self._messages(self.poll()),
+            ["untrusted code refused: commit committer cannot write to the repository"],
+        )
+
+        merged = self._push_main("merged.txt")
+        self.server.authors[merged] = "outsider"
+        self.server.committers[merged] = "web-flow"
+        self.server.verified.add(merged)
+        self.server.branches = [{"name": "main", "commit": {"sha": merged}}]
+        self.server.etags["branches"] = "branches-4"
+        self.assertEqual(
+            self._messages(self.poll()),
+            ["untrusted code refused: commit author cannot write to the repository"],
+        )
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_pull_request_commit_by_a_reader_is_refused_until_that_sha_is_named(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(refused["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            self._messages(refused),
+            ["untrusted code refused: commit author cannot write to the repository"],
+        )
+        self.assertFalse((self.clone / "feature-9.txt").exists())
+        allowed = self.poll(allow_untrusted=[head])
+        self.assertEqual(self.runs(), 1)
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(record["untrusted_reason"], "commit author cannot write to the repository")
+
+    def test_an_override_records_the_author_and_commit_reasons(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, association="NONE")
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        allowed = self.poll(allow_untrusted=[head])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(
+            self._messages(allowed),
+            [
+                "untrusted code allowed by override: author is not a repository collaborator",
+                "untrusted code allowed by override: commit author cannot write to the repository",
+            ],
+        )
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertEqual(
+            record["untrusted_reason"],
+            "author is not a repository collaborator; commit author cannot write to the repository",
+        )
+
+    def test_an_exhausted_pull_commit_list_stops_the_pass_without_a_refusal(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        self._open_feature(9, mutate)
+        self.server.remaining_by_kind = {"pull_commits": 0}
+        stopped = self.poll()
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(stopped["warnings"], [])
+        self.assertNotIn({"reason": "untrusted", "number": 9}, stopped["skipped"])
+        self.server.remaining_by_kind = {}
+        resumed = self.poll()
+        self.assertFalse(resumed["stopped"])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_commit_list_that_leaves_out_a_commit_is_refused(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        self.server.pull_commits[9] = []
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            self._messages(refused),
+            ["untrusted code refused: pull request commits do not match the listed head"],
+        )
+        self.assertEqual(refused["warnings"][0]["sha"], head)
+
+    def test_more_commits_than_github_lists_is_refused(self):
+        def mutate(seed):
+            (seed / "first.txt").write_text("first\n")
+            self._commit_all("first")
+            (seed / "second.txt").write_text("second\n")
+
+        original = poll_module._PULL_COMMIT_LIMIT
+        poll_module._PULL_COMMIT_LIMIT = 1
+        try:
+            self._open_feature(9, mutate)
+            refused = self.poll()
+        finally:
+            poll_module._PULL_COMMIT_LIMIT = original
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(
+            self._messages(refused),
+            ["untrusted code refused: pull request has more commits than GitHub lists"],
+        )
+        self.assertFalse(any("/pulls/9/commits" in item["path"] for item in self.server.requests))
+
+    def test_a_committer_without_write_is_refused_until_that_sha_is_named(self):
         tip = self._tip()
         self.server.authors[tip] = "octocat"
-        self.server.associations[tip] = {"author": "OWNER", "committer": "NONE"}
+        self.server.committers[tip] = "outsider"
+        self.server.permissions = {"octocat": "admin", "outsider": "read"}
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
         refused = self.poll()
         self.assertEqual(self.runs(), 0)
         self.assertEqual(self.posts(), [])
         self.assertEqual(
             refused["warnings"][0]["message"],
-            "untrusted code refused: committer is not a repository collaborator",
+            "untrusted code refused: commit committer cannot write to the repository",
         )
-        self.assertNotIn("author is not", refused["warnings"][0]["message"])
+        self.assertNotIn("commit author", refused["warnings"][0]["message"])
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertNotIn("refs/heads/main", saved["tips"])
         self.assertNotIn("allow_untrusted", saved)
@@ -1713,7 +2000,7 @@ class PollTests(unittest.TestCase):
         self.assertIs(record["untrusted_override"], True)
         self.assertEqual(
             record["untrusted_reason"],
-            "committer is not a repository collaborator",
+            "commit committer cannot write to the repository",
         )
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual(saved["tips"]["refs/heads/main"], tip)

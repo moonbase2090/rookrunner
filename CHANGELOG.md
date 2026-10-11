@@ -21,6 +21,14 @@ This file does not reconstruct earlier milestones.
   same way. The `[` command stays accepted. An unquoted `{` in that
   command name is refused the same way. `builtin eval` is refused the
   same way.
+- A missing or unrecognized pull request author association is
+  refused. A pushed tip commit, and every commit on a pull request,
+  needs an author and a committer with `write` or `admin` permission
+  on the repository, as GitHub reports it. A commit without a GitHub
+  account, or one whose permission GitHub does not return, is refused.
+  Without `--app-key` that request has no credential and the commit is
+  refused. The `web-flow` committer passes only when GitHub verified
+  the signature. `--allow-untrusted` still runs one named SHA.
 - A pull request that changes a workflow file is refused. The pass
   reads the diff from the base to the head and does not run
   `refs/pull/<number>/merge` for that pull request unless
