@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Job containers use Docker network `none` by default.
+  `worker --network bridge` opts in to egress. Service containers start
+  only with that opt-in.
 - Every engine call uses the Docker context named `default` unless
   `worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
   An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the
@@ -69,7 +72,7 @@ This file does not reconstruct earlier milestones.
   capabilities and limits address families to Unix sockets and IP.
 - Job and service containers are created with a memory limit of 4g,
   no swap beyond that limit, a process limit of 1024, and a CPU limit
-  of 2. The default network remains bridge.
+  of 2.
 - The project license is the Mozilla Public License, v. 2.0.
 - `SECURITY.md` states the private reporting path, the socket and state
   modes, and that local mode is not a sandbox for a hostile repository.

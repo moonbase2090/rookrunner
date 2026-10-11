@@ -34,6 +34,9 @@ class ReadmeTests(unittest.TestCase):
             PROSE,
         )
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn("Job containers use Docker network `none` by default.", PROSE)
+        self.assertIn("`worker --network bridge` opts in to egress.", PROSE)
+        self.assertIn("Service containers start only with that opt-in.", PROSE)
         self.assertIn("Every engine call uses the Docker context named `default`", PROSE)
         self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", PROSE)
         self.assertIn("The scheduler thread uses that same context.", PROSE)

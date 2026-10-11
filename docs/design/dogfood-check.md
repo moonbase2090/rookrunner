@@ -34,7 +34,7 @@ ruff, and unittest.
 | `enable-cache: auto` | `RUNNER_ENVIRONMENT` is `self-hosted`, so the action's GitHub-hosted cache stays off | NS-33 |
 | `post` and `post-if: success()` | The post entry runs after the main steps when the job succeeded | NS-37 |
 | `uv sync`, ruff, and unittest | `run` steps. `uv` arrives through the `GITHUB_PATH` write from setup-uv | Existing (NS-15) |
-| Default `bridge` network | A job can reach the public internet. `--network none` turns that off | Existing |
+| Default `none` network | A job has no egress. `--network bridge` opts in | Existing |
 | Checkout `runs.using: node20` | That action is the owned checkout, so its `node20` entry is not executed. Any other `node20` action stays rejected | NS-32 and the `node20` answer below |
 
 https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax

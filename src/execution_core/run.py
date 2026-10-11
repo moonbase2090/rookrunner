@@ -47,12 +47,13 @@ that value in the same job are masked. A job output that contains an
 injected secret or a token prefix is omitted. An `add-mask` value in a job
 output is stored as masked text. A later job does not inherit the mask.
 
-The container is created on Docker network `bridge` by default, so the job
-can reach the public internet. GitHub-hosted runners have that access by
-default
+The container is created on Docker network `none` by default, so the job
+cannot reach the public internet. Pass network `bridge` to opt in.
+GitHub-hosted runners have that access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-Pass network `none` to turn it off. Other network names are rejected. A
-job container and a service container are created with `--memory 4g`,
+Other network names are rejected. Service containers start only on
+`bridge`. A job container and a service container are created with
+`--memory 4g`,
 `--memory-swap 4g`, `--pids-limit 1024`, and `--cpus 2`. The swap
 limit matches the memory limit, so the container does not add swap
 beyond that cap. A job container is created with `--security-opt
@@ -324,11 +325,11 @@ _ATTEMPT = contextvars.ContextVar("rookrunner_attempt", default=None)
 _WORKFLOW_PATH = contextvars.ContextVar("rookrunner_workflow_path", default=None)
 # GitHub-hosted runners have access to the public internet by default.
 # https://docs.github.com/en/actions/concepts/runners/private-networking
-# `bridge` is Docker's default outbound network. `none` turns that off.
+# `none` leaves the job with no egress. `bridge` is the opt-in.
 # Other names, including `host`, are rejected.
-DEFAULT_NETWORK = "bridge"
+DEFAULT_NETWORK = "none"
 _CALLED_WORKFLOW = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
-_NETWORKS = {DEFAULT_NETWORK, "none"}
+_NETWORKS = {"bridge", "none"}
 # A job cannot take the whole host. Swap matches memory, so the cap is
 # the memory value rather than Docker's default of twice that.
 _CONTAINER_MEMORY = "4g"
@@ -2684,7 +2685,7 @@ def run_job(
     unless that job's `if` is true. A step timeout stops the container and
     does not start later jobs. `owner` reserves the name before
     create. If that owner is already cancelled, this does not start the
-    container. `network` is `bridge` unless the caller passes `none`.
+    container. `network` is `none` unless the caller passes `bridge`.
     `docker_socket` is off unless the caller passes true or a socket path.
     When the socket is mounted, a private Docker volume is mounted at
     that volume's mountpoint and `TMPDIR`, `TEMP`, and `TMP` default to it.

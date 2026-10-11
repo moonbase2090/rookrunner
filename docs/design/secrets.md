@@ -228,7 +228,7 @@ control of the host engine
 ([runner image](runner-image.md)). The step uid is the caller uid.
 The container is not privileged. A secret value or a `GITHUB_TOKEN`
 that reaches a step on that worker can be copied to the host. The
-default container network is `bridge`, so a step can also send a
+default container network is `none`. `worker --network bridge` opts in, so a step can send a
 value to the network. Masking a log does not stop either copy.
 
 A socket worker can also mount the host. Docker Desktop shares

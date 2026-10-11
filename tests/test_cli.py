@@ -156,12 +156,19 @@ class CliUsageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid choice", result.stderr)
 
-    def test_worker_records_bridge_or_none(self):
+    def test_worker_network_defaults_to_none(self):
+        result = run_cli("unused-state", "worker", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Docker network for job containers (default none).", result.stdout)
+        self.assertNotIn("(default bridge)", result.stdout)
+
+    def test_worker_records_none_unless_bridge_is_requested(self):
         with tempfile.TemporaryDirectory(prefix="cli-network-") as directory:
             repo = Path(directory) / "repo"
             repo.mkdir()
             state = Path(directory) / "state"
-            self.assertEqual(Worker(repo, state).network, "bridge")
+            self.assertEqual(Worker(repo, state).network, "none")
+            self.assertEqual(Worker(repo, state, network="bridge").network, "bridge")
             self.assertEqual(Worker(repo, state, network="none").network, "none")
         with self.assertRaises(ValueError):
             Worker(".", ".", network="host")

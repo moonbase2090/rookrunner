@@ -103,10 +103,11 @@ export PYTHONPATH="$PWD/src"
 python3 -m execution_core --state "$PWD/.execution-state" worker --repository "$PWD"
 ```
 
-Job containers use Docker network `bridge` by default, so a job can reach the
-public internet. GitHub-hosted runners have that access by default
+Job containers use Docker network `none` by default. `worker --network bridge`
+opts in to egress. Service containers start only with that opt-in.
+GitHub-hosted runners have public internet access by default
 (https://docs.github.com/en/actions/concepts/runners/private-networking).
-Start the worker with `--network none` to turn it off. The Docker socket
+The Docker socket
 stays unmounted unless you add `--docker-socket`. That flag gives the job
 the host Docker service, which container-dependent tests need. The job
 keeps the caller user. When the socket is mounted, a private Docker
