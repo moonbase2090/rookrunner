@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 
-"""Job and service containers are created with memory, pid, and cpu limits."""
+"""Job and service containers are created with limits and no new privileges."""
 
 import unittest
 
-from execution_core.run import _create_args, _service_create_args
+from execution_core.run import _account_setup_args, _create_args, _service_create_args
 
 _EXPECTED = {
     "--memory": "4g",
@@ -52,3 +52,43 @@ class ContainerLimitTests(unittest.TestCase):
         self.assertEqual(_flag(job, "--network"), "bridge")
         self.assertNotIn("--privileged", job)
         self.assertNotIn("--privileged", service)
+
+    def test_job_and_service_creates_drop_privileges(self):
+        job = _create_args(
+            "job",
+            "/workspace",
+            "/private",
+            "/commands",
+            "image@sha256:aa",
+            "bridge",
+            None,
+            None,
+            {
+                "home": "/home",
+                "runner-temp": "/temp",
+                "tool-cache": "/tools",
+            },
+            None,
+            None,
+        )
+        service = _service_create_args(
+            "svc",
+            "net",
+            {"id": "echo", "image": "image@sha256:aa"},
+            "job",
+        )
+        for args in (job, service):
+            self.assertEqual(_flag(args, "--security-opt"), "no-new-privileges")
+            self.assertEqual(_flag(args, "--cap-drop"), "ALL")
+            self.assertEqual(args.count("--security-opt"), 1)
+            self.assertEqual(args.count("--cap-drop"), 1)
+            self.assertNotIn("--cap-add", args)
+            self.assertNotIn("--privileged", args)
+
+    def test_account_setup_stays_root_without_the_isolation_flags(self):
+        args = _account_setup_args("image@sha256:aa", "/account")
+        self.assertEqual(_flag(args, "--user"), "0:0")
+        self.assertNotIn("--cap-drop", args)
+        self.assertNotIn("--security-opt", args)
+        self.assertNotIn("--privileged", args)
+        self.assertIn("chown 0:0 /runner-account/sudoers", args[-1])

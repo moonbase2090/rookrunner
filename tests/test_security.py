@@ -24,6 +24,9 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("process limit of 1024", TEXT)
         self.assertIn("CPU limit of 2", TEXT)
         self.assertIn("The default network remains `bridge`.", TEXT)
+        self.assertIn("`--security-opt no-new-privileges`", TEXT)
+        self.assertIn("`--cap-drop ALL`", TEXT)
+        self.assertIn("A step cannot gain privileges through sudo.", TEXT)
 
     def test_local_mode_is_not_a_sandbox(self):
         self.assertIn(

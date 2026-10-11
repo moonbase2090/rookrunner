@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Job and service containers are created with
+  `--security-opt no-new-privileges` and `--cap-drop ALL`. The
+  account-setup container stays root so it can write passwd and
+  sudoers. A step cannot gain privileges through sudo.
 - The App private key directory is configurable. `--key-dir` overrides
   `ROOKRUNNER_KEY_DIR`. The default is `$XDG_CONFIG_HOME/rookrunner/keys`,
   or `~/.config/rookrunner/keys` when that variable is unset. The
