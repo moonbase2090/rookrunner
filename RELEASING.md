@@ -1,7 +1,9 @@
 # Releasing
 
 Release text and artifacts must not reference private infrastructure,
-hostnames, personal paths, or internal tooling.
+hostnames, personal paths, or internal tooling. Example domains and
+noreply addresses are allowed. Any other address is rejected except
+the release identity.
 
 The release workflow runs the check after it builds the artifacts and
 before it publishes. The check reads the changelog, the release notes,

@@ -93,6 +93,7 @@ root_s, pattern_path, title_path, tag_path, artifacts = sys.argv[1:6]
 root = pathlib.Path(root_s)
 allow = "322824348+mb2090@users.noreply.github.com"
 email_re = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+example_domains = ("example.com", "example.net", "example.org", "example")
 patterns = []
 for raw in pathlib.Path(pattern_path).read_text(encoding="utf-8").splitlines():
     if not raw.strip():
@@ -106,11 +107,23 @@ for raw in pathlib.Path(pattern_path).read_text(encoding="utf-8").splitlines():
 hits = []
 
 
+def email_allowed(address):
+    if address == allow:
+        return True
+    local, _, domain = address.rpartition("@")
+    if local.lower() == "noreply":
+        return True
+    domain = domain.lower().rstrip(".")
+    if domain.endswith(".invalid"):
+        return True
+    return any(domain == suffix or domain.endswith("." + suffix) for suffix in example_domains)
+
+
 def consider(report, text):
     for number, line in enumerate(text.splitlines(), 1):
         bad = any(pattern.search(line) for pattern in patterns)
         if not bad:
-            bad = any(match.group(0) != allow for match in email_re.finditer(line))
+            bad = any(not email_allowed(match.group(0)) for match in email_re.finditer(line))
         if bad:
             hits.append(f"{report}:{number}")
 

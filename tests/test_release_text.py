@@ -63,14 +63,49 @@ class ReleaseTextTests(unittest.TestCase):
         self.assertFalse((self.home / ".config" / "moonbase" / "release-denylist.txt").exists())
 
     def test_the_allowed_email_passes_and_any_other_email_is_file_line_only(self):
-        (self.root / "README.md").write_text(f"Contact {ALLOW}\n", encoding="utf-8")
+        allowed = "\n".join(
+            (
+                ALLOW,
+                "fixture@example.invalid",
+                "rookrunner@example.invalid",
+                "person@example.com",
+                "noreply@github.com",
+                "NoReply@GitHub.com",
+            )
+        )
+        (self.root / "README.md").write_text(allowed + "\n", encoding="utf-8")
         clean = self.run_check()
         self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(clean.stdout, "")
 
-        other = "person@example.com"
+        other = "person@contoso.com"
         (self.root / "docs" / "guide.md").write_text(f"See {other} now\n", encoding="utf-8")
         result = self.run_check()
         self.assert_hidden(result, other, "docs/guide.md:1")
+
+        github_user = "user@github.com"
+        (self.root / "docs" / "guide.md").write_text(github_user + "\n", encoding="utf-8")
+        github = self.run_check()
+        self.assert_hidden(github, github_user, "docs/guide.md:1")
+
+        other_noreply = "1+other@users.noreply.github.com"
+        (self.root / "docs" / "guide.md").write_text(other_noreply + "\n", encoding="utf-8")
+        named = self.run_check()
+        self.assert_hidden(named, other_noreply, "docs/guide.md:1")
+
+    def test_the_current_release_text_passes_without_an_extra_list(self):
+        env = os.environ.copy()
+        env["HOME"] = str(self.home)
+        env.pop("RELEASE_DENYLIST", None)
+        result = subprocess.run(
+            ["sh", str(SCRIPT)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_generic_infrastructure_patterns_fail_without_printing_the_match(self):
         samples = {
@@ -155,6 +190,10 @@ class ReleaseTextTests(unittest.TestCase):
         self.assertIn(
             "Release text and artifacts must not reference private infrastructure, "
             "hostnames, personal paths, or internal tooling.",
+            releasing,
+        )
+        self.assertIn(
+            "Example domains and noreply addresses are allowed.",
             releasing,
         )
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
