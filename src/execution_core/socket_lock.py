@@ -18,6 +18,9 @@ import shutil
 import subprocess
 
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
+_CONTEXT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+# Process-wide. A ContextVar would not reach Worker.scheduler.
+_PINNED_CONTEXT = None
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?")
 _APP_KEY_MESSAGE = "worker --app-key accepts only private-key.pem in the configured key directory"
 # The command prints nothing. Exit 42 means the mount is a usable directory.
@@ -259,6 +262,69 @@ def _rejected(stderr):
     return any(marker in folded for marker in _MOUNT_MARKERS)
 
 
+def accept_docker_context(value):
+    """Return one Docker context name. A path or a flag is not a name."""
+
+    if not isinstance(value, str) or _CONTEXT_NAME.fullmatch(value) is None:
+        raise ValueError("worker --docker-context must name one context")
+    return value
+
+
+def resolve_docker_context(flag):
+    """Return the engine context. An inherited Docker variable is not a choice.
+
+    ``worker --docker-context`` wins. Otherwise ``ROOKRUNNER_DOCKER_CONTEXT``
+    names the context. When neither is set, the context is ``default``.
+    ``DOCKER_CONTEXT`` and ``DOCKER_HOST`` are not read.
+    """
+
+    if flag is not None:
+        return accept_docker_context(flag)
+    explicit = os.environ.get("ROOKRUNNER_DOCKER_CONTEXT")
+    if isinstance(explicit, str) and explicit != "":
+        return accept_docker_context(explicit)
+    return "default"
+
+
+def pin_docker_context(value):
+    """Pin one context for every thread. Returns the previous pin."""
+
+    global _PINNED_CONTEXT
+    previous = _PINNED_CONTEXT
+    _PINNED_CONTEXT = accept_docker_context(value)
+    return previous
+
+
+def reset_docker_context(token):
+    """Restore a previous pin. ``None`` clears it and returns the old pin."""
+
+    global _PINNED_CONTEXT
+    previous = _PINNED_CONTEXT
+    if token is not None:
+        accept_docker_context(token)
+    _PINNED_CONTEXT = token
+    return previous
+
+
+def docker_context():
+    if _PINNED_CONTEXT is not None:
+        return _PINNED_CONTEXT
+    return resolve_docker_context(None)
+
+
+def docker_subprocess_env():
+    """Return the environment for one Docker CLI call.
+
+    The pinned context is set. ``DOCKER_HOST`` is removed so it cannot
+    point that call at a different engine.
+    """
+
+    env = os.environ.copy()
+    env.pop("DOCKER_HOST", None)
+    env["DOCKER_CONTEXT"] = docker_context()
+    return env
+
+
 def _docker_invoke(args, timeout):
     binary = shutil.which("docker")
     if binary is None or not isinstance(args, list | tuple):
@@ -269,6 +335,7 @@ def _docker_invoke(args, timeout):
             capture_output=True,
             timeout=timeout,
             check=False,
+            env=docker_subprocess_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError("docker timed out") from exc

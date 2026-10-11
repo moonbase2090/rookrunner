@@ -23,7 +23,11 @@ threat model. A webhook receiver and GitHub runner registration are
 not part of this program.
 
 The Docker socket is not mounted into a job unless the worker is
-started with `--docker-socket`.
+started with `--docker-socket`. Every engine call uses the Docker
+context named `default` unless `worker --docker-context` or
+`ROOKRUNNER_DOCKER_CONTEXT` names one. An inherited `DOCKER_CONTEXT`
+or `DOCKER_HOST` does not select the engine. The scheduler
+thread uses that same context.
 
 A job container and a service container are created with a memory
 limit of 4g, no swap beyond that limit, a process limit of 1024, and

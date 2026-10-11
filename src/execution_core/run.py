@@ -66,7 +66,7 @@ requested, and it does not receive those flags. The default job
 cannot become root. The opt-in omits no-new-privileges and keeps only
 `SETUID`, `SETGID`, and `AUDIT_WRITE`. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
-mount gives the job the engine socket this process already uses, at
+mount gives the job the socket of the pinned Docker context, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
 It is added to the socket's group and to group 0 so it can open a mode
 0660 socket, including one the engine presents as owned by root. The job
@@ -283,6 +283,7 @@ from .plan import (
 )
 from .upload import NO_FILES_LINE, SARIF_NAME, UploadBook, UploadError, select_files, select_sarif
 from .protocol import canonical
+from .socket_lock import docker_subprocess_env
 from .verify import VerifyError, verify_snapshot
 
 # https://docs.github.com/en/actions/reference/workflow-cancellation-reference
@@ -543,6 +544,7 @@ def _invoke(docker, args, timeout):
             capture_output=True,
             timeout=timeout,
             check=False,
+            env=docker_subprocess_env(),
         )
     except FileNotFoundError as exc:
         _setup("Docker is missing", exc)
@@ -1201,11 +1203,8 @@ def _prepare(snapshot_dir, snapshot_digest, workspace, plan, image, event):
 
 
 def _discover_socket(docker):
-    """Return the unix socket for the engine `docker` already uses."""
+    """Return the unix socket for the pinned Docker context."""
 
-    host = os.environ.get("DOCKER_HOST") or ""
-    if host.startswith("unix://"):
-        return host.removeprefix("unix://")
     try:
         code, stdout, _stderr = _invoke(
             docker,

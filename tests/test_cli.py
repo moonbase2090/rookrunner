@@ -166,6 +166,19 @@ class CliUsageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Worker(".", ".", network="host")
 
+    def test_a_docker_context_name_is_one_token(self):
+        result = run_cli(
+            "unused-state",
+            "worker",
+            "--repository",
+            "unused-repo",
+            "--docker-context",
+            "bad name",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("must name one context", result.stderr)
+        self.assertNotIn("unrecognized arguments", result.stderr)
+
     def test_worker_docker_socket_is_off_unless_requested(self):
         result = run_cli("unused-state", "worker", "--repository", "unused-repo", "--docker-socket")
         self.assertEqual(result.returncode, 1, result.stderr)
