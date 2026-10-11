@@ -75,7 +75,8 @@ A backslash before a newline is not part of that name.
 `$'eval'`, `$"eval"`, and a command substitution used as the command
 name are refused when that command contains an expression.
 An unquoted `*`, `?`, or `[` in that command name is refused the same
-way.
+way. The `[` command stays accepted. An unquoted `{` in that command
+name is refused the same way.
 
 ## Try the development contract
 

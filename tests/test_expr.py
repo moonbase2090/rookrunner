@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from execution_core.expr import (
     ExprError,
     check_job_env,
@@ -25,6 +27,21 @@ from execution_core.expr import (
 )
 from execution_core.run import _render_run
 from execution_core import expr
+
+
+def _execute(script, cwd=None):
+    completed = []
+    for program in ("bash", "sh"):
+        completed.append(
+            subprocess.run(
+                [program, "-c", script],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=cwd,
+            )
+        )
+    return completed
 
 
 VALUES = {
@@ -281,27 +298,27 @@ class RunQuotingTests(unittest.TestCase):
     def test_an_executed_run_value_stays_data(self):
         payload = "$(printf INJECTED >&2)"
         values = {"env": {"MSG": payload}}
-        rendered = quote_run_expressions("printf '%s\\n' ${{ env.MSG }}", values, "bash")
-        self.assertEqual(rendered, "printf '%s\\n' '" + payload + "'")
-        completed = subprocess.run(
-            ["bash", "-c", rendered],
-            capture_output=True,
-            text=True,
-            check=False,
+        scripts = (
+            ("printf '%s\\n' ${{ env.MSG }}", "printf '%s\\n' '" + payload + "'"),
+            (
+                "printf '%s\\n' \"${{ env.MSG }}\"",
+                "printf '%s\\n' \"\\$(printf INJECTED >&2)\"",
+            ),
         )
-        self.assertEqual(completed.returncode, 0)
-        self.assertEqual(completed.stdout, payload + "\n")
-        self.assertNotIn("INJECTED", completed.stderr)
-        quoted = quote_run_expressions("printf '%s\\n' \"${{ env.MSG }}\"", values, "bash")
-        completed = subprocess.run(
-            ["bash", "-c", quoted],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 0)
-        self.assertEqual(completed.stdout, payload + "\n")
-        self.assertNotIn("INJECTED", completed.stderr)
+        for source, expected in scripts:
+            for shell in ("bash", "sh"):
+                with self.subTest(shell=shell, source=source):
+                    rendered = quote_run_expressions(source, values, shell)
+                    self.assertEqual(rendered, expected)
+                    completed = subprocess.run(
+                        [shell, "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertEqual(completed.stdout, payload + "\n")
+                    self.assertNotIn("INJECTED", completed.stderr)
 
     def test_bash_c_is_refused_before_the_child_runs(self):
         source = "bash -c \"printf 'child ran\\n' ${{ env.MSG }}\""
@@ -350,14 +367,9 @@ class RunQuotingTests(unittest.TestCase):
                 except ExprError as exc:
                     self.assertEqual(str(exc), "run is not accepted")
                 if rendered is not None:
-                    completed = subprocess.run(
-                        ["bash", "-c", rendered],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertNotIn("INJECTED", completed.stderr)
-                    self.assertNotIn("INJECTED", completed.stdout)
+                    for completed in _execute(rendered):
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
                     self.fail("escaped reparsed command was rendered")
                 with self.assertRaises(ExprError) as raised:
                     check_step_run(source, "bash")
@@ -384,14 +396,9 @@ class RunQuotingTests(unittest.TestCase):
                 except ExprError as exc:
                     self.assertEqual(str(exc), "run is not accepted")
                 if rendered is not None:
-                    completed = subprocess.run(
-                        ["bash", "-c", rendered],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertNotIn("INJECTED", completed.stderr)
-                    self.assertNotIn("INJECTED", completed.stdout)
+                    for completed in _execute(rendered):
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
                     self.fail("continued reparsed command was rendered")
                 with self.assertRaises(ExprError) as raised:
                     check_step_run(source, "bash")
@@ -416,14 +423,9 @@ class RunQuotingTests(unittest.TestCase):
                 except ExprError as exc:
                     self.assertEqual(str(exc), "run is not accepted")
                 if rendered is not None:
-                    completed = subprocess.run(
-                        ["bash", "-c", rendered],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertNotIn("INJECTED", completed.stderr)
-                    self.assertNotIn("INJECTED", completed.stdout)
+                    for completed in _execute(rendered):
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
                     self.fail("expanded command name was rendered")
                 with self.assertRaises(ExprError) as raised:
                     check_step_run(source, "bash")
@@ -459,15 +461,9 @@ class RunQuotingTests(unittest.TestCase):
                     except ExprError as exc:
                         self.assertEqual(str(exc), "run is not accepted")
                     if rendered is not None:
-                        completed = subprocess.run(
-                            ["bash", "-c", rendered],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                            cwd=directory,
-                        )
-                        self.assertNotIn("INJECTED", completed.stderr)
-                        self.assertNotIn("INJECTED", completed.stdout)
+                        for completed in _execute(rendered, directory):
+                            self.assertNotIn("INJECTED", completed.stderr)
+                            self.assertNotIn("INJECTED", completed.stdout)
                         self.fail("glob command name was rendered")
                     with self.assertRaises(ExprError) as raised:
                         check_step_run(source, "bash")
@@ -503,20 +499,22 @@ class RunQuotingTests(unittest.TestCase):
     def test_a_grouped_value_stays_data_when_executed(self):
         payload = "$(printf INJECTED >&2)"
         values = {"env": {"MSG": payload}}
-        rendered = quote_run_expressions(
-            "{ printf '%s\\n' \"${{ env.MSG }}\"; }",
-            values,
-            "bash",
-        )
-        completed = subprocess.run(
-            ["bash", "-c", rendered],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 0)
-        self.assertEqual(completed.stdout, payload + "\n")
-        self.assertNotIn("INJECTED", completed.stderr)
+        for shell in ("bash", "sh"):
+            with self.subTest(shell=shell):
+                rendered = quote_run_expressions(
+                    "{ printf '%s\\n' \"${{ env.MSG }}\"; }",
+                    values,
+                    shell,
+                )
+                completed = subprocess.run(
+                    [shell, "-c", rendered],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(completed.stdout, payload + "\n")
+                self.assertNotIn("INJECTED", completed.stderr)
 
     def test_eval_after_a_compound_command_is_not_executed(self):
         payload = "$(printf INJECTED >&2)"
@@ -538,15 +536,194 @@ class RunQuotingTests(unittest.TestCase):
                 except ExprError as exc:
                     self.assertEqual(str(exc), "run is not accepted")
                 if rendered is not None:
-                    completed = subprocess.run(
-                        ["bash", "-c", rendered],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertNotIn("INJECTED", completed.stderr)
-                    self.assertNotIn("INJECTED", completed.stdout)
+                    for completed in _execute(rendered):
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
                     self.fail("reparsed command was rendered")
                 with self.assertRaises(ExprError) as raised:
                     check_step_run(source, "bash")
                 self.assertEqual(str(raised.exception), "run is not accepted")
+
+    def test_a_test_command_and_a_script_file_stay_quoted(self):
+        accepted = (
+            '[ -n "${{ github.event_name }}" ]',
+            'if [ "${{ github.event_name }}" = "pull_request" ]; then echo pr; fi',
+            'test "${{ github.event_name }}" = "pull_request"',
+            'sh scripts/stamp-version.sh "${{ steps.latest.outputs.tag }}"',
+            'bash scripts/stamp-version.sh "${{ steps.latest.outputs.tag }}"',
+            './scripts/stamp-version.sh "${{ steps.latest.outputs.tag }}"',
+            'if [ "${{ github.event_name }}" = "pull_request" ]; then\n'
+            '  base_sha="${{ github.event.pull_request.base.sha }}"\n'
+            "fi\n",
+        )
+        for source in accepted:
+            for shell in ("bash", "sh", None):
+                with self.subTest(source=source, shell=shell):
+                    check_step_run(source, shell)
+        self.assertEqual(
+            quote_run_expressions(
+                '[ -n "${{ env.NAME }}" ]',
+                {"env": {"NAME": "pull_request"}},
+                "bash",
+            ),
+            '[ -n "pull_request" ]',
+        )
+        self.assertEqual(
+            quote_run_expressions(
+                'sh scripts/stamp-version.sh "${{ env.TAG }}"',
+                {"env": {"TAG": "; id"}},
+                "sh",
+            ),
+            'sh scripts/stamp-version.sh "; id"',
+        )
+        payload = "$(printf INJECTED >&2)"
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "stamp.sh"
+            script.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\"\n")
+            script.chmod(0o755)
+            for shell in ("sh", "bash"):
+                with self.subTest(shell=shell):
+                    rendered = quote_run_expressions(
+                        shell + ' ./stamp.sh "${{ env.MSG }}"',
+                        {"env": {"MSG": payload}},
+                        shell,
+                    )
+                    self.assertEqual(
+                        rendered,
+                        shell + ' ./stamp.sh "\\$(printf INJECTED >&2)"',
+                    )
+                    completed = subprocess.run(
+                        [shell, "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        cwd=directory,
+                    )
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertEqual(completed.stdout, payload + "\n")
+                    self.assertNotIn("INJECTED", completed.stderr)
+        for shell in ("bash", "sh"):
+            rendered = quote_run_expressions(
+                '[ "${{ env.MSG }}" = "pull_request" ]',
+                {"env": {"MSG": "pull_request"}},
+                shell,
+            )
+            self.assertEqual(rendered, '[ "pull_request" = "pull_request" ]')
+            completed = subprocess.run(
+                [shell, "-c", rendered],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, "")
+            self.assertEqual(completed.stderr, "")
+
+    def test_a_nested_substitution_keeps_the_value(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            "printf '%s\\n' \"$(printf '%s' ${{ env.MSG }})\"",
+            "printf '%s\\n' \"`printf '%s' ${{ env.MSG }}`\"",
+            "printf '%s\\n' \"$(printf '%s' \"${{ env.MSG }}\")\"",
+            "printf '%s\\n' \"$(printf '%s' '${{ env.MSG }}')\"",
+        )
+        for source in scripts:
+            for shell in ("bash", "sh"):
+                with self.subTest(shell=shell, source=source):
+                    rendered = quote_run_expressions(source, values, shell)
+                    completed = subprocess.run(
+                        [shell, "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertEqual(completed.stdout, payload + "\n")
+                    self.assertNotIn("INJECTED", completed.stderr)
+
+    def test_a_multiline_value_stays_data(self):
+        payload = "line1\n$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            "printf '%s' ${{ env.MSG }}",
+            "printf '%s' \"${{ env.MSG }}\"",
+            "printf '%s' '${{ env.MSG }}'",
+        )
+        for source in scripts:
+            for shell in ("bash", "sh"):
+                with self.subTest(shell=shell, source=source):
+                    rendered = quote_run_expressions(source, values, shell)
+                    completed = subprocess.run(
+                        [shell, "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertEqual(completed.stdout, payload)
+                    self.assertNotIn("INJECTED", completed.stderr)
+
+    def test_a_brace_command_name_is_not_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            '{eval,echo} "printf child\\n ${{ env.MSG }}"',
+            "{echo,eval} ${{ env.MSG }}",
+            'e{val,cho} "printf child\\n ${{ env.MSG }}"',
+        )
+        for source in scripts:
+            with self.subTest(source=source):
+                rendered = None
+                try:
+                    rendered = quote_run_expressions(source, values, "bash")
+                except ExprError as exc:
+                    self.assertEqual(str(exc), "run is not accepted")
+                if rendered is not None:
+                    for completed in _execute(rendered):
+                        self.assertNotIn("INJECTED", completed.stderr)
+                        self.assertNotIn("INJECTED", completed.stdout)
+                    self.fail("brace command name was rendered")
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+        self.assertEqual(
+            quote_run_expressions("echo {a,b} ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "echo {a,b} '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions("'{eval,echo}' ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "'{eval,echo}' '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions("\\{eval,echo} ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "\\{eval,echo} '; id'",
+        )
+
+    def test_the_scorecard_workflow_run_steps_stay_accepted(self):
+        path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "scorecard.yml"
+        document = yaml.safe_load(path.read_text())
+        runs = [
+            step["run"]
+            for job in document["jobs"].values()
+            for step in job.get("steps") or ()
+            if isinstance(step.get("run"), str)
+        ]
+        self.assertGreaterEqual(len(runs), 3)
+        values = {
+            "github": {
+                "event_name": "pull_request",
+                "event": {"pull_request": {"base": {"sha": "abc123"}}},
+            }
+        }
+        checked = 0
+        for source in runs:
+            check_step_run(source, "bash")
+            if "github.event_name" not in source:
+                continue
+            rendered = quote_run_expressions(source, values, "bash")
+            self.assertNotIn("${{", rendered)
+            self.assertIn('[ "pull_request" = "pull_request" ]', rendered)
+            self.assertIn('base_sha="abc123"', rendered)
+            checked += 1
+        self.assertEqual(checked, 1)

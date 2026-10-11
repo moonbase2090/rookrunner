@@ -1356,12 +1356,36 @@ def _command_reparses(name, spans, source, sites):
     for begin, stop in spans[1:]:
         if any(start <= begin and stop <= end for start, end, _body, _context in sites):
             continue
-        flag = _shell_word(source[begin:stop])
+        flag = _shell_word(_mask_sites(source, begin, stop, sites))
         if flag is None:
             return True
         if len(flag) >= 2 and flag[0] == "-" and flag[1] != "-" and "c" in flag[1:]:
             return True
     return False
+
+
+def _mask_sites(source, begin, stop, sites):
+    """Return one argument with each ``${{ }}`` site replaced by ``x``.
+
+    The surrounding quotes stay, so a quoted expression is a fixed word.
+    A real ``$(...)`` or backtick in that word is unchanged.
+    """
+
+    chars = []
+    index = begin
+    while index < stop:
+        jump = None
+        for start, end, _body, _context in sites:
+            if start <= index < end:
+                jump = min(end, stop)
+                break
+        if jump is None:
+            chars.append(source[index])
+            index += 1
+            continue
+        chars.append("x")
+        index = jump
+    return "".join(chars)
 
 
 def _shell_word(text):
@@ -1371,12 +1395,16 @@ def _shell_word(text):
     removed entirely. ``$'...'`` is decoded. ``$"..."``, ``$(...)``,
     ``${...}``, an unquoted ``$`` or backtick, and an unquoted ``*``,
     ``?``, or ``[`` are not a fixed word, so this returns ``None``.
-    Inside double quotes, a backslash is removed only before ``$``, a
-    backtick, ``"``, ``\\``, or a newline. Single quotes keep the
-    backslash. A quoted word is not a keyword.
+    A word that is only ``[`` or ``[[`` stays that word. An unquoted
+    ``{`` in any longer word is not a fixed word. ``{`` alone stays
+    ``{``. Inside double quotes, a backslash is removed only before
+    ``$``, a backtick, ``"``, ``\\``, or a newline. Single quotes keep
+    the backslash. A quoted word is not a keyword.
     """
 
     chars = []
+    saw_bracket = False
+    saw_brace = False
     index = 0
     limit = len(text)
     while index < limit:
@@ -1428,11 +1456,20 @@ def _shell_word(text):
             chars.append(text[index + 1])
             index += 2
             continue
-        if char in "*?[":
+        if char in "*?":
             return None
+        if char == "[":
+            saw_bracket = True
+        elif char == "{":
+            saw_brace = True
         chars.append(char)
         index += 1
-    return "".join(chars)
+    word = "".join(chars)
+    if saw_bracket and word not in {"[", "[["}:
+        return None
+    if saw_brace and word != "{":
+        return None
+    return word
 
 
 _ANSI_SIMPLE = {
