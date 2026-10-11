@@ -10,8 +10,8 @@ This file does not reconstruct earlier milestones.
 - Release text is checked before publish. The check rejects private
   infrastructure, hostnames, personal paths, and internal tooling in
   the changelog, the release notes, the docs, the title, the tag
-  message, and the built artifacts. Example domains and noreply
-  addresses are allowed.
+  message, and the built artifacts. Example domains are allowed, as
+  is a noreply address at github.com.
 - The worker unit keeps the state directory and the clone writable
   and mounts the rest of the filesystem read-only. It drops
   capabilities and limits address families to Unix sockets and IP.

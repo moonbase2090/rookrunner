@@ -93,6 +93,12 @@ class ReleaseTextTests(unittest.TestCase):
         named = self.run_check()
         self.assert_hidden(named, other_noreply, "docs/guide.md:1")
 
+    def test_a_noreply_address_at_a_private_domain_is_rejected(self):
+        secret = "noreply@internal.examplecorp.com"
+        (self.root / "docs" / "guide.md").write_text(secret + "\n", encoding="utf-8")
+        result = self.run_check()
+        self.assert_hidden(result, secret, "docs/guide.md:1")
+
     def test_the_current_release_text_passes_without_an_extra_list(self):
         env = os.environ.copy()
         env["HOME"] = str(self.home)
@@ -193,7 +199,7 @@ class ReleaseTextTests(unittest.TestCase):
             releasing,
         )
         self.assertIn(
-            "Example domains and noreply addresses are allowed.",
+            "A noreply address is allowed only at github.com.",
             releasing,
         )
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

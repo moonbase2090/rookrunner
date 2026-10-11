@@ -111,12 +111,12 @@ def email_allowed(address):
     if address == allow:
         return True
     local, _, domain = address.rpartition("@")
-    if local.lower() == "noreply":
-        return True
     domain = domain.lower().rstrip(".")
     if domain.endswith(".invalid"):
         return True
-    return any(domain == suffix or domain.endswith("." + suffix) for suffix in example_domains)
+    if any(domain == suffix or domain.endswith("." + suffix) for suffix in example_domains):
+        return True
+    return local.lower() == "noreply" and domain == "github.com"
 
 
 def consider(report, text):
