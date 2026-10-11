@@ -15,6 +15,12 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("## [Unreleased]", TEXT)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
         self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
+        self.assertIn(
+            "A host that upgrades onto a tree where the job network defaults to `none`",
+            PROSE,
+        )
+        self.assertIn("Cargo and pip need it.", PROSE)
+        self.assertIn("The repository unit omits the flag.", PROSE)
         self.assertIn("Job containers use Docker network `none` by default.", PROSE)
         self.assertIn("`worker --network bridge` opts in to egress.", PROSE)
         self.assertIn("Service containers start only with that opt-in.", PROSE)

@@ -25,8 +25,10 @@ user service then stays up when the login session ends.
 ## Image
 
 The install builds the host's own x86_64 image and appends that
-digest to `ExecStart` on the host copy. The digest stays on the
-host. The unit in this repository has no digest.
+digest to `ExecStart` on the host copy. When that host's jobs need
+egress, the copy also passes `--network bridge`. Cargo and pip need
+it. The digest stays on the host. The unit in this repository has
+no digest and does not pass `--network`.
 
 ## Left out
 
