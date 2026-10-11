@@ -2139,7 +2139,8 @@ name. `$'eval'`, `$"eval"`, and a command substitution used as
 the command name are refused when that command contains an
 expression. An unquoted `*`, `?`, or `[` in that command name
 is refused the same way. The `[` command stays accepted. An unquoted
-`{` in that command name is refused the same way. One expression
+`{` in that command name is refused the same way. `builtin eval` is
+refused the same way. One expression
 that is the whole stripped string drops the surrounding whitespace.
 `null` is empty. `true` and `false` are those words. The inserted text
 is not scanned again. An unclosed expression, a nested `${{` outside a

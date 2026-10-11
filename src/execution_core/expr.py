@@ -1247,7 +1247,8 @@ def _run_expression_sites(source, shell):
 
     A script with no expression is empty. Another shell, or a context
     other than unquoted, double-quoted, or single-quoted, is refused.
-    An expression in ``eval`` or in a shell ``-c`` command is refused.
+    An expression in ``eval``, including ``builtin eval``, or in a
+    shell ``-c`` command is refused.
     """
 
     if not isinstance(source, str) or "${{" not in source:
@@ -1270,7 +1271,8 @@ def quote_run_expressions(source, values, shell):
     one single-quoted word. A value already inside double quotes escapes
     the characters that would leave those quotes. A value already inside
     single quotes escapes `'`. The inserted text is not scanned again.
-    ``eval`` and a shell ``-c`` command are refused instead of quoted.
+    ``eval``, including ``builtin eval``, and a shell ``-c`` command
+    are refused instead of quoted.
     """
 
     sites = _run_expression_sites(source, shell)
@@ -1296,7 +1298,7 @@ def quote_run_expressions(source, values, shell):
 
 
 _REPARSE_SHELLS = {"ash", "bash", "dash", "ksh", "sh", "zsh"}
-_COMMAND_PREFIXES = {"command", "env", "exec", "time"}
+_COMMAND_PREFIXES = {"builtin", "command", "env", "exec", "time"}
 _COMPOUND_WORDS = {
     "!",
     "{",
@@ -1327,6 +1329,7 @@ def _refuse_reparsed_run(source, sites):
 
     Quoting protects the shell that runs the step. ``eval`` and ``sh -c``
     parse the command text again, so an escaped value becomes syntax there.
+    ``builtin`` is skipped, so ``builtin eval`` is the same parser.
     A command name that is not a fixed word is refused the same way.
     """
 

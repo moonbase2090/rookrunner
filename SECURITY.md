@@ -54,7 +54,7 @@ A backslash before a newline is not part of that name.
 name are refused when that command contains an expression.
 An unquoted `*`, `?`, or `[` in that command name is refused the same
 way. The `[` command stays accepted. An unquoted `{` in that command
-name is refused the same way.
+name is refused the same way. `builtin eval` is refused the same way.
 
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,

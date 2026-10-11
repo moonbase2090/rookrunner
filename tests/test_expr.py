@@ -349,6 +349,58 @@ class RunQuotingTests(unittest.TestCase):
                     check_step_run(source, "bash")
                 self.assertEqual(str(raised.exception), "run is not accepted")
 
+    def test_builtin_eval_is_not_executed(self):
+        payload = "printf INJECTED >&2"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            'builtin eval "${{ env.MSG }}"',
+            "builtin eval ${{ env.MSG }}",
+            'command builtin eval "${{ env.MSG }}"',
+            'builtin command eval "${{ env.MSG }}"',
+        )
+        for source in scripts:
+            with self.subTest(source=source):
+                rendered = None
+                try:
+                    rendered = quote_run_expressions(source, values, "bash")
+                except ExprError as exc:
+                    self.assertEqual(str(exc), "run is not accepted")
+                if rendered is not None:
+                    completed = subprocess.run(
+                        ["bash", "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertIn("INJECTED", completed.stderr)
+                    self.fail("builtin eval was rendered")
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+        quoted = quote_run_expressions(
+            "builtin printf '%s\\n' \"${{ env.MSG }}\"",
+            values,
+            "bash",
+        )
+        self.assertEqual(quoted, "builtin printf '%s\\n' \"printf INJECTED >&2\"")
+        completed = subprocess.run(
+            ["bash", "-c", quoted],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, payload + "\n")
+        self.assertEqual(completed.stderr, "")
+        self.assertEqual(
+            quote_run_expressions(
+                'builtin [ -n "${{ env.NAME }}" ]',
+                {"env": {"NAME": "pull_request"}},
+                "bash",
+            ),
+            'builtin [ -n "pull_request" ]',
+        )
+
     def test_an_escaped_eval_is_not_executed(self):
         payload = "$(printf INJECTED >&2)"
         values = {"env": {"MSG": payload}}

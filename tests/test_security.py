@@ -40,6 +40,7 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("An unquoted `*`, `?`, or `[` in that command name is refused", TEXT)
         self.assertIn("The `[` command stays accepted.", TEXT)
         self.assertIn("An unquoted `{` in that command name is refused", TEXT)
+        self.assertIn("`builtin eval` is refused the same way.", TEXT)
         self.assertIn(
             "When that pull request changes a workflow file, or that diff cannot be read,",
             TEXT,

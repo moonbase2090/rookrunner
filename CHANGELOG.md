@@ -19,7 +19,8 @@ This file does not reconstruct earlier milestones.
   command name are refused when that command contains an expression.
   An unquoted `*`, `?`, or `[` in that command name is refused the
   same way. The `[` command stays accepted. An unquoted `{` in that
-  command name is refused the same way.
+  command name is refused the same way. `builtin eval` is refused the
+  same way.
 - A pull request that changes a workflow file is refused. The pass
   reads the diff from the base to the head and does not run
   `refs/pull/<number>/merge` for that pull request unless
