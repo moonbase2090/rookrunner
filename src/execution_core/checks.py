@@ -252,6 +252,12 @@ def _der_items(data):
     return items
 
 
+_PEM_BEGIN = "-----BEGIN "
+_PEM_MARK = "-----"
+_RSA_PEM_HEADER = _PEM_BEGIN + "RSA PRIVATE KEY" + _PEM_MARK
+_PKCS8_PEM_HEADER = _PEM_BEGIN + "PRIVATE KEY" + _PEM_MARK
+
+
 def _load_rsa(pem):
     try:
         text = pem.decode("ascii")
@@ -271,10 +277,7 @@ def _load_rsa(pem):
             break
         if header is not None and line.strip() != "":
             body.append(line.strip())
-    if (
-        header not in {"-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"}
-        or not ended
-    ):
+    if header not in {_RSA_PEM_HEADER, _PKCS8_PEM_HEADER} or not ended:
         raise ValueError("pem")
     try:
         der = base64.b64decode("".join(body), validate=True)

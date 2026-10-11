@@ -13,6 +13,8 @@ class ChangelogTests(unittest.TestCase):
     def test_format_and_unreleased_section(self):
         self.assertIn("The format is Keep a Changelog.", TEXT)
         self.assertIn("## [Unreleased]", TEXT)
+        self.assertIn("The source distribution omits `tests` and `scripts`.", PROSE)
+        self.assertIn("without a header line in `checks.py`.", PROSE)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
         self.assertIn(
             "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
