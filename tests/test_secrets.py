@@ -77,8 +77,7 @@ class SecretFileTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.previous = {
-            name: os.environ.get(name)
-            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
         }
         os.environ.pop("XDG_CONFIG_HOME", None)
         os.environ.pop("ROOKRUNNER_KEY_DIR", None)
@@ -497,8 +496,7 @@ class SecretBindTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.previous = {
-            name: os.environ.get(name)
-            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
         }
         os.environ.pop("XDG_CONFIG_HOME", None)
         os.environ.pop("ROOKRUNNER_KEY_DIR", None)

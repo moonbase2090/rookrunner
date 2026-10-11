@@ -970,8 +970,10 @@ class PollTests(unittest.TestCase):
 
         token = "minted-list-token"
         revoked = []
+        received = []
 
-        def mint(*_args):
+        def mint(*_args, key_dir=None):
+            received.append(key_dir)
             return token
 
         def revoke(_api_base, value):
@@ -987,8 +989,10 @@ class PollTests(unittest.TestCase):
             app_key="unused-key-path",
             api_base=self.base,
             state=self.state,
+            key_dir="/run/keys",
         )
         result = _run_poll(args, self.caller, mint, revoke)
+        self.assertEqual(received, ["/run/keys"])
         gets = [item for item in self.server.requests if item["method"] == "GET"]
         self.assertGreater(len(gets), 0)
         self.assertTrue(all(item["authorization"] == "Bearer " + token for item in gets))

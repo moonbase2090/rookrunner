@@ -19,9 +19,7 @@ import subprocess
 
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?")
-_APP_KEY_MESSAGE = (
-    "worker --app-key accepts only private-key.pem in the configured key directory"
-)
+_APP_KEY_MESSAGE = "worker --app-key accepts only private-key.pem in the configured key directory"
 # The command prints nothing. Exit 42 means the mount is a usable directory.
 _PROBE_SCRIPT = (
     "if [ -d /rr-secrets ] && [ -r /rr-secrets ] && [ -x /rr-secrets ]; "

@@ -159,8 +159,7 @@ class _Home(unittest.TestCase):
         self.state.mkdir()
         self.key = self._install()
         self.previous = {
-            name: os.environ.get(name)
-            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
         }
         os.environ["HOME"] = str(self.home)
         os.environ.pop("XDG_CONFIG_HOME", None)
@@ -639,8 +638,7 @@ class DockerJobTokenTests(unittest.TestCase):
         self.home.mkdir()
         self._keep_docker_config()
         self.previous = {
-            name: os.environ.get(name)
-            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
         }
         os.environ["HOME"] = str(self.home)
         os.environ.pop("XDG_CONFIG_HOME", None)

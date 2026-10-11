@@ -3669,8 +3669,7 @@ jobs:
 
     def _bind_secret_env(self, home):
         previous = {
-            name: os.environ.get(name)
-            for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
         }
         os.environ["HOME"] = str(home)
         os.environ.pop("XDG_CONFIG_HOME", None)
