@@ -15,6 +15,18 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("## [Unreleased]", TEXT)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
         self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
+        self.assertIn("A bash or sh `run` script quotes each `${{ }}` value.", PROSE)
+        self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
+        self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
+        self.assertIn("A backslash in that command name does not hide it either.", PROSE)
+        self.assertIn("A backslash before a newline is not part of that name.", PROSE)
+        self.assertIn(
+            "`$'eval'`, `$\"eval\"`, and a command substitution used as the command", PROSE
+        )
+        self.assertIn("An unquoted `*`, `?`, or `[` in that command name is refused", PROSE)
+        self.assertIn("The `[` command stays accepted.", PROSE)
+        self.assertIn("An unquoted `{` in that command name is refused", PROSE)
+        self.assertIn("`builtin eval` is refused the same way.", PROSE)
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):

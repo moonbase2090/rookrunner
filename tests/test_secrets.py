@@ -980,7 +980,7 @@ jobs:
             "bash",
             runtime,
         )
-        self.assertEqual(text, "echo ${RR_SECRET_API} abc123")
+        self.assertEqual(text, "echo ${RR_SECRET_API} 'abc123'")
         self.assertEqual(env["API"], 'fixture run "9f3a"')
         self.assertNotIn("fixture", text)
 

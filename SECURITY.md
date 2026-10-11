@@ -42,6 +42,20 @@ no-new-privileges on the job, keeps only `SETUID`, `SETGID`, and
 container. With `--docker-socket`, that is control of the host
 engine. A step cannot gain privileges through sudo.
 
+A bash or sh `run` script does not insert a `${{ }}` value as raw
+text. An unquoted value is single-quoted. A value already inside
+double quotes is escaped. A value already inside single quotes
+escapes `'`. Another shell, or a context the script cannot prove,
+is refused. An expression in `eval` or in a shell `-c` command is
+refused. A brace group or an `if`, `while`, or `for` body does not
+hide it. A backslash in that command name does not hide it either.
+A backslash before a newline is not part of that name.
+`$'eval'`, `$"eval"`, and a command substitution used as the command
+name are refused when that command contains an expression.
+An unquoted `*`, `?`, or `[` in that command name is refused the same
+way. The `[` command stays accepted. An unquoted `{` in that command
+name is refused the same way. `builtin eval` is refused the same way.
+
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,
 the pass refuses it unless `--allow-pr-workflow` names the pull

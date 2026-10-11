@@ -2127,7 +2127,20 @@ plan is not migrated. `.github/workflows/check.yml` is unchanged.
 
 The plan stores the source text and checks that each expression can be
 parsed. Runtime evaluates it. Mixed text keeps the surrounding
-characters and inserts the string form of each `${{ }}`. One expression
+characters and inserts the string form of each `${{ }}`. A step
+`run` for bash or sh quotes that string instead: an unquoted value is
+single-quoted, a double-quoted value is escaped, and a single-quoted
+value escapes `'`. Another shell, or a context the lexer cannot
+prove, is refused. An expression in `eval` or in a shell `-c`
+command is refused. A brace group or an `if`, `while`, or `for`
+body does not hide it. A backslash in that command name does not
+hide it either. A backslash before a newline is not part of that
+name. `$'eval'`, `$"eval"`, and a command substitution used as
+the command name are refused when that command contains an
+expression. An unquoted `*`, `?`, or `[` in that command name
+is refused the same way. The `[` command stays accepted. An unquoted
+`{` in that command name is refused the same way. `builtin eval` is
+refused the same way. One expression
 that is the whole stripped string drops the surrounding whitespace.
 `null` is empty. `true` and `false` are those words. The inserted text
 is not scanned again. An unclosed expression, a nested `${{` outside a

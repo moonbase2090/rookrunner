@@ -8,13 +8,21 @@ context-availability table for the workflow key being checked. An
 unavailable context or function is an error. A missing property of an
 available value is an empty string. `hashFiles` is not implemented.
 
-`run`, `env`, `with`, and step and job `name` accept mixed text. Each
-`${{ }}` is inserted as text. A whole-string expression drops the
+`env`, `with`, and step and job `name` accept mixed text. Each
+`${{ }}` there is inserted as text. A whole-string expression drops the
 surrounding whitespace and is stringified the same way. The inserted
 text is not scanned again. Step `env` and `with` accept an expression
 that is exactly `secrets.NAME`. Step `run` rewrites that expression to
 `${RR_SECRET_NAME}` when the shell is bash or sh and a small lexer
-proves an unquoted or double-quoted context. `secrets.GITHUB_TOKEN`
+proves an unquoted or double-quoted context. Other step `run`
+expressions for those shells are quoted. An unquoted value is wrapped
+in single quotes. A value inside double quotes escapes `"`, `$`, `\\`,
+and backticks. A value inside single quotes escapes `'`. Another
+shell, or a context the lexer cannot prove, is refused. An expression
+in `eval` or in a shell `-c` command is refused. A brace group or an
+`if`, `while`, or `for` body does not hide it. A backslash in that
+command name does not hide it either.
+`secrets.GITHUB_TOKEN`
 and `github.token` are the same alias and rewrite to
 `${RR_SECRET_GITHUB_TOKEN}`. `secrets` stays withheld
 in names, `if`, job `env`, workflow `env`, and concurrency.
@@ -1228,9 +1236,531 @@ def _shell_accepts_rewrite(shell):
 
 
 def check_step_run(source, shell):
-    """Reject a step `run` whose secrets cannot be rewritten. Does not keep the text."""
+    """Reject a step `run` whose secrets or other expressions are not safe."""
 
-    rewrite_run_secrets(source, shell)
+    rewritten, _names = rewrite_run_secrets(source, shell)
+    _run_expression_sites(rewritten, shell)
+
+
+def _run_expression_sites(source, shell):
+    """Return expression sites that a bash or sh `run` may quote.
+
+    A script with no expression is empty. Another shell, or a context
+    other than unquoted, double-quoted, or single-quoted, is refused.
+    An expression in ``eval``, including ``builtin eval``, or in a
+    shell ``-c`` command is refused.
+    """
+
+    if not isinstance(source, str) or "${{" not in source:
+        return ()
+    if not _shell_accepts_rewrite(shell):
+        raise ExprError("run is not accepted")
+    sites = _RunLexer(source).scan()
+    for _start, _end, body, context in sites:
+        if context not in {"unquoted", "double", "single"}:
+            raise ExprError("run is not accepted")
+        _check(_parse(body), STEP_TEXT_CONTEXTS, STEP_TEXT_FUNCTIONS)
+    _refuse_reparsed_run(source, sites)
+    return tuple(sites)
+
+
+def quote_run_expressions(source, values, shell):
+    """Quote each remaining ``${{ }}`` in a bash or sh `run` script.
+
+    The returned text is what the shell receives. An unquoted value is
+    one single-quoted word. A value already inside double quotes escapes
+    the characters that would leave those quotes. A value already inside
+    single quotes escapes `'`. The inserted text is not scanned again.
+    ``eval``, including ``builtin eval``, and a shell ``-c`` command
+    are refused instead of quoted.
+    """
+
+    sites = _run_expression_sites(source, shell)
+    if not sites:
+        return source
+    parts = []
+    cursor = 0
+    for start, end, body, context in sites:
+        if start < cursor:
+            raise ExprError("run is not accepted")
+        inserted = _insert_text(evaluate(body, values))
+        if context == "unquoted":
+            replacement = "'" + inserted.replace("'", "'\\''") + "'"
+        elif context == "double":
+            replacement = "".join("\\" + char if char in '\\"$`' else char for char in inserted)
+        else:
+            replacement = inserted.replace("'", "'\\''")
+        parts.append(source[cursor:start])
+        parts.append(replacement)
+        cursor = end
+    parts.append(source[cursor:])
+    return "".join(parts)
+
+
+_REPARSE_SHELLS = {"ash", "bash", "dash", "ksh", "sh", "zsh"}
+_COMMAND_PREFIXES = {"builtin", "command", "env", "exec", "time"}
+_COMPOUND_WORDS = {
+    "!",
+    "{",
+    "}",
+    "[[",
+    "]]",
+    "case",
+    "coproc",
+    "do",
+    "done",
+    "elif",
+    "else",
+    "esac",
+    "fi",
+    "for",
+    "function",
+    "if",
+    "in",
+    "select",
+    "then",
+    "until",
+    "while",
+}
+
+
+def _refuse_reparsed_run(source, sites):
+    """Refuse an expression that ``eval`` or a shell ``-c`` script would parse.
+
+    Quoting protects the shell that runs the step. ``eval`` and ``sh -c``
+    parse the command text again, so an escaped value becomes syntax there.
+    ``builtin`` is skipped, so ``builtin eval`` is the same parser.
+    A command name that is not a fixed word is refused the same way.
+    """
+
+    if not sites:
+        return
+    for name, spans in _reparse_commands(source):
+        if _shell_word(name) is not None and not _command_reparses(name, spans, source, sites):
+            continue
+        for start, end, _body, _context in sites:
+            if any(start < stop and end > begin for begin, stop in spans):
+                raise ExprError("run is not accepted")
+
+
+def _command_reparses(name, spans, source, sites):
+    """Return whether this command parses an argument as shell code.
+
+    ``eval`` does. A shell does when a short option contains ``c``, or
+    when a word is not a fixed word. A word inside a ``${{ }}`` site is
+    quoted before the shell reads it, so it is not that flag.
+    """
+
+    base = _command_base(name)
+    if base == "eval":
+        return True
+    if base not in _REPARSE_SHELLS:
+        return False
+    for begin, stop in spans[1:]:
+        if any(start <= begin and stop <= end for start, end, _body, _context in sites):
+            continue
+        flag = _shell_word(_mask_sites(source, begin, stop, sites))
+        if flag is None:
+            return True
+        if len(flag) >= 2 and flag[0] == "-" and flag[1] != "-" and "c" in flag[1:]:
+            return True
+    return False
+
+
+def _mask_sites(source, begin, stop, sites):
+    """Return one argument with each ``${{ }}`` site replaced by ``x``.
+
+    The surrounding quotes stay, so a quoted expression is a fixed word.
+    A real ``$(...)`` or backtick in that word is unchanged.
+    """
+
+    chars = []
+    index = begin
+    while index < stop:
+        jump = None
+        for start, end, _body, _context in sites:
+            if start <= index < end:
+                jump = min(end, stop)
+                break
+        if jump is None:
+            chars.append(source[index])
+            index += 1
+            continue
+        chars.append("x")
+        index = jump
+    return "".join(chars)
+
+
+def _shell_word(text):
+    """Return the word bash executes.
+
+    An unquoted backslash is removed. A backslash before a newline is
+    removed entirely. ``$'...'`` is decoded. ``$"..."``, ``$(...)``,
+    ``${...}``, an unquoted ``$`` or backtick, and an unquoted ``*``,
+    ``?``, or ``[`` are not a fixed word, so this returns ``None``.
+    A word that is only ``[`` or ``[[`` stays that word. An unquoted
+    ``{`` in any longer word is not a fixed word. ``{`` alone stays
+    ``{``. Inside double quotes, a backslash is removed only before
+    ``$``, a backtick, ``"``, ``\\``, or a newline. Single quotes keep
+    the backslash. A quoted word is not a keyword.
+    """
+
+    chars = []
+    saw_bracket = False
+    saw_brace = False
+    index = 0
+    limit = len(text)
+    while index < limit:
+        char = text[index]
+        if text.startswith("$'", index):
+            piece, index = _read_ansi_c(text, index)
+            if piece is None:
+                return None
+            chars.extend(piece)
+            continue
+        if (
+            text.startswith('$"', index)
+            or text.startswith("$(", index)
+            or text.startswith("${", index)
+            or char in "$`"
+        ):
+            return None
+        if char == "'":
+            index += 1
+            while index < limit and text[index] != "'":
+                chars.append(text[index])
+                index += 1
+            if index < limit:
+                index += 1
+            continue
+        if char == '"':
+            index += 1
+            while index < limit and text[index] != '"':
+                if text[index] == "\\" and index + 1 < limit:
+                    nxt = text[index + 1]
+                    if nxt == "\n":
+                        index += 2
+                        continue
+                    if nxt in '$`"\\':
+                        chars.append(nxt)
+                        index += 2
+                        continue
+                if text[index] in "$`":
+                    return None
+                chars.append(text[index])
+                index += 1
+            if index < limit:
+                index += 1
+            continue
+        if char == "\\" and index + 1 < limit:
+            if text[index + 1] == "\n":
+                index += 2
+                continue
+            chars.append(text[index + 1])
+            index += 2
+            continue
+        if char in "*?":
+            return None
+        if char == "[":
+            saw_bracket = True
+        elif char == "{":
+            saw_brace = True
+        chars.append(char)
+        index += 1
+    word = "".join(chars)
+    if saw_bracket and word not in {"[", "[["}:
+        return None
+    if saw_brace and word != "{":
+        return None
+    return word
+
+
+_ANSI_SIMPLE = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+
+
+def _read_ansi_c(text, index):
+    """Decode a ``$'...'`` word starting at `index`.
+
+    The result is ``(text, end)``. An unknown escape returns ``(None, end)``.
+    """
+
+    if not text.startswith("$'", index):
+        return None, index
+    index += 2
+    chars = []
+    limit = len(text)
+    while index < limit:
+        char = text[index]
+        if char == "'":
+            return "".join(chars), index + 1
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+        if index + 1 >= limit:
+            return None, index
+        nxt = text[index + 1]
+        if nxt in _ANSI_SIMPLE:
+            chars.append(_ANSI_SIMPLE[nxt])
+            index += 2
+            continue
+        if nxt == "x":
+            hex_end = index + 2
+            while (
+                hex_end < limit
+                and hex_end < index + 4
+                and text[hex_end] in "0123456789abcdefABCDEF"
+            ):
+                hex_end += 1
+            if hex_end == index + 2:
+                return None, index
+            chars.append(chr(int(text[index + 2 : hex_end], 16)))
+            index = hex_end
+            continue
+        if nxt in "01234567":
+            oct_end = index + 2
+            while oct_end < limit and oct_end < index + 4 and text[oct_end] in "01234567":
+                oct_end += 1
+            chars.append(chr(int(text[index + 1 : oct_end], 8)))
+            index = oct_end
+            continue
+        if nxt in "uU":
+            width = 4 if nxt == "u" else 8
+            digits = text[index + 2 : index + 2 + width]
+            if len(digits) != width or any(item not in "0123456789abcdefABCDEF" for item in digits):
+                return None, index
+            chars.append(chr(int(digits, 16)))
+            index += 2 + width
+            continue
+        return None, index
+    return None, index
+
+
+def _is_compound_word(text):
+    """Return whether `text` is a keyword, not the command that follows it."""
+
+    if "'" in text or '"' in text or "$" in text:
+        return False
+    word = _shell_word(text)
+    return word is not None and word in _COMPOUND_WORDS
+
+
+def _command_base(text):
+    word = _shell_word(text)
+    if word is None:
+        return ""
+    return word.rsplit("/", 1)[-1]
+
+
+def _is_assignment(text):
+    name, sep, _value = text.partition("=")
+    if sep == "" or name == "" or not name.isascii():
+        return False
+    if not (name[0].isalpha() or name[0] == "_"):
+        return False
+    return all(char.isalnum() or char == "_" for char in name)
+
+
+def _effective_command(source, words):
+    index = 0
+    while index < len(words):
+        text = source[words[index][0] : words[index][1]]
+        if _is_assignment(text):
+            index += 1
+            continue
+        base = _command_base(text)
+        if base not in _COMMAND_PREFIXES:
+            return text, words[index:]
+        index += 1
+        while index < len(words):
+            flag = source[words[index][0] : words[index][1]]
+            if _is_assignment(flag) or flag.startswith("-"):
+                index += 1
+                continue
+            break
+    return "", ()
+
+
+class _ReparseScan:
+    """Record simple commands, including commands nested in ``$( )`` and backticks.
+
+    Brace groups and ``if`` / ``while`` / ``for`` keywords are not commands.
+    The command that follows them is recorded on its own.
+    """
+
+    def __init__(self, source):
+        self.source = source
+        self.n = len(source)
+        self.i = 0
+        self.found = []
+
+    def collect(self):
+        self._sequence(None)
+        return self.found
+
+    def _sequence(self, closer):
+        words = []
+        while self.i < self.n:
+            self._skip_gap()
+            if self.i >= self.n:
+                break
+            if self._at_closer(closer):
+                self._emit(words)
+                return
+            if self.source[self.i] == "#":
+                self._skip_comment()
+                continue
+            if self._separator():
+                self._emit(words)
+                words = []
+                continue
+            if self.source[self.i] == "(":
+                self._emit(words)
+                words = []
+                self.i += 1
+                self._sequence("subshell")
+                continue
+            if self.source[self.i] == ")":
+                self._emit(words)
+                words = []
+                self.i += 1
+                continue
+            start = self.i
+            if not self._word():
+                self.i += 1
+                continue
+            word = self.source[start : self.i]
+            if _is_compound_word(word):
+                self._emit(words)
+                words = []
+                continue
+            words.append((start, self.i))
+        self._emit(words)
+
+    def _emit(self, words):
+        if not words:
+            return
+        name, spans = _effective_command(self.source, words)
+        if name:
+            self.found.append((name, spans))
+
+    def _at_closer(self, closer):
+        if closer is None or self.i >= self.n:
+            return False
+        char = self.source[self.i]
+        if closer == "backtick" and char == "`":
+            self.i += 1
+            return True
+        if closer in {"paren", "subshell"} and char == ")":
+            self.i += 1
+            return True
+        return False
+
+    def _skip_gap(self):
+        while self.i < self.n:
+            if self.source[self.i] in " \t":
+                self.i += 1
+                continue
+            if (
+                self.source[self.i] == "\\"
+                and self.i + 1 < self.n
+                and self.source[self.i + 1] == "\n"
+            ):
+                self.i += 2
+                continue
+            return
+
+    def _skip_comment(self):
+        while self.i < self.n and self.source[self.i] != "\n":
+            self.i += 1
+
+    def _separator(self):
+        char = self.source[self.i]
+        if char == "\n" or char == ";":
+            self.i += 1
+            return True
+        if char == "&":
+            self.i += 2 if self.i + 1 < self.n and self.source[self.i + 1] == "&" else 1
+            return True
+        if char == "|":
+            nxt = self.source[self.i + 1] if self.i + 1 < self.n else ""
+            self.i += 2 if nxt in "|&" else 1
+            return True
+        return False
+
+    def _word(self):
+        start = self.i
+        while self.i < self.n:
+            char = self.source[self.i]
+            if char == "\\":
+                if self.i + 1 < self.n and self.source[self.i + 1] == "\n":
+                    self.i += 2
+                    continue
+                self.i += 2 if self.i + 1 < self.n else 1
+                continue
+            if char == "'":
+                self._raw_quote("'")
+                continue
+            if char == '"':
+                self._double()
+                continue
+            if self.source.startswith("$(", self.i) and not self.source.startswith("$((", self.i):
+                self.i += 2
+                self._sequence("paren")
+                continue
+            if char == "`":
+                self.i += 1
+                self._sequence("backtick")
+                continue
+            if char in " \t\n;|&<>()":
+                break
+            self.i += 1
+        return self.i > start
+
+    def _raw_quote(self, quote):
+        self.i += 1
+        while self.i < self.n and self.source[self.i] != quote:
+            self.i += 1
+        if self.i < self.n:
+            self.i += 1
+
+    def _double(self):
+        self.i += 1
+        while self.i < self.n:
+            char = self.source[self.i]
+            if char == "\\":
+                self.i += 2 if self.i + 1 < self.n else 1
+                continue
+            if char == '"':
+                self.i += 1
+                return
+            if self.source.startswith("$(", self.i) and not self.source.startswith("$((", self.i):
+                self.i += 2
+                self._sequence("paren")
+                continue
+            if char == "`":
+                self.i += 1
+                self._sequence("backtick")
+                continue
+            self.i += 1
+
+
+def _reparse_commands(source):
+    return _ReparseScan(source).collect()
 
 
 def rewrite_run_secrets(source, shell):

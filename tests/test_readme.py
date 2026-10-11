@@ -34,6 +34,18 @@ class ReadmeTests(unittest.TestCase):
             PROSE,
         )
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn("An unquoted value is single-quoted.", PROSE)
+        self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
+        self.assertIn("A brace group or an `if`, `while`, or `for` body does not hide it.", PROSE)
+        self.assertIn("A backslash in that command name does not hide it either.", PROSE)
+        self.assertIn("A backslash before a newline is not part of that name.", PROSE)
+        self.assertIn(
+            "`$'eval'`, `$\"eval\"`, and a command substitution used as the command", PROSE
+        )
+        self.assertIn("An unquoted `*`, `?`, or `[` in that command name is refused", PROSE)
+        self.assertIn("The `[` command stays accepted.", PROSE)
+        self.assertIn("An unquoted `{` in that command name is refused", PROSE)
+        self.assertIn("`builtin eval` is refused the same way.", PROSE)
         self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,

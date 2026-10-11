@@ -249,6 +249,7 @@ from .expr import (
     exact_secret_reference,
     job_is_enabled,
     mentions_context,
+    quote_run_expressions,
     render_text,
     rewrite_run_secrets,
     step_is_enabled,
@@ -2621,7 +2622,7 @@ def _render_secret_or_expr(text, values, runtime):
 
 
 def _render_run(text, values, shell, runtime):
-    """Rewrite exact `run` secrets, then render the remaining expressions.
+    """Rewrite exact `run` secrets, then quote the remaining expressions.
 
     The env map is the file values for this step. ``GITHUB_TOKEN`` is
     included only when this job holds a token and the rewrite named that
@@ -2640,7 +2641,7 @@ def _render_run(text, values, shell, runtime):
     held = _held_job_token(runtime)
     if held is not None and "${RR_SECRET_GITHUB_TOKEN}" in rewritten:
         secret_env["GITHUB_TOKEN"] = held
-    return _render_expr(rewritten, values), secret_env
+    return quote_run_expressions(rewritten, values, shell), secret_env
 
 
 def run_job(
