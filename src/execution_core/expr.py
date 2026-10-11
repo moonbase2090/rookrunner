@@ -1327,26 +1327,38 @@ def _refuse_reparsed_run(source, sites):
 
     Quoting protects the shell that runs the step. ``eval`` and ``sh -c``
     parse the command text again, so an escaped value becomes syntax there.
+    A command name that is not a fixed word is refused the same way.
     """
 
     if not sites:
         return
     for name, spans in _reparse_commands(source):
-        if not _command_reparses(name, spans, source):
+        if _shell_word(name) is not None and not _command_reparses(name, spans, source, sites):
             continue
         for start, end, _body, _context in sites:
             if any(start < stop and end > begin for begin, stop in spans):
                 raise ExprError("run is not accepted")
 
 
-def _command_reparses(name, spans, source):
+def _command_reparses(name, spans, source, sites):
+    """Return whether this command parses an argument as shell code.
+
+    ``eval`` does. A shell does when a short option contains ``c``, or
+    when a word is not a fixed word. A word inside a ``${{ }}`` site is
+    quoted before the shell reads it, so it is not that flag.
+    """
+
     base = _command_base(name)
     if base == "eval":
         return True
     if base not in _REPARSE_SHELLS:
         return False
     for begin, stop in spans[1:]:
+        if any(start <= begin and stop <= end for start, end, _body, _context in sites):
+            continue
         flag = _shell_word(source[begin:stop])
+        if flag is None:
+            return True
         if len(flag) >= 2 and flag[0] == "-" and flag[1] != "-" and "c" in flag[1:]:
             return True
     return False
@@ -1356,9 +1368,11 @@ def _shell_word(text):
     """Return the word bash executes.
 
     An unquoted backslash is removed. A backslash before a newline is
-    removed entirely. Inside double quotes, a backslash is removed only
-    before ``$``, a backtick, ``"``, ``\\``, or a newline. Single quotes
-    keep the backslash. A quoted word is not a keyword.
+    removed entirely. ``$'...'`` is decoded. ``$"..."``, ``$(...)``,
+    ``${...}``, and an unquoted ``$`` or backtick are not a fixed word,
+    so this returns ``None``. Inside double quotes, a backslash is
+    removed only before ``$``, a backtick, ``"``, ``\\``, or a newline.
+    Single quotes keep the backslash. A quoted word is not a keyword.
     """
 
     chars = []
@@ -1366,6 +1380,19 @@ def _shell_word(text):
     limit = len(text)
     while index < limit:
         char = text[index]
+        if text.startswith("$'", index):
+            piece, index = _read_ansi_c(text, index)
+            if piece is None:
+                return None
+            chars.extend(piece)
+            continue
+        if (
+            text.startswith('$"', index)
+            or text.startswith("$(", index)
+            or text.startswith("${", index)
+            or char in "$`"
+        ):
+            return None
         if char == "'":
             index += 1
             while index < limit and text[index] != "'":
@@ -1386,6 +1413,8 @@ def _shell_word(text):
                         chars.append(nxt)
                         index += 2
                         continue
+                if text[index] in "$`":
+                    return None
                 chars.append(text[index])
                 index += 1
             if index < limit:
@@ -1403,16 +1432,95 @@ def _shell_word(text):
     return "".join(chars)
 
 
+_ANSI_SIMPLE = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+
+
+def _read_ansi_c(text, index):
+    """Decode a ``$'...'`` word starting at `index`.
+
+    The result is ``(text, end)``. An unknown escape returns ``(None, end)``.
+    """
+
+    if not text.startswith("$'", index):
+        return None, index
+    index += 2
+    chars = []
+    limit = len(text)
+    while index < limit:
+        char = text[index]
+        if char == "'":
+            return "".join(chars), index + 1
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+        if index + 1 >= limit:
+            return None, index
+        nxt = text[index + 1]
+        if nxt in _ANSI_SIMPLE:
+            chars.append(_ANSI_SIMPLE[nxt])
+            index += 2
+            continue
+        if nxt == "x":
+            hex_end = index + 2
+            while (
+                hex_end < limit
+                and hex_end < index + 4
+                and text[hex_end] in "0123456789abcdefABCDEF"
+            ):
+                hex_end += 1
+            if hex_end == index + 2:
+                return None, index
+            chars.append(chr(int(text[index + 2 : hex_end], 16)))
+            index = hex_end
+            continue
+        if nxt in "01234567":
+            oct_end = index + 2
+            while oct_end < limit and oct_end < index + 4 and text[oct_end] in "01234567":
+                oct_end += 1
+            chars.append(chr(int(text[index + 1 : oct_end], 8)))
+            index = oct_end
+            continue
+        if nxt in "uU":
+            width = 4 if nxt == "u" else 8
+            digits = text[index + 2 : index + 2 + width]
+            if len(digits) != width or any(item not in "0123456789abcdefABCDEF" for item in digits):
+                return None, index
+            chars.append(chr(int(digits, 16)))
+            index += 2 + width
+            continue
+        return None, index
+    return None, index
+
+
 def _is_compound_word(text):
     """Return whether `text` is a keyword, not the command that follows it."""
 
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+    if "'" in text or '"' in text or "$" in text:
         return False
-    return _shell_word(text) in _COMPOUND_WORDS
+    word = _shell_word(text)
+    return word is not None and word in _COMPOUND_WORDS
 
 
 def _command_base(text):
-    return _shell_word(text).rsplit("/", 1)[-1]
+    word = _shell_word(text)
+    if word is None:
+        return ""
+    return word.rsplit("/", 1)[-1]
 
 
 def _is_assignment(text):

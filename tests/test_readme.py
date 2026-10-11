@@ -40,6 +40,9 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn("A backslash in that command name does not hide it either.", PROSE)
         self.assertIn("A backslash before a newline is not part of that name.", PROSE)
         self.assertIn(
+            "`$'eval'`, `$\"eval\"`, and a command substitution used as the command", PROSE
+        )
+        self.assertIn(
             "The fetched merge commit is checked out only when its first parent is the listed base",
             PROSE,
         )

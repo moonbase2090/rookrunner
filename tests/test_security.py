@@ -35,6 +35,9 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("A backslash in that command name does not hide it either.", TEXT)
         self.assertIn("A backslash before a newline is not part of that name.", TEXT)
         self.assertIn(
+            "`$'eval'`, `$\"eval\"`, and a command substitution used as the command", TEXT
+        )
+        self.assertIn(
             "When that pull request changes a workflow file, or that diff cannot be read,",
             TEXT,
         )

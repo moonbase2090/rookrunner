@@ -396,11 +396,59 @@ class RunQuotingTests(unittest.TestCase):
                     check_step_run(source, "bash")
                 self.assertEqual(str(raised.exception), "run is not accepted")
 
+    def test_an_expanded_command_name_is_not_executed(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        scripts = (
+            "$'eval' \"printf child\\n ${{ env.MSG }}\"",
+            '$"eval" "printf child\\n ${{ env.MSG }}"',
+            '$(printf eval) "printf child\\n ${{ env.MSG }}"',
+            "$'ev\\x61l' \"printf child\\n ${{ env.MSG }}\"",
+            "$'bash' -c \"printf child\\n ${{ env.MSG }}\"",
+            'bash $(printf -- -c) "printf child\\n ${{ env.MSG }}"',
+        )
+        for source in scripts:
+            with self.subTest(source=source):
+                rendered = None
+                try:
+                    rendered = quote_run_expressions(source, values, "bash")
+                except ExprError as exc:
+                    self.assertEqual(str(exc), "run is not accepted")
+                if rendered is not None:
+                    completed = subprocess.run(
+                        ["bash", "-c", rendered],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotIn("INJECTED", completed.stderr)
+                    self.assertNotIn("INJECTED", completed.stdout)
+                    self.fail("expanded command name was rendered")
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+        self.assertEqual(
+            quote_run_expressions("$'echo' ${{ env.MSG }}", {"env": {"MSG": "; id"}}, "bash"),
+            "$'echo' '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions(
+                "echo $(printf eval) ${{ env.MSG }}",
+                {"env": {"MSG": "; id"}},
+                "bash",
+            ),
+            "echo $(printf eval) '; id'",
+        )
+
     def test_a_shell_command_without_c_stays_quoted(self):
         values = {"env": {"MSG": "; id"}}
         self.assertEqual(
             quote_run_expressions("bash script.sh ${{ env.MSG }}", values, "bash"),
             "bash script.sh '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions("bash ${{ env.MSG }}", values, "bash"),
+            "bash '; id'",
         )
         self.assertEqual(
             quote_run_expressions("echo ${{ env.MSG }}\nbash -c 'printf ok'\n", values, "bash"),
