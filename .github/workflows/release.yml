@@ -88,6 +88,17 @@ jobs:
             > SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 2
 
+      - name: Check release text
+        env:
+          RELEASE_DENYLIST: ${{ secrets.RELEASE_DENYLIST }}
+        run: |
+          set -eu
+          tag_message=$(git for-each-ref --format='%(contents)' "refs/tags/${GITHUB_REF_NAME}")
+          sh scripts/check-release-text.sh \
+            --title "$RELEASE_TITLE" \
+            --tag-message "$tag_message" \
+            --artifacts dist
+
       - name: Publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}

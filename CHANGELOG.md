@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Release text is checked before publish. The check rejects private
+  infrastructure, hostnames, personal paths, and internal tooling in
+  the changelog, the release notes, the docs, the title, the tag
+  message, and the built artifacts.
 - The worker unit keeps the state directory and the clone writable
   and mounts the rest of the filesystem read-only. It drops
   capabilities and limits address families to Unix sockets and IP.
