@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The App private key directory is configurable. `--key-dir` overrides
+  `ROOKRUNNER_KEY_DIR`. The default is `$XDG_CONFIG_HOME/rookrunner/keys`,
+  or `~/.config/rookrunner/keys` when that variable is unset. The
+  directory stays mode 0700 and `private-key.pem` stays mode 0600.
+  Migration: set `ROOKRUNNER_KEY_DIR` or move keys. The file store is
+  `~/.config/rookrunner/files/<owner>/<repo>/`, or the same path under
+  `$XDG_CONFIG_HOME`.
 - Release text is checked before publish. The check rejects private
   infrastructure, hostnames, personal paths, and internal tooling in
   the changelog, the release notes, the docs, the title, the tag

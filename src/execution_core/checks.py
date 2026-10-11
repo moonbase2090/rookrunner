@@ -28,6 +28,7 @@ from datetime import datetime, UTC
 
 from .commands import mask_prefixes
 from .protocol import canonical, is_integer, strict_json
+from .socket_lock import resolve_key_dir
 from .status import (
     STATUS_TIMEOUT_SECONDS,
     StatusError,
@@ -382,13 +383,15 @@ def list_token_body(repository):
     return {"repositories": [full.split("/", 1)[1]]}
 
 
-def mint_list_token(app_key, state_dir, repository_root, repository, api_base, clock=None):
+def mint_list_token(
+    app_key, state_dir, repository_root, repository, api_base, clock=None, key_dir=None
+):
     """Mint one installation token for poll GETs. The caller revokes it."""
 
     if clock is None:
         clock = datetime.now(UTC)
     body = list_token_body(repository)
-    material = load_app_key(app_key, state_dir, repository_root)
+    material = load_app_key(app_key, state_dir, repository_root, key_dir)
     installation_id = material.installation_id
     jwt = None
     try:
@@ -538,11 +541,14 @@ def _post_check(
     return value
 
 
-def load_app_key(path, state_dir, repository):
+def load_app_key(path, state_dir, repository, key_dir=None):
     """Read the key, client id, and installation id. Refuse before any HTTP."""
 
     candidate = Path(path).expanduser()
-    allowed = Path.home() / "Secrets" / "github-app" / "rookrunner-app"
+    try:
+        allowed = resolve_key_dir(key_dir)
+    except ValueError:
+        _refuse()
     if not candidate.is_absolute() or candidate.name != "private-key.pem":
         _refuse()
     if _symlink_component(candidate) or _symlink_component(allowed):
@@ -613,13 +619,14 @@ def post_check_flow(
     state_dir,
     repository_root,
     clock=None,
+    key_dir=None,
 ):
     """Mint a token, post the check, then the commit status. Discard the token."""
 
     if clock is None:
         clock = datetime.now(UTC)
     posted = AppPost()
-    material = load_app_key(app_key, state_dir, repository_root)
+    material = load_app_key(app_key, state_dir, repository_root, key_dir)
     jwt = None
     token = None
     try:

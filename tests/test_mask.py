@@ -4,7 +4,7 @@
 
 A fixture value is masked in stdout, across a split read, in an
 annotation, and in base64, JSON, and percent-encoded forms. Tests
-point at nothing under ~/Secrets and do not contact api.github.com.
+point at nothing under the configured key directory and do not contact api.github.com.
 """
 
 import base64

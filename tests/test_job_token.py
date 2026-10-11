@@ -2,7 +2,7 @@
 
 """Job-token mint, delivery, and revocation against a local HTTP stub.
 
-No test reads ~/Secrets/github-app/rookrunner-app/ and no test contacts
+No test reads ~/.config/rookrunner/keys/ and no test contacts
 api.github.com. The fixture token is compared by hash so a failure does
 not print it.
 """
@@ -158,20 +158,25 @@ class _Home(unittest.TestCase):
         self.state = self.root / "state"
         self.state.mkdir()
         self.key = self._install()
-        self.previous = os.environ.get("HOME")
+        self.previous = {
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
         os.environ["HOME"] = str(self.home)
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
         self.stub = _Stub()
 
     def tearDown(self):
         self.stub.close()
-        if self.previous is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self.previous
+        for name, value in self.previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         self.tmp.cleanup()
 
     def _install(self):
-        directory = self.home / "Secrets" / "github-app" / "rookrunner-app"
+        directory = self.home / ".config" / "rookrunner" / "keys"
         directory.mkdir(parents=True)
         os.chmod(directory, 0o700)
         key = directory / "private-key.pem"
@@ -377,7 +382,7 @@ class MintTests(_Home):
 
     def test_a_key_inside_the_state_directory_sends_no_request(self):
         with self.assertRaises(StatusError):
-            mint_job_token(self._config(state_dir=self.home / "Secrets"))
+            mint_job_token(self._config(state_dir=self.home / ".config"))
         self.assertEqual(self.stub.requests, [])
 
     def test_a_redirect_is_not_followed(self):
@@ -632,15 +637,19 @@ class DockerJobTokenTests(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self._keep_docker_config()
-        self.previous = os.environ.get("HOME")
+        self.previous = {
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
         os.environ["HOME"] = str(self.home)
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
         self.pem = Path(tempfile.mkdtemp(prefix="job-token-pem-")) / "private-key.pem"
         subprocess.run(
             ["openssl", "genrsa", "-out", str(self.pem), "2048"],
             check=True,
             capture_output=True,
         )
-        directory = self.home / "Secrets" / "github-app" / "rookrunner-app"
+        directory = self.home / ".config" / "rookrunner" / "keys"
         directory.mkdir(parents=True)
         os.chmod(directory, 0o700)
         key = directory / "private-key.pem"
@@ -671,10 +680,11 @@ class DockerJobTokenTests(unittest.TestCase):
 
     def _restore(self):
         self.stub.close()
-        if self.previous is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self.previous
+        for name, value in self.previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         names = subprocess.run(
             ["docker", "ps", "-aq", "--filter", "name=rookrunner-"],
             capture_output=True,

@@ -2,18 +2,19 @@
 
 """File-backed secrets for one repository.
 
-The store is ``~/Secrets/rookrunner-secrets/<owner>/<repo>/``. A file is
+The store is ``~/.config/rookrunner/files/<owner>/<repo>/``, or the same
+path under ``$XDG_CONFIG_HOME`` when that variable is set. A file is
 read only when ``--secrets`` is set and the allowlist matches. This module
 does not mint a token and does not read the GitHub App key.
 """
 
 import contextlib
 import os
-from pathlib import Path
 import re
 import stat
 
 from .poll import allowlist_matches
+from .socket_lock import config_home
 
 # Same owner/name shape as worker --github-repository.
 _REPOSITORY = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
@@ -70,16 +71,19 @@ def load_job_secrets(repository, names):
         raise SecretError("secret directory is not accepted")
     owner, repo = repository.split("/", 1)
     wanted = _wanted(names)
-    home = Path.home()
-    if not home.is_absolute():
+    try:
+        root = config_home()
+    except (ValueError, OSError):
+        raise SecretError("secret directory is not accepted") from None
+    if not root.is_absolute():
         raise SecretError("secret directory is not accepted")
     fds = []
     try:
-        fds.append(_open_dir(None, os.fspath(home), require_mode=False))
+        fds.append(_open_dir(None, os.fspath(root), require_mode=False))
         parent = fds[-1]
         for part, require_mode in (
-            ("Secrets", False),
-            ("rookrunner-secrets", True),
+            ("rookrunner", True),
+            ("files", True),
             (owner, True),
             (repo, True),
         ):

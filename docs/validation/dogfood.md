@@ -53,7 +53,7 @@ both boxes. Both poll timers were enabled.
 The plan left check posting on the Mac until a decision named a
 credential other than a copy of the Mac key. That decision is in
 effect. Each box has its own App private key at
-`~/Secrets/github-app/rookrunner-app/private-key.pem`, mode
+`~/.config/rookrunner/keys/private-key.pem`, mode
 `0600`, owned by the service user. The keys differ. The Mac key
 stays on the Mac. The worker unit has no `--app-key`.
 

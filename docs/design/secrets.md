@@ -14,7 +14,7 @@ plan. p7-mask changes the job mask. p7-trust-gate compares
 pull-request repositories by numeric id and stores the allowlist
 fields on the event. p7-socket-lock adds the worker secret flags
 and refuses `--docker-socket` combined with `--app-key` or
-`--secrets` unless the `~/Secrets` probe exits 0. p7-secret-env
+`--secrets` unless the key-directory probe exits 0. p7-secret-env
 reads the file store into a step `env` or `with` expression that is
 exactly `secrets.NAME` when `--secrets` is set and the allowlist
 matches, and it passes those secret registrations into
@@ -52,10 +52,10 @@ on the App stay Checks write, Commit statuses
 write, and Contents read. GitHub sets Metadata to read on every App.
 That is not an extra permission.
 
-The key directory is `~/Secrets/github-app/rookrunner-app/`. Pull
-request 64 recorded that path in the code and the docs. The secret
-root below is a different directory. This document does not move
-the key.
+The key directory is `~/.config/rookrunner/keys/`, or
+`$XDG_CONFIG_HOME/rookrunner/keys` when that variable is set.
+`--key-dir` overrides `ROOKRUNNER_KEY_DIR`. The file store below
+is a different directory.
 
 https://docs.github.com/en/actions/concepts/security/github_token
 https://docs.github.com/en/actions/reference/security/secrets
@@ -178,15 +178,16 @@ secret is read and no token is minted.
 `worker --secrets` takes no path and requires
 `worker --github-repository owner/name`. Any other shape is a
 refusal at startup, and the error names the flag.
-`worker --app-key` accepts only
-`~/Secrets/github-app/rookrunner-app/private-key.pem` and opens that
+`worker --app-key` accepts only `private-key.pem` in the key
+directory. The default is `~/.config/rookrunner/keys/`. It opens that
 file only when a job mints a Contents-read token. `worker --secret-ref` and `worker --secret-pusher`
 may be repeated. A ref must be a full ref. A pusher must be a
 GitHub login. `--docker-socket` combined with `--app-key` or
 `--secrets` refuses at startup and names both flags, unless
-`worker --runner-image` is set and the `~/Secrets` probe exits 0.
-The probe's only host mount is `~/Secrets`, read-only. It does not
-receive the Docker socket. Its command prints no file names and no
+`worker --runner-image` is set and the key-directory probe exits 0.
+Each probe container's only host mount is `~/.config/rookrunner`,
+read-only, or the key directory when `--key-dir` is outside that
+tree. It does not receive the Docker socket. Its command prints no file names and no
 file bytes. The probe passes when the mount is rejected or the path
 is not a usable directory. It fails when the path is a usable
 directory. The container is removed before the worker serves. A
@@ -194,8 +195,8 @@ missing runner image, a daemon that cannot be contacted, or an image
 failure other than the mount refuses the combination. A worker that
 sets `--docker-socket` and sets neither `--app-key` nor `--secrets`
 still starts. Its host-control warning names
-`~/Secrets/github-app/rookrunner-app/` and
-`~/Secrets/rookrunner-secrets/`. That warning does not inject a
+`~/.config/rookrunner/keys/` and
+`~/.config/rookrunner/files/`. That warning does not inject a
 secret and does not mint a job token. `poll` and `status` keep the post
 credential they have today.
 
@@ -223,7 +224,7 @@ value to the network. Masking a log does not stop either copy.
 
 A socket worker can also mount the host. Docker Desktop shares
 `/Users` into its VM by default, so a step can
-`docker run -v ~/Secrets:/x`. That mount reaches the App private key
+`docker run -v ~/.config/rookrunner:/x`. That mount reaches the App private key
 and every file in the secret root, including files the workflow
 never names. Withholding injection does not close that mount.
 Answer 6 is the accepted control. The host-control warning stays,
@@ -246,11 +247,12 @@ https://docs.github.com/en/actions/concepts/security/github_token
 Accepted answer 1. The store is one fixed root, with one folder per
 repository:
 
-`~/Secrets/rookrunner-secrets/<owner>/<repo>/`
+`~/.config/rookrunner/files/<owner>/<repo>/`, or the same path
+under `$XDG_CONFIG_HOME` when that variable is set.
 
 `<owner>` and `<repo>` are the two halves of the GitHub repository
 name. The root is outside the repository, the state directory, every
-attempt workspace, and `~/Secrets/github-app/`. The key reader and
+attempt workspace, and `~/.config/rookrunner/keys/`. The key reader and
 the secret reader are different directories.
 
 `worker --secrets` takes no path. It requires
@@ -542,7 +544,7 @@ Permission resolution, once the pull request that mints has landed:
   `CAPABILITY_UNSUPPORTED` at plan time. No mint.
 
 `worker --app-key` on this path is the same file rule as the post:
-`~/Secrets/github-app/rookrunner-app/private-key.pem`. `poll` and
+`~/.config/rookrunner/keys/private-key.pem`. `poll` and
 `status` keep their own `--app-key` for the post token. The two
 mints stay separate.
 
@@ -555,11 +557,12 @@ Accepted answer 6. `--docker-socket` is mutually exclusive with
 `worker --app-key` and with `worker --secrets`. Startup refuses the
 combination and names both flags.
 
-The exception is a startup probe that shows `~/Secrets` is not
+The exception is a startup probe that shows the configured key directory is not
 shared into the Docker VM. The probe uses `worker --runner-image`.
 Without that image the probe cannot run, and the combination is
-refused. The container's only host mount is `~/Secrets`, read-only.
-It does not receive the Docker socket. Its command is a fixed
+refused. Each probe container's only host mount is
+`~/.config/rookrunner`, read-only, or the key directory when
+`--key-dir` is outside that tree. It does not receive the Docker socket. Its command is a fixed
 existence test. It prints no file names and no file bytes. The
 probe passes when the mount is rejected or the path is not a
 usable directory inside the container. The probe fails when the
@@ -573,8 +576,8 @@ exclusive.
 A worker that sets `--docker-socket` and sets neither `--app-key`
 nor `--secrets` still starts. The host-control warning stays. The
 warning says the exposure includes
-`~/Secrets/github-app/rookrunner-app/` and
-`~/Secrets/rookrunner-secrets/`.
+`~/.config/rookrunner/keys/` and
+`~/.config/rookrunner/files/`.
 
 ## Which runs receive secrets
 
@@ -621,8 +624,8 @@ These stay out of this design.
 
 - A fork pull request, any other untrusted code, and
   `pull_request_target`.
-- Mounting `~/Secrets/github-app/rookrunner-app/` or
-  `~/Secrets/rookrunner-secrets/` into the job, and putting the
+- Mounting `~/.config/rookrunner/keys/` or
+  `~/.config/rookrunner/files/` into the job, and putting the
   post token or the private key in the job.
 - A new App permission, a Secrets API permission, and any use of
   the GitHub secrets API.
@@ -654,7 +657,7 @@ Each answer is accepted. The sections above are the behavior. This
 list is the record of the choice.
 
 1. **Where secret values live.** One fixed root,
-   `~/Secrets/rookrunner-secrets/<owner>/<repo>/`, outside the key
+   `~/.config/rookrunner/files/<owner>/<repo>/`, outside the key
    directory. `worker --secrets` takes no path and requires
    `--github-repository owner/name`. One uppercase file per secret.
    Mode `0700` on each directory and `0600` on each file. No
@@ -708,7 +711,7 @@ list is the record of the choice.
 6. **A worker started with `--docker-socket`.** Mutually exclusive
    with `worker --app-key` and with `worker --secrets`, and the
    error names both flags. The exception is the startup probe that
-   shows `~/Secrets` is not shared. The host-control warning names
+   shows the configured key directory is not shared. The host-control warning names
    the key directory and the secret root.
 7. **Which runs receive secrets.** Secrets are injected only when
    the ref or the pusher is on the allowlist. The default is a
@@ -726,7 +729,7 @@ migrated. No plan field is added. The plan schema is unchanged.
 `.github/workflows/check.yml` is unchanged. `write` stays rejected.
 Tests point `HOME` at a temporary directory and use a fixture key
 and a local HTTP stub. No test reads
-`~/Secrets/github-app/rookrunner-app/` and no test contacts
+`~/.config/rookrunner/keys/` and no test contacts
 `api.github.com`. No pull request installs the App, starts a
 sign-in, or reads a real key.
 
@@ -759,9 +762,9 @@ sign-in, or reads a real key.
    `worker --github-repository`, `worker --app-key`,
    `worker --secret-ref`, and `worker --secret-pusher`.
    `--secrets` takes no path. `--app-key` accepts only
-   `~/Secrets/github-app/rookrunner-app/private-key.pem`.
+   `~/.config/rookrunner/keys/private-key.pem`.
    `--docker-socket` combined with `--app-key` or `--secrets`
-   refuses at startup and names both flags, unless the `~/Secrets`
+   refuses at startup and names both flags, unless the key-directory
    probe exits 0. The host-control warning names the key directory
    and the secret root. This pull request does not inject a secret
    and does not mint a job token. `poll` and `status` keep the
@@ -838,7 +841,7 @@ each item proves it.
    [check runs](check-runs.md) still hold. p7-job-token.
 5. A worker that combines `--docker-socket` with `--app-key` or
    `--secrets` refuses and names both flags, unless the
-   `~/Secrets` probe passes. p7-socket-lock.
+   key-directory probe passes. p7-socket-lock.
 6. A fork pull request still creates no run and reads no secret,
    including a pull request whose head repository is null. The
    comparison uses numeric ids. A push that is not the default
@@ -854,7 +857,7 @@ p7-mask, p7-trust-gate, p7-socket-lock, p7-secret-env,
 p7-secret-run, and p7-job-token change the engine as the plan names.
 No secret directory is created by this document. No sign-in is
 started. No file under
-`~/Secrets/github-app/rookrunner-app/` is read by this document.
+`~/.config/rookrunner/keys/` is read by this document.
 The App is not installed by this document. Its App ID is 5201333.
 No App permission is added. The operator names the installation as
 `168290590`. The mint reads `installation-id` and the code does not

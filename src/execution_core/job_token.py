@@ -26,12 +26,15 @@ _JOB_PERMISSIONS = {"contents": "read"}
 class JobTokenConfig:
     """Where to mint. This object does not hold a token or a key."""
 
-    def __init__(self, app_key, api_base, *, state_dir, repository_root, github_repository):
+    def __init__(
+        self, app_key, api_base, *, state_dir, repository_root, github_repository, key_dir=None
+    ):
         self.app_key = app_key
         self.api_base = api_base
         self.state_dir = state_dir
         self.repository_root = repository_root
         self.github_repository = github_repository
+        self.key_dir = key_dir
 
 
 class TokenExpiry:
@@ -121,7 +124,12 @@ def mint_job_token(config, clock=None):
     if clock is None:
         clock = datetime.now(UTC)
     repository = require_repository(getattr(config, "github_repository", None))
-    material = load_app_key(config.app_key, config.state_dir, config.repository_root)
+    material = load_app_key(
+        config.app_key,
+        config.state_dir,
+        config.repository_root,
+        getattr(config, "key_dir", None),
+    )
     jwt = None
     try:
         try:

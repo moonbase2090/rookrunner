@@ -80,10 +80,10 @@ class WorkerUnitTests(unittest.TestCase):
     def test_host_copy_must_reexpose_secrets_under_protect_home(self):
         folded = " ".join(DESIGN.read_text(encoding="utf-8").split())
         self.assertIn(
-            "A host copy that adds the documented `~/Secrets` key flows "
-            "(`--app-key` or `--secrets`) must re-expose that path. "
+            "A host copy that adds the documented key flows "
+            "(`--app-key` or `--secrets`) must re-expose the configured key directory. "
             "`ProtectHome=yes` hides the service user's home, so the key file "
-            "is unreadable and the startup probe treats a missing `~/Secrets` "
-            "directory as not shared. Secrets then stay absent without an error.",
+            "is unreadable and the startup probe treats a missing key directory "
+            "as not shared. Secrets then stay absent without an error.",
             folded,
         )

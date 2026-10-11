@@ -3650,32 +3650,39 @@ jobs:
         slot.mkdir()
         home = slot / "home"
         owner, repo = repository.split("/", 1)
-        repo_dir = home / "Secrets" / "rookrunner-secrets" / owner / repo
+        config = home / ".config"
+        rook = config / "rookrunner"
+        store = rook / "files"
+        repo_dir = store / owner / repo
         repo_dir.mkdir(parents=True)
-        for path in (
-            home,
-            home / "Secrets",
-            home / "Secrets" / "rookrunner-secrets",
-            home / "Secrets" / "rookrunner-secrets" / owner,
-            repo_dir,
-        ):
+        os.chmod(home, 0o755)
+        os.chmod(config, 0o755)
+        for path in (rook, store, store / owner, repo_dir):
             os.chmod(path, 0o700)
         os.chmod(repo_dir, repo_mode)
         for name, payload in files.items():
             target = repo_dir / name
             target.write_bytes(payload)
             os.chmod(target, 0o600)
-        previous = os.environ.get("HOME")
+        self._bind_secret_env(home)
+        return home
+
+    def _bind_secret_env(self, home):
+        previous = {
+            name: os.environ.get(name) for name in ("HOME", "XDG_CONFIG_HOME", "ROOKRUNNER_KEY_DIR")
+        }
         os.environ["HOME"] = str(home)
+        os.environ.pop("XDG_CONFIG_HOME", None)
+        os.environ.pop("ROOKRUNNER_KEY_DIR", None)
 
         def restore():
-            if previous is None:
-                os.environ.pop("HOME", None)
-            else:
-                os.environ["HOME"] = previous
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
         self.addCleanup(restore)
-        return home
 
     def _push_event(self, ref="refs/heads/main", full_name="owner/demo"):
         return {
@@ -4066,16 +4073,7 @@ jobs:
         home = self.root / "empty-home"
         home.mkdir()
         os.chmod(home, 0o700)
-        previous = os.environ.get("HOME")
-        os.environ["HOME"] = str(home)
-
-        def restore():
-            if previous is None:
-                os.environ.pop("HOME", None)
-            else:
-                os.environ["HOME"] = previous
-
-        self.addCleanup(restore)
+        self._bind_secret_env(home)
         workflow = """\
 on: push
 jobs:

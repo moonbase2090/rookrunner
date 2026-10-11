@@ -37,10 +37,11 @@ used to fetch a repository and is not placed on the installation
 token minted for a post. List requests stay unauthenticated, as
 NS-42 implemented them.
 
-The private key lives only in `~/Secrets/github-app/rookrunner-app/` on
-the operator's Mac. The operator passes the key path. The
-implementation resolves `~` for the user running the process and
-refuses any other location. It does not create the directory.
+The private key file is `private-key.pem` in the key directory.
+The default directory is `~/.config/rookrunner/keys/`. `--key-dir`
+overrides `ROOKRUNNER_KEY_DIR`. The operator passes the key path.
+The implementation resolves `~` for the user running the process
+and refuses any other file. It does not create the directory.
 
 The directory holds three files:
 
@@ -64,7 +65,7 @@ id, and the `installation-id` file never enter this repository,
 record. The operator names the installation as `168290590`. The
 mint reads `installation-id` and the code does not compare the file
 to that number. Tests point `HOME` at a temporary directory and generate
-a fixture key there. No test reads `~/Secrets/github-app/rookrunner-app/`
+a fixture key there. No test reads `~/.config/rookrunner/keys/`
 and no test contacts `api.github.com`.
 
 https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps
@@ -163,7 +164,7 @@ https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 | --- | --- |
 | The NS-40 gate fails, or the same terminal conclusion is already recorded | No key read. No HTTP |
 | `--app-key` and `--credential-file` are both set | Refusal. No HTTP |
-| The key path is outside `~/Secrets/github-app/rookrunner-app/`, is not absolute, is a symlink, or is inside the repository, the state directory, or an attempt workspace | Refusal. No HTTP. The error names none of the bytes |
+| The key path is outside the configured key directory, is not absolute, is a symlink, or is inside the repository, the state directory, or an attempt workspace | Refusal. No HTTP. The error names none of the bytes |
 | The directory or a file is missing, not mode `0700` or `0600`, or not owned by the caller | Refusal. No HTTP |
 | The client id or installation id is empty or not a single token | Refusal. No HTTP |
 | The PEM cannot be loaded | Refusal. No HTTP |
@@ -231,7 +232,7 @@ The App exists. Its name is Rookrunner-App and its App ID is
 mint reads `installation-id` and the code does not compare the file
 to that number. The private key stays out of the repository.
 No sign-in is started. No file under
-`~/Secrets/github-app/rookrunner-app/` is read by a test or by this
+`~/.config/rookrunner/keys/` is read by a test or by this
 repository. Omitting `--app-key` still posts a commit status from
 the NS-40 token file. Poll list requests stay unauthenticated.
 Contents read does not become a fetch. There is no webhook, no

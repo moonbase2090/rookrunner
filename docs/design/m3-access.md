@@ -130,7 +130,7 @@ the private key are pending, and those documents contain no
 installation id. This pull request does not edit them. The
 numbered slice `m3-install-note` does, after sign-off. The number
 does not go into code or into `check.yml`. The private key stays
-in `~/Secrets/github-app/rookrunner-app/`. This document does not
+in `~/.config/rookrunner/keys/`. This document does not
 read that directory and does not start a sign-in.
 
 The capability version is 12. `write` stays rejected.
@@ -375,14 +375,14 @@ is not masked.
 **App key and post token.** The adapter and the dashboard have no
 parameter for the key path. They do not call `run.status`. They
 do not mint. A same-uid agent can still read
-`~/Secrets/github-app/rookrunner-app/` if the process can read
+`~/.config/rookrunner/keys/` if the process can read
 that directory. M3 does not add a second user to prevent that
 read. The worker's existing rule stays: `--app-key` accepts only
-`~/Secrets/github-app/rookrunner-app/private-key.pem`, and the
+`~/.config/rookrunner/keys/private-key.pem`, and the
 key is opened when a mint or a post needs it.
 
 **Docker socket.** `--docker-socket` combined with `--app-key` or
-`--secrets` still refuses unless the `~/Secrets` probe exits 0.
+`--secrets` still refuses unless the key-directory probe exits 0.
 M3 does not change that lock. A dashboard or an adapter does not
 pass `--docker-socket`.
 
@@ -529,7 +529,7 @@ The capability version stays 12. A version 11 plan is not
 migrated. No plan field is added. `.github/workflows/check.yml`
 is unchanged. `write` stays rejected. Tests point `HOME` at a
 temporary directory when they touch a key path. No test reads
-`~/Secrets/github-app/rookrunner-app/` and no test contacts
+`~/.config/rookrunner/keys/` and no test contacts
 `api.github.com`. Existing contract, secret, job-token, and
 artifact tests still pass. Ruff still passes.
 
@@ -698,7 +698,7 @@ artifact tests still pass. Ruff still passes.
    operator names the installation as `168290590`, the mint reads
    `installation-id`, and the code does not compare the file to
    that number. The private key stays out of the repository.
-   This slice does not read `~/Secrets` and does not change code.
+   This slice does not read the configured key directory and does not change code.
    `check.yml` is unchanged. The test is the diff: those two
    documents and no other file.
 
@@ -727,4 +727,4 @@ from the run record. A dirty snapshot still does not post. File secrets still fo
 `allowlist_matches`. `artifact.read` still returns unmasked bytes.
 `poll` and `status` still own the check-run post. No App
 permission is added. No sign-in is started. No file under
-`~/Secrets` is read by this document.
+the configured key directory is read by this document.

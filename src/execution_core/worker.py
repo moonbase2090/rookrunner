@@ -22,7 +22,7 @@ still wins.
 opens that file only when a job mints a Contents-read token.
 `--secret-ref` and `--secret-pusher` may be repeated.
 `--docker-socket` combined with `--app-key` or `--secrets` refuses
-unless `--runner-image` is set and the `~/Secrets` probe exits 0.
+unless `--runner-image` is set and the key-directory probe exits 0.
 A worker that starts with `--docker-socket` warns that the exposure
 includes the key directory and the secret root. When `--secrets` is
 set and the allowlist matches, a step `env` or `with` expression that
@@ -139,7 +139,7 @@ from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .secrets import SecretAccess
-from .socket_lock import HOST_CONTROL_WARNING, accept_socket_flags
+from .socket_lock import accept_socket_flags, host_control_warning
 from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
 from .verify import VerifyError, verify_snapshot
 
@@ -514,6 +514,7 @@ class Worker:
         secret_refs=None,
         secret_pushers=None,
         api_base=None,
+        key_dir=None,
     ):
         if network not in {DEFAULT_NETWORK, "none"}:
             raise ValueError("container network must be bridge or none")
@@ -545,14 +546,16 @@ class Worker:
             secret_refs=secret_refs,
             secret_pushers=secret_pushers,
             runner_image=self.runner_image,
+            key_dir=key_dir,
         )
         self.secrets = flags.secrets
         self.github_repository = flags.github_repository
         self.app_key = flags.app_key
+        self.key_dir = key_dir
         self.api_base = DEFAULT_API_BASE if api_base is None else api_base
         self.secret_refs = flags.secret_refs
         self.secret_pushers = flags.secret_pushers
-        self.host_control_warning = HOST_CONTROL_WARNING if docker_socket else None
+        self.host_control_warning = host_control_warning(key_dir) if docker_socket else None
         self.action_remote = action_remote
         self._action_store = None
         if disk_budget is None:
@@ -1098,6 +1101,7 @@ class Worker:
             state_dir=self.state,
             repository_root=self.repository,
             github_repository=self.github_repository,
+            key_dir=self.key_dir,
         )
 
     def _run_accepted(self, record, request, owner=None):
@@ -2594,6 +2598,7 @@ def serve(
     secret_refs=None,
     secret_pushers=None,
     api_base=None,
+    key_dir=None,
 ):
     worker = Worker(
         repository,
@@ -2609,6 +2614,7 @@ def serve(
         secret_refs=secret_refs,
         secret_pushers=secret_pushers,
         api_base=api_base,
+        key_dir=key_dir,
     )
     if worker.host_control_warning:
         print(  # noqa: T201  host-control warning on stderr

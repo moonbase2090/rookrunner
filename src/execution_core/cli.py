@@ -406,7 +406,14 @@ def _run_poll(args, caller, mint, revoke, places=None):
     token = None
     try:
         if args.app_key and not args.credential_file:
-            token = mint(args.app_key, args.state, args.clone, args.repository, args.api_base)
+            token = mint(
+                args.app_key,
+                args.state,
+                args.clone,
+                args.repository,
+                args.api_base,
+                key_dir=getattr(args, "key_dir", None),
+            )
         return poll_once(
             repository=args.repository,
             clone=args.clone,
@@ -421,6 +428,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             ssh_host=getattr(args, "ssh_host", None),
             places=places,
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
+            key_dir=getattr(args, "key_dir", None),
         )
     finally:
         if isinstance(token, str):
@@ -538,6 +546,7 @@ def _report_app_status(args, decision, repository_root):
             app_key=args.app_key,
             state_dir=args.state,
             repository_root=repository_root,
+            key_dir=getattr(args, "key_dir", None),
         )
     except StatusError as error:
         _print_status_error(error)
@@ -548,6 +557,19 @@ def _report_app_status(args, decision, repository_root):
         _print_status_error(posted.error)
     print(canonical(recorded))
     sys.exit(1 if recorded is None or "error" in recorded else 0)
+
+
+def _add_key_dir(parser):
+    parser.add_argument(
+        "--key-dir",
+        help=(
+            "directory that holds private-key.pem. "
+            "Overrides ROOKRUNNER_KEY_DIR. "
+            "The default is $XDG_CONFIG_HOME/rookrunner/keys, "
+            "or ~/.config/rookrunner/keys when that variable is unset. "
+            "The directory is mode 0700 and the file is mode 0600."
+        ),
+    )
 
 
 def main():
@@ -590,10 +612,10 @@ def main():
             "that volume's mountpoint and TMPDIR, TEMP, and TMP default to "
             "it. Host credential directories stay unmounted. "
             "Startup warns that the exposure includes "
-            "~/Secrets/github-app/rookrunner-app/ and "
-            "~/Secrets/rookrunner-secrets/. Combined with --app-key or "
+            "~/.config/rookrunner/keys/ and "
+            "~/.config/rookrunner/files/. Combined with --app-key or "
             "--secrets, startup refuses unless --runner-image is set and "
-            "the ~/Secrets probe exits 0."
+            "the key-directory probe exits 0."
         ),
     )
     worker.add_argument(
@@ -605,27 +627,30 @@ def main():
             "that is exactly secrets.NAME receives that file's value. "
             "Does not mint a token and does not rewrite run. "
             "Combined with --docker-socket, startup refuses unless "
-            "--runner-image is set and the ~/Secrets probe exits 0."
+            "--runner-image is set and the key-directory probe exits 0."
         ),
     )
     worker.add_argument(
         "--github-repository",
         help=(
             "GitHub repository as owner/name. Required with --secrets. "
-            "Not a filesystem path. The secret directory is "
-            "~/Secrets/rookrunner-secrets/<owner>/<repo>/."
+            "Not a filesystem path. The file store is "
+            "~/.config/rookrunner/files/<owner>/<repo>/."
         ),
     )
     worker.add_argument(
         "--app-key",
         help=(
             "private key path for the Rookrunner GitHub App. "
-            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
+            "The file must be ~/.config/rookrunner/keys/private-key.pem "
+            "unless --key-dir or ROOKRUNNER_KEY_DIR sets the directory. "
+            "--key-dir wins. The directory is mode 0700 and the file is mode 0600. "
             "worker --app-key opens that file only when a job mints a Contents-read token. "
             "Combined with --docker-socket, startup refuses unless "
-            "--runner-image is set and the ~/Secrets probe exits 0."
+            "--runner-image is set and the key-directory probe exits 0."
         ),
     )
+    _add_key_dir(worker)
     worker.add_argument(
         "--api-base",
         default=DEFAULT_API_BASE,
@@ -759,11 +784,14 @@ def main():
         "--app-key",
         help=(
             "private key path for the Rookrunner GitHub App. "
-            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
+            "The file must be ~/.config/rookrunner/keys/private-key.pem "
+            "unless --key-dir or ROOKRUNNER_KEY_DIR sets the directory. "
+            "--key-dir wins. The directory is mode 0700 and the file is mode 0600. "
             "Omit this flag to post a commit status from --credential-file. "
             "Passing both refuses before any HTTP request."
         ),
     )
+    _add_key_dir(status)
     status.add_argument(
         "--api-base",
         default=DEFAULT_API_BASE,
@@ -808,11 +836,14 @@ def main():
         "--app-key",
         help=(
             "private key path for the Rookrunner GitHub App. "
-            "The file must be ~/Secrets/github-app/rookrunner-app/private-key.pem. "
+            "The file must be ~/.config/rookrunner/keys/private-key.pem "
+            "unless --key-dir or ROOKRUNNER_KEY_DIR sets the directory. "
+            "--key-dir wins. The directory is mode 0700 and the file is mode 0600. "
             "Omit this flag to post a commit status from --credential-file. "
             "Passing both refuses before any HTTP request."
         ),
     )
+    _add_key_dir(poll)
     poll.add_argument(
         "--api-base",
         default=DEFAULT_API_BASE,
@@ -901,6 +932,7 @@ def main():
                 secret_refs=args.secret_ref,
                 secret_pushers=args.secret_pusher,
                 api_base=args.api_base,
+                key_dir=args.key_dir,
             )
             return
         if args.command == "describe":
