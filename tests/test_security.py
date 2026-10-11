@@ -41,6 +41,7 @@ class SecurityPolicyTests(unittest.TestCase):
         self.assertIn("The `[` command stays accepted.", TEXT)
         self.assertIn("An unquoted `{` in that command name is refused", TEXT)
         self.assertIn("`builtin eval` is refused the same way.", TEXT)
+        self.assertIn("A missing or unrecognized association is refused.", TEXT)
         self.assertIn(
             "When that pull request changes a workflow file, or that diff cannot be read,",
             TEXT,

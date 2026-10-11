@@ -48,11 +48,20 @@ The intended distribution is open source under that license.
 ## Untrusted code
 
 A poll refuses untrusted code. A fork, a head repository other than the owner
-repository, or an author or committer who is not `OWNER`, `MEMBER`, or
-`COLLABORATOR` produces a warning that names the reason. No run is created.
-`--allow-untrusted` with that commit's SHA is the only override. The flag is
-not stored and it is not the default. The run record stores the override and
-the reason. A missing association is not a rejection. See
+repository, a pull request author who is not `OWNER`, `MEMBER`, or
+`COLLABORATOR`, or a commit whose author or committer cannot write to the
+repository produces a warning that names the reason. No run is created.
+A missing or unrecognized author association is refused. The commits checked
+are a pushed tip and every commit on a pull request. Writing means the `write`
+or `admin` permission GitHub reports for that login on the repository. A
+commit without a GitHub account is refused, and so is a permission GitHub does
+not return. Without `--app-key` the poll sends no credential, so GitHub
+returns no permission and the commit is refused. The committer `web-flow`
+passes only when GitHub verified the commit's signature, and that commit's
+author is still checked. A pull request with more commits than GitHub lists
+(250) is refused. `--allow-untrusted` with that commit's SHA is the only
+override. The flag is not stored and it is not the default. The run record
+stores the override and the reason. See
 [the roadmap](docs/roadmap.md#planned-paused).
 
 A pull request that changes a workflow file is also refused. No run is

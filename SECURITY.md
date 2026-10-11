@@ -56,6 +56,18 @@ An unquoted `*`, `?`, or `[` in that command name is refused the same
 way. The `[` command stays accepted. An unquoted `{` in that command
 name is refused the same way. `builtin eval` is refused the same way.
 
+A poll refuses untrusted code and creates no run. A pull request
+needs the author association `OWNER`, `MEMBER`, or `COLLABORATOR`.
+A missing or unrecognized association is refused. A pushed tip
+commit, and every commit on a pull request, needs an author and a
+committer with `write` or `admin` permission on the repository. A
+commit without a GitHub account is refused, and so is a permission
+GitHub does not return. Without `--app-key` the poll sends no
+credential, so GitHub returns no permission and the commit is
+refused. The `web-flow` committer passes only on a commit whose
+signature GitHub verified. `--allow-untrusted` with the commit SHA
+runs that one commit, and the run records why.
+
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,
 the pass refuses it unless `--allow-pr-workflow` names the pull

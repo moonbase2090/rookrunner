@@ -27,6 +27,9 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("The `[` command stays accepted.", PROSE)
         self.assertIn("An unquoted `{` in that command name is refused", PROSE)
         self.assertIn("`builtin eval` is refused the same way.", PROSE)
+        self.assertIn(
+            "A missing or unrecognized pull request author association is refused.", PROSE
+        )
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):
