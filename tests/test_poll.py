@@ -19,6 +19,7 @@ import threading
 import time
 import unittest
 
+import execution_core.poll as poll_module
 from execution_core.checks import list_token_body
 from execution_core.poll import (
     PollError,
@@ -1371,6 +1372,93 @@ class PollTests(unittest.TestCase):
         record = self.worker.get(result["submitted"][0]["run_id"])
         self.assertNotIn("untrusted_override", record)
 
+    def _replace_merge_with_workflow_edit(self, number):
+        name = f"feature-{number}"
+        _git(self.seed, "checkout", name)
+        (self.seed / ".github/workflows/check.yml").write_text(WORKFLOW + "# raced\n")
+        _git(self.seed, "add", "-A")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "race",
+        )
+        _git(self.seed, "checkout", "main")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "--no-ff",
+            name,
+            "-m",
+            "merge",
+        )
+        _git(self.seed, "push", "origin", f"HEAD:refs/pull/{number}/merge")
+
+    def test_a_merge_ref_moved_after_the_listing_is_not_checked_out(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("safe\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        moved = False
+        original = poll_module._fetch_sha
+
+        def fetch(clone, ref):
+            nonlocal moved
+            if ref == "refs/pull/9/merge" and not moved:
+                moved = True
+                self._replace_merge_with_workflow_edit(9)
+            return original(clone, ref)
+
+        poll_module._fetch_sha = fetch
+        try:
+            result = self.poll()
+        finally:
+            poll_module._fetch_sha = original
+        self.assertTrue(moved)
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(self.runs(), 0)
+        self.assertNotIn("# raced", (self.clone / ".github/workflows/check.yml").read_text())
+        self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        self.assertEqual(
+            result["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": "merge_commit_mismatch",
+                    "message": "fetched merge commit does not match the listed head",
+                }
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("pulls", saved["etags"])
+        self.assertEqual(
+            saved["workflow_refusals"],
+            [{"number": 9, "head_sha": head, "reason": "merge_commit_mismatch"}],
+        )
+        new_base = _git(self.seed, "rev-parse", "HEAD^1").stdout.strip()
+        new_head = _git(self.seed, "rev-parse", "HEAD^2").stdout.strip()
+        self.server.pulls[0]["base"]["sha"] = new_base
+        self.server.pulls[0]["head"]["sha"] = new_head
+        self.server.etags["pulls"] = "pulls-3"
+        caught = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertNotIn("# raced", (self.clone / ".github/workflows/check.yml").read_text())
+        self.assertEqual(caught["skipped"], [{"reason": "workflow_changed", "number": 9}])
+        self.assertEqual(caught["warnings"][0]["sha"], new_head)
+        self.assertEqual(caught["warnings"][0]["reason"], "workflow_changed")
+        self.assertIn(".github/workflows/check.yml", caught["warnings"][0]["message"])
+
     def test_a_collaborator_workflow_edit_is_refused_until_that_association_is_named(self):
         def mutate(seed):
             path = seed / ".github/workflows/check.yml"
@@ -1497,12 +1585,35 @@ class PollTests(unittest.TestCase):
             "pull request changes a workflow file: .github/workflows/check.yml",
         )
 
-    def test_a_pull_request_whose_workflow_diff_is_unavailable_is_refused(self):
+    def test_a_listed_base_that_is_not_the_merge_parent_is_not_checked_out(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")
 
         _tip, head = self._open_feature(9, mutate, base="ab" * 20)
         result = self.poll()
+        self._assert_workflow_refused(
+            result,
+            head,
+            "fetched merge commit does not match the listed head",
+            "merge_commit_mismatch",
+        )
+        self.assertFalse((self.clone / "feature-9.txt").exists())
+
+    def test_a_pull_request_whose_workflow_diff_is_unavailable_is_refused(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+
+        def unavailable(_clone, _before, _after):
+            return None
+
+        original = poll_module._diff
+        poll_module._diff = unavailable
+        try:
+            result = self.poll()
+        finally:
+            poll_module._diff = original
         self._assert_workflow_refused(
             result,
             head,

@@ -34,6 +34,10 @@ class SecurityPolicyTests(unittest.TestCase):
             TEXT,
         )
         self.assertIn("A missing association does not match.", TEXT)
+        self.assertIn(
+            "The fetched merge commit is checked out only when its first parent is the listed base",
+            TEXT,
+        )
 
     def test_local_mode_is_not_a_sandbox(self):
         self.assertIn(

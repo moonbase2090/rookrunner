@@ -34,6 +34,10 @@ class ReadmeTests(unittest.TestCase):
             PROSE,
         )
         self.assertIn("`--allow-pr-workflow` names that pull request's author association.", PROSE)
+        self.assertIn(
+            "The fetched merge commit is checked out only when its first parent is the listed base",
+            PROSE,
+        )
 
 
 if __name__ == "__main__":

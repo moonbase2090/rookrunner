@@ -44,7 +44,10 @@ Local rules, not GitHub-equivalence claims:
   path, or a file directly in ``.github/workflows/`` whose name ends
   in ``.yml`` or ``.yaml``. A nested path does not count. The diff is
   the pull base against the head. When that diff cannot be read, the
-  pull request is refused. ``--allow-pr-workflow ASSOCIATION`` runs
+  pull request is refused. The fetched merge commit is checked out
+  only when its first parent is the listed base and its second parent
+  is the listed head. Any other commit is left unchecked and creates
+  no run. ``--allow-pr-workflow ASSOCIATION`` runs
   that pull request when the author association is the named
   ``OWNER``, ``MEMBER``, or ``COLLABORATOR``. A missing association
   does not match. The flag is not stored and it is not the default.
@@ -688,6 +691,21 @@ def _fetch_sha(clone, ref):
     if _SHA.fullmatch(sha) is None:
         raise PollError("GIT_FAILED", "git fetch did not resolve a commit")
     return sha
+
+
+def _merge_parents(clone, sha):
+    """Return the two parents of one merge commit, or None."""
+
+    listed = _git(clone, "rev-parse", f"{sha}^1", f"{sha}^2", check=False)
+    if listed.returncode != 0:
+        return None
+    text = _stdout(listed)
+    parents = [] if text == "" else text.split("\n")
+    if parents and parents[-1] == "":
+        parents.pop()
+    if len(parents) != 2 or any(_SHA.fullmatch(parent) is None for parent in parents):
+        return None
+    return parents[0], parents[1]
 
 
 def _digest(value):
@@ -1560,6 +1578,10 @@ class Pass:
         if merge is None:
             self._record_absent(number, head_sha)
             return True
+        parents = _merge_parents(self.clone, merge)
+        if parents != (base_sha, head_sha):
+            self._record_merge_mismatch(number, head_sha)
+            return True
         changed = _diff(self.clone, base_sha, head_sha)
         if not self._accept_pr_workflow(number, head_sha, item, base_sha, changed):
             return True
@@ -1813,6 +1835,25 @@ class Pass:
         if not paths:
             return None, ()
         return "changed", paths
+
+    def _record_merge_mismatch(self, number, head_sha):
+        """Do not check out a merge commit that is not the listed base and head."""
+
+        row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
+        rows = self.state.setdefault("workflow_refusals", [])
+        entry = {
+            "number": number,
+            "sha": head_sha,
+            "action": "refused",
+            "reason": "merge_commit_mismatch",
+            "message": "fetched merge commit does not match the listed head",
+        }
+        if row not in rows:
+            rows.append(row)
+            self.result["skipped"].append({"reason": "merge_commit_mismatch", "number": number})
+            self.result["warnings"].append(entry)
+            self._checkpoint()
+        self.hold_pulls = True
 
     def _record_workflow_refusal(self, number, head_sha, reason, entry):
         row = {"number": number, "head_sha": head_sha, "reason": reason}

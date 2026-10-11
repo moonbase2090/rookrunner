@@ -12,8 +12,10 @@ This file does not reconstruct earlier milestones.
   `refs/pull/<number>/merge` for that pull request unless
   `--allow-pr-workflow` names the author association (`OWNER`,
   `MEMBER`, or `COLLABORATOR`). A missing association does not match.
-  A diff that cannot be read is refused the same way. The flag is not
-  stored.
+  A diff that cannot be read is refused the same way. The fetched
+  merge commit is checked out only when its first parent is the
+  listed base and its second parent is the listed head. The flag is
+  not stored.
 - A job container is created with `--security-opt no-new-privileges`
   and `--cap-drop ALL`. A service container keeps the engine's default
   capability set, including `CAP_CHOWN`, and sets no-new-privileges.

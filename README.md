@@ -60,7 +60,9 @@ created unless `--allow-pr-workflow` names that pull request's author
 association. `OWNER`, `MEMBER`, and `COLLABORATOR` are the accepted
 names. A missing association does not match. The flag is not stored
 and it is not the default. A diff that cannot be read is refused the
-same way.
+same way. The fetched merge commit is checked out only when its
+first parent is the listed base and its second parent is the listed
+head.
 
 ## Try the development contract
 
