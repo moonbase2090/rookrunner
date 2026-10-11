@@ -1905,6 +1905,44 @@ class PollTests(unittest.TestCase):
         self.assertIs(record["untrusted_override"], True)
         self.assertEqual(record["untrusted_reason"], "commit author cannot write to the repository")
 
+    def test_an_override_records_the_author_and_commit_reasons(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, association="NONE")
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        allowed = self.poll(allow_untrusted=[head])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(
+            self._messages(allowed),
+            [
+                "untrusted code allowed by override: author is not a repository collaborator",
+                "untrusted code allowed by override: commit author cannot write to the repository",
+            ],
+        )
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertEqual(
+            record["untrusted_reason"],
+            "author is not a repository collaborator; commit author cannot write to the repository",
+        )
+
+    def test_an_exhausted_pull_commit_list_stops_the_pass_without_a_refusal(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        self._open_feature(9, mutate)
+        self.server.remaining_by_kind = {"pull_commits": 0}
+        stopped = self.poll()
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(stopped["warnings"], [])
+        self.assertNotIn({"reason": "untrusted", "number": 9}, stopped["skipped"])
+        self.server.remaining_by_kind = {}
+        resumed = self.poll()
+        self.assertFalse(resumed["stopped"])
+        self.assertEqual(self.runs(), 1)
+
     def test_a_commit_list_that_leaves_out_a_commit_is_refused(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")

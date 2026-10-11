@@ -1399,18 +1399,9 @@ class Pass:
             return "pull request commits are not readable"
         if len(expected) > _PULL_COMMIT_LIMIT:
             return "pull request has more commits than GitHub lists"
-        listed = []
-        page = 1
-        while True:
-            body = self._array(
-                f"/repos/{self.repository}/pulls/{number}/commits?per_page=100&page={page}"
-            )
-            if body is None:
-                return _STOPPED
-            listed.extend(body)
-            if len(body) < 100 or len(listed) >= _PULL_COMMIT_LIMIT:
-                break
-            page += 1
+        listed = self._pull_commit_list(number)
+        if listed is None:
+            return _STOPPED
         by_sha = {}
         for item in listed:
             if not isinstance(item, dict):
@@ -1426,6 +1417,41 @@ class Pass:
             if reason is not None and reason not in reasons:
                 reasons.append(reason)
         return "; ".join(reasons) if reasons else None
+
+    def _pull_commit_list(self, number):
+        """Return GitHub's commit list for one pull request, or None when the pass stopped."""
+
+        listed = []
+        page = 1
+        while True:
+            body = self._array(
+                f"/repos/{self.repository}/pulls/{number}/commits?per_page=100&page={page}"
+            )
+            if body is None:
+                return None
+            listed.extend(body)
+            if len(body) < 100 or len(listed) >= _PULL_COMMIT_LIMIT:
+                return listed
+            page += 1
+
+    def _pull_commits_gate(self, number, base_sha, head_sha, override):
+        """Return ``(verdict, override)`` for every commit on a pull request.
+
+        The verdict is ``"run"``, ``"refused"``, or ``"stop"``. A refusal is
+        recorded here. When ``--allow-untrusted`` names the head, the
+        verdict is ``"run"`` and the override gains the commit reason.
+        """
+
+        reason = self._pull_commits_reason(number, base_sha, head_sha)
+        if reason is _STOPPED:
+            return "stop", override
+        if reason is None:
+            return "run", override
+        if head_sha not in self.allow_untrusted:
+            self._record_untrusted(number, head_sha, reason)
+            return "refused", override
+        self.result["warnings"].append(self._warning(number, head_sha, reason, True))
+        return "run", reason if override is None else f"{override}; {reason}"
 
     def _list(self, kind, path):
         """Return (body, etag) when a new list should be applied.
@@ -1762,15 +1788,11 @@ class Pass:
         if parents != (base_sha, head_sha):
             self._record_merge_mismatch(number, head_sha)
             return True
-        commits_reason = self._pull_commits_reason(number, base_sha, head_sha)
-        if commits_reason is _STOPPED:
+        verdict, override = self._pull_commits_gate(number, base_sha, head_sha, override)
+        if verdict == "stop":
             return False
-        if commits_reason is not None:
-            if head_sha not in self.allow_untrusted:
-                self._record_untrusted(number, head_sha, commits_reason)
-                return True
-            self.result["warnings"].append(self._warning(number, head_sha, commits_reason, True))
-            override = commits_reason if override is None else f"{override}; {commits_reason}"
+        if verdict == "refused":
+            return True
         changed = _diff(self.clone, base_sha, head_sha)
         if not self._accept_pr_workflow(number, head_sha, item, base_sha, changed):
             return True
