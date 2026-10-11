@@ -53,7 +53,7 @@ class ContainerLimitTests(unittest.TestCase):
         self.assertNotIn("--privileged", job)
         self.assertNotIn("--privileged", service)
 
-    def test_job_and_service_creates_drop_privileges(self):
+    def test_a_job_drops_capabilities_and_a_service_keeps_the_default_set(self):
         job = _create_args(
             "job",
             "/workspace",
@@ -77,13 +77,17 @@ class ContainerLimitTests(unittest.TestCase):
             {"id": "echo", "image": "image@sha256:aa"},
             "job",
         )
-        for args in (job, service):
-            self.assertEqual(_flag(args, "--security-opt"), "no-new-privileges")
-            self.assertEqual(_flag(args, "--cap-drop"), "ALL")
-            self.assertEqual(args.count("--security-opt"), 1)
-            self.assertEqual(args.count("--cap-drop"), 1)
-            self.assertNotIn("--cap-add", args)
-            self.assertNotIn("--privileged", args)
+        self.assertEqual(_flag(job, "--security-opt"), "no-new-privileges")
+        self.assertEqual(_flag(job, "--cap-drop"), "ALL")
+        self.assertEqual(job.count("--security-opt"), 1)
+        self.assertEqual(job.count("--cap-drop"), 1)
+        self.assertNotIn("--cap-add", job)
+        self.assertNotIn("--privileged", job)
+        self.assertEqual(_flag(service, "--security-opt"), "no-new-privileges")
+        self.assertEqual(service.count("--security-opt"), 1)
+        self.assertNotIn("--cap-drop", service)
+        self.assertNotIn("--cap-add", service)
+        self.assertNotIn("--privileged", service)
 
     def test_account_setup_stays_root_without_the_isolation_flags(self):
         args = _account_setup_args("image@sha256:aa", "/account")

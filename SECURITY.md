@@ -28,11 +28,14 @@ started with `--docker-socket`.
 A job container and a service container are created with a memory
 limit of 4g, no swap beyond that limit, a process limit of 1024, and
 a CPU limit of 2. The default network remains `bridge`. `network none`
-still turns egress off. Both containers are created with
-`--security-opt no-new-privileges` and `--cap-drop ALL`. The
-account-setup container still runs as root to write passwd and
-sudoers, and it does not receive those flags. A step cannot gain
-privileges through sudo.
+still turns egress off. A job container is created with
+`--security-opt no-new-privileges` and `--cap-drop ALL`. A service
+container is created with `--security-opt no-new-privileges` and keeps
+the engine's default capability set, including `CAP_CHOWN`. It does
+not receive `--cap-drop` or `--cap-add`. There is no workflow field
+that changes that set. The account-setup container still runs as root
+to write passwd and sudoers, and it does not receive those flags. A
+step cannot gain privileges through sudo.
 
 ## What this is not
 

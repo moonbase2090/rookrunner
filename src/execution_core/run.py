@@ -53,10 +53,13 @@ Pass network `none` to turn it off. Other network names are rejected. A
 job container and a service container are created with `--memory 4g`,
 `--memory-swap 4g`, `--pids-limit 1024`, and `--cpus 2`. The swap
 limit matches the memory limit, so the container does not add swap
-beyond that cap. Both are created with `--security-opt
-no-new-privileges` and `--cap-drop ALL`. The one-shot account setup
-container stays root so it can write passwd and sudoers. It does not
-receive those flags. The
+beyond that cap. A job container is created with `--security-opt
+no-new-privileges` and `--cap-drop ALL`. A service container is
+created with `--security-opt no-new-privileges` and keeps the engine
+default capability set, including `CAP_CHOWN`. It does not receive
+`--cap-drop` or `--cap-add`. There is no workflow field that changes
+that set. The one-shot account setup container stays root so it can
+write passwd and sudoers. It does not receive those flags. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the engine socket this process already uses, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -85,7 +88,8 @@ hostname. Containers on that network reach each other without a published
 host port. `credentials`, `volumes`, `options`, and `ports` are rejected.
 GitHub warns that `--network` is not supported in service `options`; this
 engine does not accept the key. The service container does not receive the
-engine socket, the workspace, or privilege. It is ready when it is running,
+engine socket, the workspace, or a capability outside the engine default
+set. It is ready when it is running,
 or healthy when the image defines a health check. If it exits, or it is not
 ready before the job deadline, setup fails and steps do not run. The wait
 uses that deadline. There is no separate health timeout. Cancel and restart
@@ -1390,7 +1394,7 @@ def _account_setup_args(reference, account):
     """Return `docker run` args that write passwd and sudoers as root.
 
     This container is not a job. It keeps its capabilities so `chown`
-    can finish. The job container receives `_isolation_args` instead.
+    can finish. The job container receives `_job_isolation_args` instead.
     """
 
     return [
@@ -1441,8 +1445,8 @@ def _limit_args():
     ]
 
 
-def _isolation_args():
-    """Return the privilege flags applied to every job and service container.
+def _job_isolation_args():
+    """Drop every capability and refuse new privileges for a job container.
 
     The account-setup container is separate. It runs as root so it can
     write passwd and sudoers, and it does not receive these flags.
@@ -1453,6 +1457,21 @@ def _isolation_args():
         "no-new-privileges",
         "--cap-drop",
         "ALL",
+    ]
+
+
+def _service_isolation_args():
+    """Keep the engine default capability set for a service container.
+
+    That set includes ``CAP_CHOWN``, so a root entrypoint can chown a
+    data directory. ``no-new-privileges`` blocks a setuid gain above
+    the capabilities the process already has. There is no workflow
+    field for a different set, and ``options`` stays rejected.
+    """
+
+    return [
+        "--security-opt",
+        "no-new-privileges",
     ]
 
 
@@ -1483,7 +1502,7 @@ def _create_args(
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         *_limit_args(),
-        *_isolation_args(),
+        *_job_isolation_args(),
     ]
     if socket_path is not None:
         # The engine socket is often mode 0660. The host gid opens a native
@@ -1769,7 +1788,7 @@ def _retire_services(docker, job_name, service_names, network_name, connected):
 
 
 def _service_create_args(service_name, network_name, service, job_name):
-    """Build `docker create` args. No socket, workspace, user, or privilege."""
+    """Build `docker create` args. No socket, workspace, user, or added capability."""
 
     args = [
         "create",
@@ -1784,7 +1803,7 @@ def _service_create_args(service_name, network_name, service, job_name):
         "--label",
         f"rookrunner.owner={job_name}",
         *_limit_args(),
-        *_isolation_args(),
+        *_service_isolation_args(),
     ]
     for key in sorted(service.get("env") or {}):
         args.extend(["--env", f"{key}={service['env'][key]}"])
