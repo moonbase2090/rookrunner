@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -275,3 +276,72 @@ class RunQuotingTests(unittest.TestCase):
             check_step_run("echo ${{ env.MSG }}", "pwsh")
         self.assertEqual(str(raised.exception), "run is not accepted")
         check_step_run("echo hi", "pwsh")
+
+    def test_an_executed_run_value_stays_data(self):
+        payload = "$(printf INJECTED >&2)"
+        values = {"env": {"MSG": payload}}
+        rendered = quote_run_expressions("printf '%s\\n' ${{ env.MSG }}", values, "bash")
+        self.assertEqual(rendered, "printf '%s\\n' '" + payload + "'")
+        completed = subprocess.run(
+            ["bash", "-c", rendered],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, payload + "\n")
+        self.assertNotIn("INJECTED", completed.stderr)
+        quoted = quote_run_expressions("printf '%s\\n' \"${{ env.MSG }}\"", values, "bash")
+        completed = subprocess.run(
+            ["bash", "-c", quoted],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, payload + "\n")
+        self.assertNotIn("INJECTED", completed.stderr)
+
+    def test_bash_c_is_refused_before_the_child_runs(self):
+        source = "bash -c \"printf 'child ran\\n' ${{ env.MSG }}\""
+        values = {"env": {"MSG": "$(printf INJECTED >&2)"}}
+        with self.assertRaises(ExprError) as raised:
+            quote_run_expressions(source, values, "bash")
+        self.assertEqual(str(raised.exception), "run is not accepted")
+        with self.assertRaises(ExprError) as raised:
+            _render_run(source, values, "bash", None)
+        self.assertEqual(str(raised.exception), "run is not accepted")
+        with self.assertRaises(ExprError) as raised:
+            check_step_run(source, None)
+        self.assertEqual(str(raised.exception), "run is not accepted")
+
+    def test_eval_and_sh_c_are_refused(self):
+        for source in (
+            'eval "echo ${{ env.MSG }}"',
+            "eval ${{ env.MSG }}",
+            "sh -c 'echo ${{ env.MSG }}'",
+            'sh -c "echo ${{ env.MSG }}"',
+            '/bin/bash -lc "echo ${{ env.MSG }}"',
+            'env bash -c "echo ${{ env.MSG }}"',
+            'echo $(bash -c "printf %s ${{ env.MSG }}")',
+            'echo `bash -c "printf %s ${{ env.MSG }}"`',
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(ExprError) as raised:
+                    check_step_run(source, "bash")
+                self.assertEqual(str(raised.exception), "run is not accepted")
+
+    def test_a_shell_command_without_c_stays_quoted(self):
+        values = {"env": {"MSG": "; id"}}
+        self.assertEqual(
+            quote_run_expressions("bash script.sh ${{ env.MSG }}", values, "bash"),
+            "bash script.sh '; id'",
+        )
+        self.assertEqual(
+            quote_run_expressions("echo ${{ env.MSG }}\nbash -c 'printf ok'\n", values, "bash"),
+            "echo '; id'\nbash -c 'printf ok'\n",
+        )
+        self.assertEqual(
+            quote_run_expressions('echo "${{ env.MSG }} eval"', {"env": {"MSG": "ok"}}, "bash"),
+            'echo "ok eval"',
+        )

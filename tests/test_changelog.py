@@ -16,6 +16,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
         self.assertIn("A pull request that changes a workflow file is refused.", PROSE)
         self.assertIn("A bash or sh `run` script quotes each `${{ }}` value.", PROSE)
+        self.assertIn("An expression in `eval` or in a shell `-c` command is refused.", PROSE)
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_1_records_the_tag_fetch_fix(self):

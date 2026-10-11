@@ -46,7 +46,8 @@ A bash or sh `run` script does not insert a `${{ }}` value as raw
 text. An unquoted value is single-quoted. A value already inside
 double quotes is escaped. A value already inside single quotes
 escapes `'`. Another shell, or a context the script cannot prove,
-is refused.
+is refused. An expression in `eval` or in a shell `-c` command is
+refused.
 
 A pull request is tested from `refs/pull/<number>/merge`. When that
 pull request changes a workflow file, or that diff cannot be read,

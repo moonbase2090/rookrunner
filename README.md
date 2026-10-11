@@ -67,7 +67,8 @@ head.
 A bash or sh `run` script quotes each `${{ }}` value. An unquoted
 value is single-quoted. A value already inside double quotes is
 escaped. A value already inside single quotes escapes `'`. Another
-shell, or a context the script cannot prove, is refused.
+shell, or a context the script cannot prove, is refused. An expression
+in `eval` or in a shell `-c` command is refused.
 
 ## Try the development contract
 

@@ -2131,7 +2131,8 @@ characters and inserts the string form of each `${{ }}`. A step
 `run` for bash or sh quotes that string instead: an unquoted value is
 single-quoted, a double-quoted value is escaped, and a single-quoted
 value escapes `'`. Another shell, or a context the lexer cannot
-prove, is refused. One expression
+prove, is refused. An expression in `eval` or in a shell `-c`
+command is refused. One expression
 that is the whole stripped string drops the surrounding whitespace.
 `null` is empty. `true` and `false` are those words. The inserted text
 is not scanned again. An unclosed expression, a nested `${{` outside a
