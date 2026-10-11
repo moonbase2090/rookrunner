@@ -199,8 +199,9 @@ The secrets design does not change this post
 
 ## Host control
 
-All-command `NOPASSWD` on the P6 image, together with its Docker
-client and `--docker-socket`, is control of the host engine
+`--passwordless-sudo` writes all-command `NOPASSWD` for the caller.
+Together with the Docker client and `--docker-socket`, that is
+control of the host engine
 ([runner image](runner-image.md)). This post does not mount the key
 directory into the job, and it does not put the installation token in
 the job. A job on a worker started with `--docker-socket` can still

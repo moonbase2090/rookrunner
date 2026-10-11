@@ -214,8 +214,9 @@ This design adds no path that runs them.
 
 https://docs.github.com/en/actions/reference/security/secure-use
 
-All-command `NOPASSWD` on the P6 image, together with its Docker
-client and `--docker-socket`, is control of the host engine
+`--passwordless-sudo` writes all-command `NOPASSWD` for the caller.
+Together with the Docker client and `--docker-socket`, that is
+control of the host engine
 ([runner image](runner-image.md)). The step uid is the caller uid.
 The container is not privileged. A secret value or a `GITHUB_TOKEN`
 that reaches a step on that worker can be copied to the host. The

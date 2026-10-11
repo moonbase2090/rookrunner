@@ -5,11 +5,13 @@
 This is the library later worker code can call. It is not a protocol method.
 The caller supplies the image digest. This module does not select a default
 image. When `runner_image` is that same digest, this module does not pull
-it. It writes the caller uid and passwordless sudo into the attempt
-directory `runner-account` and bind-mounts those files read-only. The
-job container drops every capability and sets no-new-privileges, so
-that sudoers file cannot raise the step's privileges. A different
-digest keeps today's image.
+it. It writes the caller uid into the attempt directory
+`runner-account` and bind-mounts that passwd file read-only.
+Passwordless sudo is off unless the caller passes `passwordless_sudo`.
+The job container drops every capability and sets no-new-privileges,
+so a step cannot gain privileges through sudo. The opt-in writes a
+sudoers file, omits no-new-privileges, and keeps only `SETUID`,
+`SETGID`, and `AUDIT_WRITE`. A different digest keeps today's image.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -59,7 +61,10 @@ created with `--security-opt no-new-privileges` and keeps the engine
 default capability set, including `CAP_CHOWN`. It does not receive
 `--cap-drop` or `--cap-add`. There is no workflow field that changes
 that set. The one-shot account setup container stays root so it can
-write passwd and sudoers. It does not receive those flags. The
+write passwd. It writes sudoers only when passwordless sudo is
+requested, and it does not receive those flags. The default job
+cannot become root. The opt-in omits no-new-privileges and keeps only
+`SETUID`, `SETGID`, and `AUDIT_WRITE`. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the engine socket this process already uses, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -1358,43 +1363,58 @@ def _accept_actions(actions, needed):
     return root
 
 
-def _account_script(uid, gid):
-    """Write passwd and sudoers for one caller uid. Both numbers are integers."""
+def _account_script(uid, gid, passwordless_sudo=False):
+    """Write passwd for one caller uid. Write sudoers only when asked.
 
-    return (
-        "set -eu\n"
-        "command -v sudo >/dev/null || exit 2\n"
-        "cp /etc/passwd /runner-account/passwd\n"
-        "chown 0:0 /runner-account/passwd\n"
-        "chmod 0644 /runner-account/passwd\n"
-        f"uid={uid}\n"
-        f"gid={gid}\n"
-        'line=$(grep -E "^[^:]*:[^:]*:$uid:" /runner-account/passwd | head -n 1 || true)\n'
-        'if [ -n "$line" ]; then\n'
-        "  name=${line%%:*}\n"
-        "else\n"
-        "  name=runner-$uid\n"
-        '  if grep -E -q "^$name:" /runner-account/passwd; then\n'
-        "    exit 3\n"
-        "  fi\n"
-        "  printf '%s::%s:%s::/github/home:/bin/sh\\n' "
-        '"$name" "$uid" "$gid" >> /runner-account/passwd\n'
-        "fi\n"
-        'case "$name" in\n'
-        "  *[!A-Za-z0-9_-]*) exit 4 ;;\n"
-        "esac\n"
-        "printf '%s ALL=(ALL) NOPASSWD: ALL\\n' "
-        '"$name" > /runner-account/sudoers\n'
-        "chown 0:0 /runner-account/sudoers\n"
-        "chmod 0440 /runner-account/sudoers\n"
+    Both numbers are integers. ``passwordless_sudo`` is false unless
+    the operator opted in.
+    """
+
+    if type(passwordless_sudo) is not bool:
+        _setup("passwordless sudo must be a boolean")
+    lines = ["set -eu\n"]
+    if passwordless_sudo:
+        lines.append("command -v sudo >/dev/null || exit 2\n")
+    lines.extend(
+        [
+            "cp /etc/passwd /runner-account/passwd\n",
+            "chown 0:0 /runner-account/passwd\n",
+            "chmod 0644 /runner-account/passwd\n",
+            f"uid={uid}\n",
+            f"gid={gid}\n",
+            ('line=$(grep -E "^[^:]*:[^:]*:$uid:" /runner-account/passwd | head -n 1 || true)\n'),
+            'if [ -n "$line" ]; then\n',
+            "  name=${line%%:*}\n",
+            "else\n",
+            "  name=runner-$uid\n",
+            '  if grep -E -q "^$name:" /runner-account/passwd; then\n',
+            "    exit 3\n",
+            "  fi\n",
+            "  printf '%s::%s:%s::/github/home:/bin/sh\\n' "
+            '"$name" "$uid" "$gid" >> /runner-account/passwd\n',
+            "fi\n",
+            'case "$name" in\n',
+            "  *[!A-Za-z0-9_-]*) exit 4 ;;\n",
+            "esac\n",
+        ]
     )
+    if passwordless_sudo:
+        lines.extend(
+            [
+                "printf '%s ALL=(ALL) NOPASSWD: ALL\\n' \"$name\" > /runner-account/sudoers\n",
+                "chown 0:0 /runner-account/sudoers\n",
+                "chmod 0440 /runner-account/sudoers\n",
+            ]
+        )
+    return "".join(lines)
 
 
-def _account_setup_args(reference, account):
-    """Return `docker run` args that write passwd and sudoers as root.
+def _account_setup_args(reference, account, passwordless_sudo=False):
+    """Return `docker run` args that write the caller account as root.
 
     This container is not a job. It keeps its capabilities so `chown`
     can finish. The job container receives `_job_isolation_args` instead.
+    Sudoers is written only when ``passwordless_sudo`` is true.
     """
 
     return [
@@ -1408,16 +1428,16 @@ def _account_setup_args(reference, account):
         f"type=bind,source={account},destination=/runner-account",
         reference,
         "-c",
-        _account_script(os.getuid(), os.getgid()),
+        _account_script(os.getuid(), os.getgid(), passwordless_sudo),
     ]
 
 
-def _prepare_runner_account(docker, reference, account, deadline):
+def _prepare_runner_account(docker, reference, account, deadline, passwordless_sudo=False):
     """Create the host identity files. `--rm` deletes the container, not the files."""
 
     code, _stdout, _stderr = _invoke_within(
         docker,
-        _account_setup_args(reference, account),
+        _account_setup_args(reference, account, passwordless_sudo),
         60,
         deadline,
     )
@@ -1445,13 +1465,30 @@ def _limit_args():
     ]
 
 
-def _job_isolation_args():
+def _job_isolation_args(passwordless_sudo=False):
     """Drop every capability and refuse new privileges for a job container.
 
     The account-setup container is separate. It runs as root so it can
-    write passwd and sudoers, and it does not receive these flags.
+    write the caller account, and it does not receive these flags.
+    ``passwordless_sudo`` omits no-new-privileges and keeps only
+    ``SETUID``, ``SETGID``, and ``AUDIT_WRITE``. ``sudo`` needs the
+    first two to change uid and gid. The third lets its audit plugin
+    run. Without that opt-in the job cannot become root.
     """
 
+    if type(passwordless_sudo) is not bool:
+        _setup("passwordless sudo must be a boolean")
+    if passwordless_sudo:
+        return [
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "SETUID",
+            "--cap-add",
+            "SETGID",
+            "--cap-add",
+            "AUDIT_WRITE",
+        ]
     return [
         "--security-opt",
         "no-new-privileges",
@@ -1490,6 +1527,7 @@ def _create_args(
     socket_temp=None,
     socket_volume=None,
     account=None,
+    passwordless_sudo=False,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1502,7 +1540,7 @@ def _create_args(
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         *_limit_args(),
-        *_job_isolation_args(),
+        *_job_isolation_args(passwordless_sudo),
     ]
     if socket_path is not None:
         # The engine socket is often mode 0660. The host gid opens a native
@@ -1564,13 +1602,18 @@ def _create_args(
             [
                 "--mount",
                 f"type=bind,source={account / 'passwd'},destination=/etc/passwd,readonly",
-                "--mount",
-                (
-                    f"type=bind,source={account / 'sudoers'},"
-                    "destination=/etc/sudoers.d/rookrunner,readonly"
-                ),
             ]
         )
+        if passwordless_sudo:
+            args.extend(
+                [
+                    "--mount",
+                    (
+                        f"type=bind,source={account / 'sudoers'},"
+                        "destination=/etc/sudoers.d/rookrunner,readonly"
+                    ),
+                ]
+            )
     args.extend(
         [
             reference,
@@ -2613,6 +2656,7 @@ def run_job(
     owner=None,
     network=DEFAULT_NETWORK,
     docker_socket=False,
+    passwordless_sudo=False,
     event_name=None,
     node24=None,
     actions=None,
@@ -2652,7 +2696,10 @@ def run_job(
     the container starts. `runner_image` is omitted, or one `sha256:`
     digest. When it is the job image, that digest is not pulled. One
     root container writes `runner-account` and the job bind-mounts
-    those files read-only. A different image does not.
+    the passwd file read-only. Passwordless sudo is off unless
+    `passwordless_sudo` is true. That opt-in also writes and mounts
+    a sudoers file and relaxes job isolation enough for `sudo` to
+    change uid. A different image does not.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
     or that volume.
@@ -2660,6 +2707,8 @@ def run_job(
 
     if network not in _NETWORKS:
         _setup("container network is not accepted")
+    if type(passwordless_sudo) is not bool:
+        _setup("passwordless sudo must be a boolean")
     runner_digest = None
     if runner_image is not None:
         if not isinstance(runner_image, str) or not _DIGEST.fullmatch(runner_image):
@@ -2719,7 +2768,7 @@ def run_job(
         account = None
         if runner_digest is not None and digest == runner_digest:
             account = runner_dirs["runner-account"]
-            _prepare_runner_account(docker_bin, reference, account, deadline)
+            _prepare_runner_account(docker_bin, reference, account, deadline, passwordless_sudo)
         if socket_path is not None:
             socket_volume, socket_temp = _socket_share(docker_bin, reference, deadline)
         attempt_token = _ATTEMPT.set(
@@ -2759,6 +2808,7 @@ def run_job(
                 socket_temp,
                 socket_volume,
                 account,
+                passwordless_sudo if account is not None else False,
             ),
             60,
             deadline,

@@ -691,6 +691,15 @@ def main():
             "The worker does not pull, build, or publish it."
         ),
     )
+    worker.add_argument(
+        "--passwordless-sudo",
+        action="store_true",
+        help=(
+            "write passwordless sudo for the caller uid on the runner image. "
+            "Off by default. The job can become root in its container. "
+            "With --docker-socket that is control of the host engine."
+        ),
+    )
     commands.add_parser("describe")
     commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
     commands.add_parser(
@@ -926,6 +935,7 @@ def main():
                 args.docker_socket,
                 node24=args.node24,
                 runner_image=args.runner_image,
+                passwordless_sudo=args.passwordless_sudo,
                 secrets=args.secrets,
                 github_repository=args.github_repository,
                 app_key=args.app_key,
