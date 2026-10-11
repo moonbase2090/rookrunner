@@ -30,6 +30,11 @@ egress, the copy also passes `--network bridge`. Cargo and pip need
 it. The digest stays on the host. The unit in this repository has
 no digest and does not pass `--network`.
 
+A host copy of the worker unit must set `NoNewPrivileges=yes`.
+The repository unit sets that directive. A copy that omits it
+is reported by systemd as `NoNewPrivileges=no` and must be set
+to `yes`. This page does not edit a running unit.
+
 ## Left out
 
 The host copy has no private-key path, no `--app-key`, no

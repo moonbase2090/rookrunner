@@ -64,6 +64,11 @@ same unit. [Linux host worker](linux-host-worker.md) records
 records the host's own image digest on the host copy. Linger stays
 off until that command is run on the host.
 
+A host copy of the worker unit must set `NoNewPrivileges=yes`.
+The repository unit sets that directive. A copy that omits it
+is reported by systemd as `NoNewPrivileges=no` and must be set
+to `yes`. This page does not edit a running unit.
+
 The poller stays a Mac launchd agent. Linux hosts still have no
 poll timer. Capability version stays 12.
 `.github/workflows/check.yml` is unchanged.

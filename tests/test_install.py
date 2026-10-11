@@ -10,6 +10,16 @@ PROSE = " ".join(TEXT.split())
 
 
 class InstallDocTests(unittest.TestCase):
+    def test_a_host_copy_must_set_no_new_privileges(self):
+        self.assertIn(
+            "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
+            "The repository unit sets that directive. "
+            "A copy that omits it is reported by systemd as "
+            "`NoNewPrivileges=no` and must be set to `yes`. "
+            "This page does not edit a running unit.",
+            PROSE,
+        )
+
     def test_an_upgrade_that_needs_egress_adds_network_bridge(self):
         self.assertIn(
             "add `--network bridge` to the host copy's `ExecStart` when jobs need egress.",

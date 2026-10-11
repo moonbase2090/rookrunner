@@ -14,6 +14,22 @@ DESIGN = ROOT / "docs" / "design" / "worker-unit.md"
 
 
 class WorkerUnitTests(unittest.TestCase):
+    def test_a_host_copy_must_set_no_new_privileges(self):
+        sentence = (
+            "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
+            "The repository unit sets that directive. "
+            "A copy that omits it is reported by systemd as "
+            "`NoNewPrivileges=no` and must be set to `yes`. "
+            "This page does not edit a running unit."
+        )
+        pages = (
+            DESIGN,
+            ROOT / "docs" / "planning" / "dogfood.md",
+        )
+        for path in pages:
+            prose = " ".join(path.read_text(encoding="utf-8").split())
+            self.assertIn(sentence, prose, str(path.name))
+
     def setUp(self):
         self.text = UNIT.read_text(encoding="utf-8")
 
