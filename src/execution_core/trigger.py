@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Decide whether a push, pull request, or schedule matches a workflow's `on`.
 

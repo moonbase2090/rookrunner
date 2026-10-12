@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Independent JSON Schema checks against the published v0 contract."""
 

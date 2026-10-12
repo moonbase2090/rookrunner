@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Read-only check that a captured snapshot still matches its manifest.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The second dogfood host uses the shared worker unit and enables linger.
 

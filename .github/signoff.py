@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Fail a pull request that changes a CODEOWNERS path without mb2090-signoff.
 

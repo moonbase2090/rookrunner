@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Job-token mint, delivery, and revocation against a local HTTP stub.
 

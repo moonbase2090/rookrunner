@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The poller posts rookrunner/signoff from CODEOWNERS and the sign-off label.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The install page names both 0.1.3 procedures and leaves the hosts alone."""
 
