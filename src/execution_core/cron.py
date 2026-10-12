@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Five-field UTC cron, with GitHub's day-of-month / day-of-week rule.
 

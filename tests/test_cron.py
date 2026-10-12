@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Cron matching and the one-tick catch-up rule. Times are UTC."""
 

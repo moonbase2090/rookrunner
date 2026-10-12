@@ -38,7 +38,7 @@ A due minute runs on the first poll at or after that minute. The engine does not
 ## Project boundaries
 
 This is an independent repository under Moonbase2090. `execution-platform` is a temporary directory name.
-Rookrunner is the working title. The final public name, CLI name, package identifier, and domain remain undecided. The project license is the Mozilla Public License, v. 2.0, in [LICENSE](LICENSE). The distribution name is `execution-core`.
+Rookrunner is the working title. The final public name, CLI name, package identifier, and domain remain undecided. The project license is the MIT License, in [LICENSE](LICENSE). The distribution name is `execution-core`.
 
 Local Actions is a reference implementation outside this repository. No source or configuration has been imported from it.
 Implementation choices in these documents are proposals unless explicitly marked as accepted.

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Run one planned job as sequential Bash steps in a caller-pinned container.
 

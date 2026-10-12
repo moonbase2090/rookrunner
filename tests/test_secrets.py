@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """File-backed step env, with, and run. HOME points at a temporary directory.
 

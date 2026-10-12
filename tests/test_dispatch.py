@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """One-shot workflow_dispatch against a local clone. No test contacts GitHub."""
 

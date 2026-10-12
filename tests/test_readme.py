@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The README states the license, the milestones, and the untrusted refusal."""
 
@@ -11,7 +11,7 @@ PROSE = " ".join(README.split())
 
 class ReadmeTests(unittest.TestCase):
     def test_license_is_mpl_2_0(self):
-        self.assertIn("Mozilla Public License, v. 2.0", PROSE)
+        self.assertIn("MIT License", PROSE)
         self.assertNotIn("project license remain undecided", PROSE)
         self.assertNotIn("A project license must be selected", PROSE)
 

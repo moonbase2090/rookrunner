@@ -31,7 +31,7 @@ This file does not reconstruct earlier milestones.
 - Job and service containers are created with a memory limit of 4g,
   no swap beyond that limit, a process limit of 1024, and a CPU limit
   of 2.
-- The project license is the Mozilla Public License, v. 2.0.
+- The project license is the MIT License.
 - `SECURITY.md` states the private reporting path, the socket and state
   modes, and that local mode is not a sandbox for a hostile repository.
 - The README records M3 as implemented, the license, the PyYAML 6.0.3

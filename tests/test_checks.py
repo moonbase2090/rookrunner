@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Check runs through a local HTTP stub and a fixture key under a temporary HOME.
 
