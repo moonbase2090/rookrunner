@@ -5,7 +5,7 @@ description: "Drive the Rookrunner worker CLI on an isolated state directory: la
 
 # Verify Rookrunner
 
-Rookrunner's primary surface is the local worker CLI, `.venv/bin/python -m execution_core`. A user starts one worker bound to a private state directory and a repository checkout, then submits work and reads JSON results. This skill drives that CLI. It does not drive the terminal dashboard, the read-only status page on `127.0.0.1:8765`, workflow containers, or GitHub posting.
+Rookrunner's primary surface is the local worker CLI, `.venv/bin/python -m execution_core`. A user starts one worker bound to a private state directory and a repository checkout, then submits work and reads JSON results. This skill drives that CLI. It does not drive the terminal dashboard, the read-only status page, workflow containers, or GitHub posting.
 
 The CLI imports PyYAML, which is a project dependency. From the checkout, `uv sync --locked` creates `.venv` with that dependency. Use `.venv/bin/python` for every command below. Python 3.11 or newer is required. `PYTHONPATH=src` keeps the checkout's source ahead of an installed copy. Do not pass `--docker-socket`, `--app-key`, `--secrets`, or a credential file. Do not read secret directories.
 
