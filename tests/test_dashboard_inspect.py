@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Terminal inspect view: snapshot, steps, log pages, and artifacts.
 

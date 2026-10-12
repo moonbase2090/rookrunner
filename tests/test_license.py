@@ -1,6 +1,6 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
-"""The MPL-2.0 grant is the license file, the project field, and the headers."""
+"""The MIT grant is the license file, the project field, and the headers."""
 
 import hashlib
 import tomllib
@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SPDX = "# SPDX-License-Identifier: MPL-2.0"
-LICENSE_SHA256 = "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+SPDX = "# SPDX-License-Identifier: MIT"
+LICENSE_SHA256 = "249262157e555480f370a1ecf08962532aa511f2149c1f002624a3ccf6740461"
 
 
 def python_files():
@@ -20,17 +20,16 @@ def python_files():
 
 
 class LicenseTests(unittest.TestCase):
-    def test_license_file_is_the_mpl_2_0_text(self):
+    def test_license_file_is_the_mit_text(self):
         data = (ROOT / "LICENSE").read_bytes()
         self.assertEqual(hashlib.sha256(data).hexdigest(), LICENSE_SHA256)
         text = data.decode("utf-8")
-        self.assertIn("Mozilla Public License Version 2.0", text)
-        self.assertIn("https://mozilla.org/MPL/2.0/", text)
-        self.assertIn("Exhibit A - Source Code Form License Notice", text)
+        self.assertIn("MIT License", text)
+        self.assertIn("Moonbase 2090 LLC", text)
 
-    def test_project_metadata_names_mpl_2_0(self):
+    def test_project_metadata_names_mit(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())
-        self.assertEqual(project["project"]["license"], "MPL-2.0")
+        self.assertEqual(project["project"]["license"], "MIT")
 
     def test_notice_names_pyyaml_and_skips_development_tools(self):
         text = (ROOT / "NOTICE").read_text()

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """CHANGELOG records 0.1.3 and 0.1.1 and still has no 0.1.0 section."""
 
@@ -20,7 +20,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("That run is skipped and its submission stays.", PROSE)
         self.assertIn("The source distribution omits `tests` and `scripts`.", PROSE)
         self.assertIn("without a header line in `checks.py`.", PROSE)
-        self.assertIn("Mozilla Public License, v. 2.0", PROSE)
+        self.assertIn("MIT License", PROSE)
         self.assertIn(
             "A host copy of the worker unit must set `NoNewPrivileges=yes`. "
             "The repository unit sets that directive. "

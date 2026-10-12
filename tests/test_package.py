@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The 0.1.3 tree builds a wheel and a source tarball."""
 
@@ -52,7 +52,7 @@ class PackageTests(unittest.TestCase):
                 metadata = archive.read("execution_core-0.1.3.dist-info/METADATA").decode()
                 checks = archive.read("execution_core/checks.py").decode()
             self.assertIn("Version: 0.1.3", metadata)
-            self.assertIn("License-Expression: MPL-2.0", metadata)
+            self.assertIn("License-Expression: MIT", metadata)
             self.assertIn("Requires-Dist: pyyaml==6.0.3", metadata)
             header = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
             self.assertNotRegex(checks, header)

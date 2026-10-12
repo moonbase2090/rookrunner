@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Startup lock for worker --docker-socket, --secrets, and --app-key.
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """Evaluator for step `if`, job `if`, job outputs, and text expressions.
 

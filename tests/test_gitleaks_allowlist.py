@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: MIT
 
 """The gitleaks allowlist names fixture text and still rejects a key body."""
 

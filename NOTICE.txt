@@ -1,0 +1,8 @@
+rookrunner
+
+Copyright (c) 2026 Moonbase 2090 LLC
+
+Licensed under the MIT License. See LICENSE in the repository root.
+
+Third-party dependencies and bundled assets retain their existing licenses and
+copyright notices.
