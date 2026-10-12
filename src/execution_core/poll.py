@@ -69,6 +69,9 @@ Local rules, not GitHub-equivalence claims:
   ``mb2090-signoff`` is a failure. No CODEOWNERS blob is skipped and
   recorded. The pass does not apply the label and does not run
   ``signoff.yml``.
+- A terminal run whose snapshot is not readable is skipped. The
+  submission stays, and a later pass tries that run again. The pass
+  still posts every later run. Any other status refusal stops the pass.
 - After posts and before the final state save, the pass calls
   ``poll.record`` on the single caller and on each place whose origin
   was accepted. ``PollError`` and ``OSError`` from that call are a
@@ -149,6 +152,7 @@ _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
+_SNAPSHOT_UNREADABLE = "snapshot is not readable"
 _SIGNOFF_CONTEXT = "rookrunner/signoff"
 _GATE = None
 _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
@@ -2464,7 +2468,17 @@ class Pass:
         }
         if self.app_key:
             params["checks"] = True
-        decision = self.caller("run.status", params)
+        # A removed snapshot cannot be posted. Keep the submission and
+        # continue so a later run still posts. A later pass tries again.
+        try:
+            decision = self.caller("run.status", params)
+        except PollError as exc:
+            if exc.kind == "STATUS_REFUSED" and str(exc) == _SNAPSHOT_UNREADABLE:
+                self.result["skipped"].append(
+                    {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
+                )
+                return
+            raise
         if decision["action"] == "skip":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}

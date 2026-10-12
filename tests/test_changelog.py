@@ -13,6 +13,11 @@ class ChangelogTests(unittest.TestCase):
     def test_format_and_unreleased_section(self):
         self.assertIn("The format is Keep a Changelog.", TEXT)
         self.assertIn("## [Unreleased]", TEXT)
+        self.assertIn(
+            "A poll pass keeps going when an older claimed run has no readable snapshot.",
+            PROSE,
+        )
+        self.assertIn("That run is skipped and its submission stays.", PROSE)
         self.assertIn("The source distribution omits `tests` and `scripts`.", PROSE)
         self.assertIn("without a header line in `checks.py`.", PROSE)
         self.assertIn("Mozilla Public License, v. 2.0", PROSE)
