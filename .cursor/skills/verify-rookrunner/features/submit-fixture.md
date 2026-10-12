@@ -21,9 +21,9 @@ Preconditions:
 - Launch and Doctor have succeeded for this `STATE`.
 - The submission key `verify-${RUN_ID}` has not been used on this worker.
 
-- **Submit.** Run `.venv/bin/python -m execution_core --state "$STATE" submit --backend development --key "verify-${RUN_ID}" --delay-ms 200 --output "verify-fixture-ok" >"$EVIDENCE/submit.json"`. Exit code is 0 and `result.run_id` is present.
-- **Wait.** Poll `.venv/bin/python -m execution_core --state "$STATE" get "$RUN_ID_VALUE" >"$EVIDENCE/get.json"` until `result.state` is `succeeded`. Stop if 30 seconds pass.
-- **Proof.** `result.exit_code` is 0 and `result.state` is `succeeded`. A second `get` writes the same `run_id`, `state`, and `exit_code`.
+- **Submit.** Run `capture submit .venv/bin/python -m execution_core --state "$STATE" submit --backend development --key "verify-${RUN_ID}" --delay-ms 200 --output "verify-fixture-ok"`. `submit.exit` is `0` and `submit.stdout` has `result.run_id`.
+- **Wait.** Poll `capture get .venv/bin/python -m execution_core --state "$STATE" get "$RUN_ID_VALUE"` until `get.stdout` has `result.state` `succeeded`. Stop if 30 seconds pass. Each poll overwrites the four `get.*` evidence files.
+- **Proof.** `get.exit` is `0`. `result.exit_code` is 0 and `result.state` is `succeeded`. Run `capture get-again .venv/bin/python -m execution_core --state "$STATE" get "$RUN_ID_VALUE"`. `get-again.exit` is `0` and `get-again.stdout` has the same `run_id`, `state`, and `exit_code`. `submit.command`, `get.command`, and `get-again.command` record the argv, and the matching `.stderr` files exist.
 
 ## Gotchas
 

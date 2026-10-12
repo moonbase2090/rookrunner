@@ -20,9 +20,9 @@ Preconditions:
 - Launch and Doctor have succeeded for this `STATE`.
 - Use a submission key that this worker has not seen, such as `verify-cancel-${RUN_ID}`.
 
-- **Start a slow fixture.** Run `.venv/bin/python -m execution_core --state "$STATE" submit --backend development --key "verify-cancel-${RUN_ID}" --delay-ms 5000 --output "verify-cancel" >"$EVIDENCE/cancel-submit.json"`. Exit code is 0.
-- **Cancel.** Run `.venv/bin/python -m execution_core --state "$STATE" cancel "$RUN_ID_VALUE" >"$EVIDENCE/cancel.json"`. Exit code is 0, `result.state` is `cancelled`, and `result.exit_code` is null.
-- **Proof.** Run `get` again into `$EVIDENCE/cancel-get.json`. `result.state` is still `cancelled` and `result.exit_code` is still null.
+- **Start a slow fixture.** Run `capture cancel-submit .venv/bin/python -m execution_core --state "$STATE" submit --backend development --key "verify-cancel-${RUN_ID}" --delay-ms 5000 --output "verify-cancel"`. `cancel-submit.exit` is `0`.
+- **Cancel.** Run `capture cancel .venv/bin/python -m execution_core --state "$STATE" cancel "$RUN_ID_VALUE"`. `cancel.exit` is `0`. In `cancel.stdout`, `result.state` is `cancelled` and `result.exit_code` is null.
+- **Proof.** Run `capture cancel-get .venv/bin/python -m execution_core --state "$STATE" get "$RUN_ID_VALUE"`. `cancel-get.exit` is `0`. In `cancel-get.stdout`, `result.state` is still `cancelled` and `result.exit_code` is still null. `cancel.command` and `cancel-get.command` record the argv, and the matching `.stderr` files exist.
 
 ## Gotchas
 

@@ -26,6 +26,8 @@ STATE="$VERIFY_ROOT/state"
 EVIDENCE="$VERIFY_ROOT/evidence"
 REPO="$(pwd -P)"
 mkdir -p "$EVIDENCE"
+printf '%s\n' .venv/bin/python -m execution_core --state "$STATE" worker --repository "$REPO" --network none \
+  >"$EVIDENCE/worker.command"
 .venv/bin/python -m execution_core --state "$STATE" worker --repository "$REPO" --network none \
   >"$EVIDENCE/worker.stdout" 2>"$EVIDENCE/worker.stderr" &
 WORKER_PID=$!
@@ -39,17 +41,24 @@ Use `/tmp` for `VERIFY_ROOT`. A long temporary directory makes `worker.sock` exc
 
 ## Doctor
 
-Run this before the first drive and again after any failed drive. It is read-only.
+Run this before the first drive and again after any failed drive. It is read-only. Define `capture` from Evidence before the block below.
 
 ```bash
 kill -0 "$WORKER_PID"
-.venv/bin/python -m execution_core --state "$STATE" describe >"$EVIDENCE/describe.json"
-.venv/bin/python - "$REPO" "$EVIDENCE/describe.json" <<'PY'
+capture describe .venv/bin/python -m execution_core --state "$STATE" describe
+.venv/bin/python - "$REPO" "$EVIDENCE" <<'PY'
 import json
 import sys
+from pathlib import Path
 
-repository, path = sys.argv[1:]
-reply = json.load(open(path))
+repository = sys.argv[1]
+evidence = Path(sys.argv[2])
+if (evidence / "describe.exit").read_text().strip() != "0":
+    raise SystemExit("describe exit is not 0")
+command = (evidence / "describe.command").read_text().splitlines()
+if command[-1:] != ["describe"]:
+    raise SystemExit("describe command was not recorded")
+reply = json.loads((evidence / "describe.stdout").read_text())
 result = reply["result"]
 if result["ready"] is not True:
     raise SystemExit("worker is not ready")
@@ -68,22 +77,37 @@ The harness is the CLI itself. Commands are literal. The feature map lists the u
 
 Set `PYTHONPATH`, `STATE`, `EVIDENCE`, `REPO`, and `WORKER_PID` from Launch before any command below. Clients print one JSON object on stdout. Exit 0 means the protocol call succeeded. A run can still finish with a non-zero fixture exit code. `follow` is the exception: it exits 0 only when the run state is `succeeded` and `exit_code` is 0.
 
-Development fixture submit:
+Define `capture` from the Evidence section before any client call. Development fixture submit:
 
 ```bash
-.venv/bin/python -m execution_core --state "$STATE" submit \
+capture submit .venv/bin/python -m execution_core --state "$STATE" submit \
   --backend development \
   --key "verify-${RUN_ID}" \
   --delay-ms 200 \
-  --output "verify-fixture-ok" \
-  >"$EVIDENCE/submit.json"
+  --output "verify-fixture-ok"
 ```
 
-Read `result.run_id` from that file. Then `get` that id until `result.state` is `succeeded` and `result.exit_code` is 0. Decode `logs` `result.data_base64` and require the text `verify-fixture-ok`.
+Read `result.run_id` from `$EVIDENCE/submit.stdout`. Then `capture get` that id until `result.state` is `succeeded` and `result.exit_code` is 0. The wait overwrites `get.command`, `get.stdout`, `get.stderr`, and `get.exit`. Decode `logs` `result.data_base64` and require the text `verify-fixture-ok`.
 
 ## Evidence
 
-Write proof under `$EVIDENCE` (`$VERIFY_ROOT/evidence`). Keep the command, stdout, stderr, and exit code for each client call. For a mutation, also keep a second read (`get` or `logs`) that shows the stored result. Do not treat a successful `submit` by itself as proof that the fixture ran.
+Write proof under `$EVIDENCE` (`$VERIFY_ROOT/evidence`). Every client call goes through `capture`, which stores the argument list, stdout, stderr, and exit code:
+
+```bash
+capture() {
+  name="$1"
+  shift
+  printf '%s\n' "$@" >"$EVIDENCE/${name}.command"
+  set +e
+  "$@" >"$EVIDENCE/${name}.stdout" 2>"$EVIDENCE/${name}.stderr"
+  status=$?
+  set -e
+  printf '%s\n' "$status" >"$EVIDENCE/${name}.exit"
+  return "$status"
+}
+```
+
+`name.command` is one argv entry per line. `name.exit` is the numeric status. `name.stderr` is kept even when it is empty. For a mutation, also keep a second read (`get` or `logs`) that shows the stored result. Do not treat a successful `submit` by itself as proof that the fixture ran.
 
 The development fixture does not use a test-only HTTP endpoint. `--output` is the user-supplied fixture text, and the proof is that `logs` returns that text after `get` reports success.
 
@@ -93,11 +117,15 @@ Stop only the worker this run started. Do not match on the process name.
 
 ```bash
 kill "$WORKER_PID"
-wait "$WORKER_PID" || true
+set +e
+wait "$WORKER_PID"
+status=$?
+set -e
+printf '%s\n' "$status" >"$EVIDENCE/worker.exit"
 rm -rf "$STATE"
 ```
 
-Leave `$EVIDENCE` in place. A later check must still find `describe.json` and the feature proof files after `$STATE` is gone.
+Leave `$EVIDENCE` in place. A later check must still find `describe.command`, `describe.stdout`, `describe.stderr`, and `describe.exit` after `$STATE` is gone.
 
 ## Helpers
 

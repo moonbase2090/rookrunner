@@ -16,7 +16,7 @@ This directory is the maintained source for verifying the user-facing worker CLI
 - Start every recipe from the baseline worker unless its preconditions say otherwise.
 - Treat every command as literal. Keep flags and the fixture output string unchanged.
 - Run actions through `.venv/bin/python -m execution_core --state "$STATE"`.
-- Client stdout is one JSON object. Save it under `$EVIDENCE` before parsing it.
+- Run each client call through `capture` from the skill Evidence section. That stores `name.command`, `name.stdout`, `name.stderr`, and `name.exit`.
 - Do not remove proof files during cleanup.
 
 ## Proof and skip reporting

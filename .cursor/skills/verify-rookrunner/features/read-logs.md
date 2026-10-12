@@ -19,8 +19,8 @@ Preconditions:
 - The submit-fixture recipe has produced a succeeded run whose `--output` was `verify-fixture-ok`.
 - `RUN_ID_VALUE` is that `result.run_id`.
 
-- **Read the log.** Run `.venv/bin/python -m execution_core --state "$STATE" logs "$RUN_ID_VALUE" --limit 1024 >"$EVIDENCE/logs.json"`. Exit code is 0.
-- **Proof.** Decode `result.data_base64` as UTF-8. The text is `verify-fixture-ok`. `result.end_of_stream` is true.
+- **Read the log.** Run `capture logs .venv/bin/python -m execution_core --state "$STATE" logs "$RUN_ID_VALUE" --limit 1024`.
+- **Proof.** `logs.exit` is `0`, `logs.command` lists the argv, and `logs.stderr` exists. Decode `result.data_base64` from `logs.stdout` as UTF-8. The text is `verify-fixture-ok`. `result.end_of_stream` is true.
 
 ## Gotchas
 

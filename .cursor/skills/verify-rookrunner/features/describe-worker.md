@@ -19,8 +19,8 @@ Preconditions:
 - Launch and Doctor have succeeded for this `STATE` and `WORKER_PID`.
 - `REPO` is the physical path passed to `worker --repository`.
 
-- **Ask the worker.** Run `.venv/bin/python -m execution_core --state "$STATE" describe >"$EVIDENCE/describe.json"`. Exit code is 0.
-- **Proof.** `result.ready` is true, `result.repository` equals `REPO`, and `result.capabilities` contains `development.fixture`.
+- **Ask the worker.** Run `capture describe .venv/bin/python -m execution_core --state "$STATE" describe`.
+- **Proof.** `describe.exit` is `0`, `describe.command` ends with `describe`, and `describe.stderr` exists. In `describe.stdout`, `result.ready` is true, `result.repository` equals `REPO`, and `result.capabilities` contains `development.fixture`.
 
 ## Gotchas
 
