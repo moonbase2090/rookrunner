@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll pass keeps going when an older claimed run has no readable
+  snapshot. That run is skipped and its submission stays. Later runs
+  still post. Any other status refusal stops the pass.
 - The source distribution omits `tests` and `scripts`. The published
   package keeps the same private-key header check without a header
   line in `checks.py`.

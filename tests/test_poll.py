@@ -8,6 +8,7 @@ queued until the test changes it or the 24-hour rule cancels it.
 
 import json
 import os
+import shutil
 from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -691,6 +692,77 @@ class PollTests(unittest.TestCase):
         self.assertNotIn("diff_unavailable", self.submits[0])
         self.assertEqual(self.submits[0]["event"]["before"], tip)
         self.assertEqual(self.submits[0]["event"]["after"], new)
+
+    def test_a_missing_snapshot_does_not_stop_a_later_terminal_post(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        first = self.poll()
+        older = first["submitted"][0]["run_id"]
+        record = self.worker.get(older)
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+        self.assertTrue(snapshot.is_dir())
+        shutil.rmtree(snapshot)
+
+        note = self.seed / "later.txt"
+        note.write_text("later\n")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "later",
+        )
+        _git(self.seed, "push", "origin", "main")
+        new = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": new}}]
+        self.server.etags["branches"] = "branches-2"
+        second = self.poll()
+        self.assertEqual(
+            [item for item in second["skipped"] if item["reason"] == "snapshot_unreadable"],
+            [{"reason": "snapshot_unreadable", "run_id": older}],
+        )
+        newer = second["submitted"][0]["run_id"]
+        self.assertEqual(self.runs(), 2)
+        record = self.worker.get(newer)
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        self.server.requests.clear()
+        third = self.poll()
+        self.assertEqual(
+            [json.loads(item["body"]) for item in self.posts()],
+            [{"context": "rookrunner/check.yml/check", "state": "success"}],
+        )
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + new))
+        self.assertEqual(
+            [item for item in third["skipped"] if item["reason"] == "snapshot_unreadable"],
+            [{"reason": "snapshot_unreadable", "run_id": older}],
+        )
+        self.assertEqual([item["action"] for item in third["statuses"]], ["posted"])
+        self.assertEqual(third["statuses"][0]["run_id"], newer)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual([item["run_id"] for item in saved["submissions"]], [older, newer])
+        self.server.requests.clear()
+        fourth = self.poll()
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(self.runs(), 2)
+        self.assertEqual(
+            [item for item in fourth["skipped"] if item["reason"] == "snapshot_unreadable"],
+            [{"reason": "snapshot_unreadable", "run_id": older}],
+        )
+        self.assertEqual(
+            fourth["statuses"],
+            [{"run_id": newer, "state": "success", "action": "skip"}],
+        )
 
     def test_a_fork_and_a_missing_merge_ref_run_nothing(self):
         self.server.pulls = [
