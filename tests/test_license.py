@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPDX = "# SPDX-License-Identifier: MIT"
-LICENSE_SHA256 = "249262157e555480f370a1ecf08962532aa511f2149c1f002624a3ccf6740461"
+LICENSE_SHA256 = "4e67c803cc1ddefb7fc79ec9792e4186dc61b64b061e6c614c27047f5e8ba69d"
 
 
 def python_files():
