@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.3. A published release section
+The current package version is 0.1.4. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.4] - 2026-10-14
 
 - A poll pass keeps going when an older claimed run has no readable
   snapshot. That run is skipped and its submission stays. Later runs
@@ -36,6 +38,8 @@ This file does not reconstruct earlier milestones.
   modes, and that local mode is not a sandbox for a hostile repository.
 - The README records M3 as implemented, the license, the PyYAML 6.0.3
   startup requirement, and the untrusted-code refusal.
+- The package version is 0.1.4. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.3] - 2026-10-11
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.3 and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -59,8 +59,17 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("its first parent is the listed base", PROSE)
 
+    def test_0_1_4_records_the_poll_skip_and_the_mit_license(self):
+        self.assertIn("The current package version is 0.1.4.", TEXT)
+        self.assertIn("## [0.1.4] - 2026-10-14", TEXT)
+        section = TEXT.split("## [0.1.4] - 2026-10-14", 1)[1].split("## [0.1.3]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("That run is skipped and its submission stays.", prose)
+        self.assertIn("The project license is the MIT License.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
+
     def test_0_1_3_records_the_network_default_and_the_upgrade(self):
-        self.assertIn("The current package version is 0.1.3.", TEXT)
         self.assertIn("## [0.1.3] - 2026-10-11", TEXT)
         self.assertNotIn("## [0.1.2]", TEXT)
         section = TEXT.split("## [0.1.3] - 2026-10-11", 1)[1].split("## [0.1.1]", 1)[0]
