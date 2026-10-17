@@ -2,12 +2,31 @@
 # Check formatting of staged Python blobs under src/ and tests/.
 # Ruff reads the index blob, not the working tree, so a formatted
 # worktree cannot hide an unformatted staged file.
+# Names come from NUL-delimited git output. A newline inside a path
+# would split a line-oriented list and skip that blob, so reject it.
 
 set -u
 
-list=$(mktemp) || exit 1
-trap 'rm -f "$list"' EXIT
-git diff --cached --name-only --diff-filter=ACMR | grep -E '^(src|tests)/.+\.py$' > "$list" || true
+raw=$(mktemp) || exit 1
+list=$(mktemp) || {
+  rm -f "$raw"
+  exit 1
+}
+trap 'rm -f "$raw" "$list"' EXIT
+
+if ! git diff --cached --name-only -z --diff-filter=ACMR > "$raw"; then
+  printf '%s\n' 'pre-commit: git diff failed'
+  exit 1
+fi
+
+orig=$(wc -c < "$raw" | tr -d ' ')
+plain=$(tr -d '\n' < "$raw" | wc -c | tr -d ' ')
+if [ "$orig" != "$plain" ]; then
+  printf '%s\n' 'pre-commit: a staged path contains a newline'
+  exit 1
+fi
+
+tr '\0' '\n' < "$raw" | grep -E '^(src|tests)/.+\.py$' > "$list" || true
 if [ ! -s "$list" ]; then
   exit 0
 fi

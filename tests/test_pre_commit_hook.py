@@ -120,6 +120,29 @@ class PreCommitHookTests(unittest.TestCase):
         self.assertEqual(staged.stdout, "x = 1\n")
         self.assertEqual((self.repo / "src" / "partial.py").read_text(encoding="utf-8"), "x=1\n")
 
+    def test_a_newline_in_a_staged_path_is_rejected(self):
+        source = self.repo / "src"
+        source.mkdir()
+        (source / "foo\nbar.py").write_text("x=1\n", encoding="utf-8")
+        added = subprocess.run(
+            ["git", "add", "--", "src/foo\nbar.py"],
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(added.returncode, 0, added.stderr)
+        result = self.hook()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pre-commit: a staged path contains a newline\n", result.stdout)
+        listed = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=self.repo,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn(b"src/foo\nbar.py", listed.stdout)
+
     def test_install_hooks_sets_the_hooks_path(self):
         destination = self.repo / "scripts" / "install-hooks.sh"
         destination.parent.mkdir()
