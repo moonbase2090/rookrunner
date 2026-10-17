@@ -48,10 +48,13 @@ The intended distribution is open source under that license.
 ## Untrusted code
 
 A poll refuses untrusted code. A fork, a head repository other than the owner
-repository, a pull request author who is not `OWNER`, `MEMBER`, or
-`COLLABORATOR`, or a commit whose author or committer cannot write to the
+repository, or a commit whose author or committer cannot write to the
 repository produces a warning that names the reason. No run is created.
-A missing or unrecognized author association is refused. The commits checked
+A missing or unrecognized author association is refused. A same-repository
+pull request with another listed association, such as `CONTRIBUTOR` for an
+organization member the App cannot see or `NONE` for an App, goes on to the
+commit check. A commit authored by a GitHub App passes that check only when
+GitHub committed and signed it as `web-flow`. The commits checked
 are a pushed tip and every commit on a pull request. Writing means the `write`
 or `admin` permission GitHub reports for that login on the repository. A
 commit without a GitHub account is refused, and so is a permission GitHub does
