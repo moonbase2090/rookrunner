@@ -1,8 +1,9 @@
 # OIDC identity tokens for jobs
 
-Status: proposed. Nothing in this document is implemented or accepted.
-MB2090 decides the open questions at the end before the first
-implementation pull request is opened.
+Status: accepted direction. MB2090 decided open questions 1 to 5 on
+2026-10-17; the answers are under "Decisions" at the end. Questions 6
+and 7 stay open. Phase 1 (keys and `oidc publish`) is implemented.
+Phases 2 and 3 are not. Nothing here is a GitHub-equivalence claim.
 
 ## Goal
 
@@ -56,9 +57,10 @@ These are implemented facts.
 ### Issuer URL
 
 The issuer is one stable HTTPS URL with no query and no fragment,
-called `<issuer>` below. Example only: `https://oidc.example.com`.
-The `iss` claim equals that string byte for byte. AWS and Entra both
-compare it exactly.
+called `<issuer>` below. The decided issuer is
+`https://oidc.rookrunner.com`. Examples below use
+`https://oidc.example.com`. The `iss` claim equals that string byte
+for byte. AWS and Entra both compare it exactly.
 
 Two static JSON files are served under it:
 
@@ -103,14 +105,18 @@ certificate. Three choices meet the AWS and Entra fetch rules:
    published.
 
 All three are HTTPS on a public CA, need no server on the worker host,
-and survive a worker outage. The recommendation is option 1 or 2,
-because a publish does not need a Git push and the cache can be
-purged at once during a rotation. The choice and the domain are open
-decisions.
+and survive a worker outage. MB2090 chose option 2: Cloudflare Workers
+static assets, served alongside the Rookrunner website at
+`oidc.rookrunner.com`. Publishing there is phase 4.
 
-`rookrunner oidc publish --out DIR` writes both files from the
-configured keys. The operator uploads `DIR`. The command reads only
-public key material and never writes a private key.
+`rookrunner --state DIR oidc publish --issuer URL --out DIR` writes
+`DIR/.well-known/openid-configuration` and `DIR/.well-known/jwks.json`
+from the configured keys. The operator uploads `DIR`. The command
+reads the key files to derive their public halves and writes only the
+public members `kty`, `use`, `alg`, `kid`, `n`, and `e`. It refuses an
+issuer that is not `https`, that has a query, fragment, user info, or
+trailing slash, and an output directory inside the key directory. It
+prints the issuer, the active `kid`, and every published `kid`.
 
 ### Signing key, `kid`, and rotation
 
@@ -130,7 +136,11 @@ public key material and never writes a private key.
   public key. It is derived, not chosen, so a JWKS cannot carry two
   keys with one `kid`.
 - One file `oidc/active` names the signing `kid`. Every other
-  `oidc/*.pem` is published but not used to sign.
+  `oidc/*.pem` is published but not used to sign. `oidc/active` is
+  mode `0600` like the keys.
+- A key file whose name is not its derived `kid` is refused, and the
+  refusal names the `kid`, so a new key is renamed once after it is
+  generated. At most eight keys are loaded.
 
 Rotation has three steps, each a separate operator action:
 
@@ -407,20 +417,23 @@ Phases 1 and 2 add no runtime behavior. Phase 3 is behind
    file-based token for tools that read `AWS_WEB_IDENTITY_TOKEN_FILE`,
    and a custom `sub` template.
 
+## Decisions
+
+MB2090 decided these on 2026-10-17.
+
+1. **Issuer host and domain.** `https://oidc.rookrunner.com`, served
+   from Cloudflare Workers static assets alongside the Rookrunner
+   website.
+2. **Capability version.** Phase 3 may raise the capability version
+   to 13 in a signed-off pull request.
+3. **Same-repository pull requests.** Off unless the worker sets
+   `--oidc-pull-request`. Forks never receive a token.
+4. **Trusted-ref policy.** Reuse the file-secret allowlist
+   (`--secret-ref` and `--secret-pusher`).
+5. **Token lifetime.** Five minutes.
+
 ## Open decisions for MB2090
 
-1. **Issuer host and domain.** Cloudflare R2, Cloudflare Workers, or
-   GitHub Pages, and the exact hostname. The URL is permanent in
-   practice, since every trust policy names it.
-2. **Capability version.** Accepting `id-token: write` changes what
-   the planner accepts. `docs/conventions.md` holds the version at
-   12 until a signed-off pull request changes it.
-3. **Same-repository pull requests.** Off unless
-   `--oidc-pull-request` is set, as proposed, or never.
-4. **Trusted-ref policy.** Reuse the file-secret allowlist, as
-   proposed, or a separate `--oidc-ref` list.
-5. **Token lifetime.** Five minutes, as proposed, or GitHub's longer
-   window.
 6. **Azure CLI in the runner image** for `azure/login`, or document
    the direct token exchange only.
 7. **Network.** Jobs that use OIDC need `--network bridge`. Accept
