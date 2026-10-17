@@ -2,8 +2,10 @@
 
 Status: accepted direction. MB2090 decided open questions 1 to 5 on
 2026-10-17; the answers are under "Decisions" at the end. Questions 6
-and 7 stay open. Phase 1 (keys and `oidc publish`) is implemented.
-Phases 2 and 3 are not. Nothing here is a GitHub-equivalence claim.
+and 7 stay open. Phase 1 (keys and `oidc publish`) and phase 2
+(claims and the mint decision, as pure functions in `oidc_claims.py`)
+are implemented. No worker path calls phase 2 yet. Phase 3 is not
+implemented. Nothing here is a GitHub-equivalence claim.
 
 ## Goal
 
@@ -277,6 +279,20 @@ container. A Unix socket was considered and rejected, because
   `--allow-untrusted` or `--allow-pr-workflow`. A run with either
   override, and a local submit without the stored event fields, is
   refused by the mint itself, not only by the env builder.
+- **The mint decision, as implemented in phase 2.** `mint_refusal`
+  returns a reason, or none when the mint may go ahead. It refuses
+  a run with `untrusted_override`; an event other than push,
+  pull_request, schedule, or workflow_dispatch; an event whose
+  `repository.full_name` is not the worker repository; an event with
+  no `ref`; and, except for workflow_dispatch (whose stored event
+  carries no id), an event with no integer `repository.id`. A pull
+  request is refused when its head repository is missing or null, or
+  when the head id, the base id, and the event repository id are not
+  all equal. A same-repository pull request then needs
+  `--oidc-pull-request` and does not consult the allowlist. Every
+  other event needs `allowlist_matches`. The poll does not yet mark a
+  run admitted by `--allow-pr-workflow` on the run record. Phase 3
+  carries that mark to the run and refuses it as an override.
 - **Short lifetime.** `exp` is five minutes after mint. The request
   token dies with the job. A leaked JWT is good for one audience
   until `exp`.
