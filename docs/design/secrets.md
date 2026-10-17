@@ -154,10 +154,13 @@ a fork. A fork is refused with a warning that names the reason. It
 runs only when that poll invocation passes `--allow-untrusted` with
 the head SHA, and the run records the override. The flag is not a
 default and it is not stored. A same-repository pull request runs
-only when the author association is OWNER, MEMBER, or COLLABORATOR
-and every commit on it has an author and a committer with write or
-admin permission on the repository. A missing, unrecognized, or other
-association is refused the same way. The
+only when the author association is one GitHub lists and every
+commit on it has an author and a committer with write or admin
+permission on the repository. GitHub reports an organization member
+as CONTRIBUTOR when the App cannot read membership, and an App as
+NONE, so those associations do not refuse it alone. A missing or
+unrecognized association is refused. A commit authored by a GitHub
+App passes only when GitHub committed and signed it as web-flow. The
 comparison does not use the full name. A same-repository pull request
 that changes a workflow file is refused even for those associations,
 unless that invocation passes `--allow-pr-workflow` with the author

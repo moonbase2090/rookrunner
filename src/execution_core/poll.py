@@ -305,6 +305,12 @@ def untrusted_reason(head, base, author_association):
     repository. Any other mismatch is a fork. A missing association and
     one GitHub does not list are reasons. OWNER, MEMBER, and COLLABORATOR
     are collaborators.
+
+    A same-repository pull request with any other listed association is
+    not refused here. GitHub reports an owner or member as CONTRIBUTOR
+    when the app cannot read organization membership, and an app author
+    as NONE. The head branch is in this repository, and every commit on
+    it still goes through ``_commit_reason``.
     """
 
     if (head is not None or base is not None) and not _same_repository(head, base):
@@ -320,9 +326,19 @@ def untrusted_reason(head, base, author_association):
         return "author association is missing"
     if association not in _KNOWN_ASSOCIATIONS:
         return "author association is not recognized"
-    if association not in _COLLABORATOR_ASSOCIATIONS:
+    if association not in _COLLABORATOR_ASSOCIATIONS and not _same_repository(head, base):
         return "author is not a repository collaborator"
     return None
+
+
+def _app_user(user):
+    """Return whether GitHub reports this account as a GitHub App bot.
+
+    Only GitHub's ``type`` field is read. A login that merely ends in
+    ``[bot]`` or ``-bot`` is not an app.
+    """
+
+    return isinstance(user, dict) and _login(user) is not None and user.get("type") == "Bot"
 
 
 def _github_committed(user, commit):
@@ -1361,6 +1377,16 @@ class Pass:
         if login is None:
             return f"commit {role} is not a GitHub user"
         if role == "committer" and _github_committed(user, commit):
+            return None
+        # GitHub answers no collaborator permission for an app. Its commit
+        # passes only when GitHub committed and signed it, as it does for
+        # an app's squash merge or contents API write.
+        if (
+            role == "author"
+            and _app_user(user)
+            and isinstance(commit, dict)
+            and _github_committed(commit.get("committer"), commit)
+        ):
             return None
         permission = self._permission(login)
         if permission is _STOPPED:

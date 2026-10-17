@@ -62,8 +62,11 @@ way. The `[` command stays accepted. An unquoted `{` in that command
 name is refused the same way. `builtin eval` is refused the same way.
 
 A poll refuses untrusted code and creates no run. A pull request
-needs the author association `OWNER`, `MEMBER`, or `COLLABORATOR`.
-A missing or unrecognized association is refused. A pushed tip
+from a fork is refused whatever its author association.
+A missing or unrecognized association is refused. A same-repository
+pull request with another listed association is judged by its
+commits alone. A commit authored by a GitHub App (`type` `Bot`)
+passes only when GitHub committed and signed it as `web-flow`. A pushed tip
 commit, and every commit on a pull request, needs an author and a
 committer with `write` or `admin` permission on the repository. A
 commit without a GitHub account is refused, and so is a permission
