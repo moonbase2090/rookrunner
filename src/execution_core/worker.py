@@ -140,6 +140,8 @@ from .protocol import (
 from .snapshot import CaptureError, SourceCapture
 from .checks import check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
+from .oidc_endpoint import OidcRun, OidcSettings
+from .oidc_keys import OidcError, load_key_set
 from .secrets import SecretAccess
 from .socket_lock import (
     accept_socket_flags,
@@ -523,6 +525,8 @@ class Worker:
         secret_pushers=None,
         api_base=None,
         key_dir=None,
+        oidc_issuer=None,
+        oidc_pull_request=False,
     ):
         if network not in {"bridge", "none"}:
             raise ValueError("container network must be bridge or none")
@@ -561,6 +565,7 @@ class Worker:
             secret_pushers=secret_pushers,
             runner_image=self.runner_image,
             key_dir=key_dir,
+            oidc=oidc_issuer is not None,
         )
         self.secrets = flags.secrets
         self.github_repository = flags.github_repository
@@ -582,6 +587,15 @@ class Worker:
         if not Path(self.repository).is_dir():
             raise ValueError("repository must be a directory")
         self.state = Path(state).absolute()
+        self.oidc = _oidc_settings(
+            oidc_issuer,
+            oidc_pull_request,
+            repository=self.github_repository,
+            state_dir=self.state,
+            refs=self.secret_refs,
+            pushers=self.secret_pushers,
+            key_dir=key_dir,
+        )
         self.stop = threading.Event()
         self.guard = threading.RLock()
         self.db = None
@@ -1214,6 +1228,16 @@ class Worker:
                 )
             ),
             job_token=self.job_token_config(),
+            oidc=(
+                None
+                if self.oidc is None
+                else OidcRun(
+                    self.oidc,
+                    run_id=record["run_id"],
+                    attempt=1,
+                    untrusted_override=record.get("untrusted_override") is True,
+                )
+            ),
         )
 
     def _abandoned(self, run_id):
@@ -2578,6 +2602,29 @@ def passwordless_sudo_warning(docker_socket):
     return text
 
 
+def _oidc_settings(issuer, pull_requests, *, repository, state_dir, refs, pushers, key_dir):
+    """Load the OIDC keys once at start. A missing or weak active key refuses start."""
+
+    if type(pull_requests) is not bool:
+        raise ValueError("worker --oidc-pull-request takes no value")
+    if issuer is None:
+        if pull_requests:
+            raise ValueError("worker --oidc-pull-request requires --oidc-issuer")
+        return None
+    try:
+        return OidcSettings(
+            issuer,
+            load_key_set(key_dir),
+            repository=repository,
+            state_dir=state_dir,
+            refs=refs,
+            pushers=pushers,
+            pull_requests=pull_requests,
+        )
+    except OidcError as exc:
+        raise ValueError(f"worker --oidc-issuer: {exc}") from None
+
+
 def _accept_runner_image(value):
     if value is None:
         return None
@@ -2627,6 +2674,8 @@ def serve(
     api_base=None,
     key_dir=None,
     docker_context=None,
+    oidc_issuer=None,
+    oidc_pull_request=False,
 ):
     pin_docker_context(resolve_docker_context(docker_context))
     worker = Worker(
@@ -2645,6 +2694,8 @@ def serve(
         secret_pushers=secret_pushers,
         api_base=api_base,
         key_dir=key_dir,
+        oidc_issuer=oidc_issuer,
+        oidc_pull_request=oidc_pull_request,
     )
     if worker.host_control_warning:
         print(  # noqa: T201  host-control warning on stderr

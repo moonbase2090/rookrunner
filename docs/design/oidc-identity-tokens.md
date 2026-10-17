@@ -2,10 +2,14 @@
 
 Status: accepted direction. MB2090 decided open questions 1 to 5 on
 2026-10-17; the answers are under "Decisions" at the end. Questions 6
-and 7 stay open. Phase 1 (keys and `oidc publish`) and phase 2
-(claims and the mint decision, as pure functions in `oidc_claims.py`)
-are implemented. No worker path calls phase 2 yet. Phase 3 is not
-implemented. Nothing here is a GitHub-equivalence claim.
+and 7 stay open. Phases 1 to 3 are implemented: keys and `oidc
+publish` (`oidc_keys.py`), claims and the mint decision
+(`oidc_claims.py`), and the per-job endpoint and contract behind
+`worker --oidc-issuer`, off by default (`oidc_endpoint.py`). Phase 4,
+hosting and the live cloud checks, is not done. The capability version
+stays 12: a plan is made and run by the same engine, and an engine
+without OIDC runs an `id-token: write` job without the contract, as
+GitHub does when no token is available. Nothing here is a GitHub-equivalence claim.
 
 ## Goal
 
@@ -251,6 +255,23 @@ ask more than once, for example once for AWS and once for Entra, or
 again after five minutes. Redirects are not followed and nothing is
 proxied.
 
+As implemented in phase 3:
+
+- The bind address is the `bridge` network's IPv4 gateway from
+  `docker network inspect bridge`. On macOS, Docker Desktop forwards
+  `host.docker.internal` to the host loopback, so the listener binds
+  `127.0.0.1` there.
+- The network check runs only after checks 1 to 3 pass, so a job
+  that would not receive the contract never fails for its network.
+- A job whose run is refused, or whose snapshot is not one clean
+  commit (so `sha` cannot be filled truthfully), runs without the
+  contract. The first step's stderr then names the reason, and the
+  refusal is audited.
+- The 61st request answers 429. Every other refusal is 400 or 401
+  and is audited with its reason.
+- The job log line is `oidc token minted for aud <aud> sub <sub>`,
+  prepended to the stderr of the step that asked.
+
 The request token and every minted JWT are registered on the job
 mask before they can reach a log line. A step `env` key named
 `ACTIONS_ID_TOKEN_REQUEST_URL` or `ACTIONS_ID_TOKEN_REQUEST_TOKEN` is
@@ -290,9 +311,9 @@ container. A Unix socket was considered and rejected, because
   when the head id, the base id, and the event repository id are not
   all equal. A same-repository pull request then needs
   `--oidc-pull-request` and does not consult the allowlist. Every
-  other event needs `allowlist_matches`. The poll does not yet mark a
-  run admitted by `--allow-pr-workflow` on the run record. Phase 3
-  carries that mark to the run and refuses it as an override.
+  other event needs `allowlist_matches`. A pull request admitted by
+  `--allow-pr-workflow` records `untrusted_override` on its run, the
+  same as `--allow-untrusted`, so the mint refuses it.
 - **Short lifetime.** `exp` is five minutes after mint. The request
   token dies with the job. A leaked JWT is good for one audience
   until `exp`.

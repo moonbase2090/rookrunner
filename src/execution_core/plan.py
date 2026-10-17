@@ -284,8 +284,10 @@ def _rejected_remote_uses(text):
 # permissions scopes on the workflow syntax page, read 2026-10-04.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
 # The page lists `id-token` as `write|none` and `vulnerability-alerts` as
-# `read|none`. This slice accepts `read` or `none` for every scope below
-# and rejects `write`. No token is created from the recorded value.
+# `read|none`. This slice accepts `read` or `none` for every scope below.
+# `write` is rejected except `id-token: write`, which only asks for the OIDC
+# token request contract. The worker grants that contract only with
+# --oidc-issuer and a trusted run; no other token is created from the value.
 PERMISSION_SCOPES = frozenset(
     {
         "actions",
@@ -307,6 +309,10 @@ PERMISSION_SCOPES = frozenset(
     }
 )
 PERMISSION_ACCESS = frozenset({"read", "none"})
+# The one scope that accepts write.
+ID_TOKEN_SCOPE = "id-token"
+# The OIDC token request contract. A step env key cannot set either name.
+OIDC_CONTRACT_ENV = ("ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 DEFAULT_KEYS = {"run"}
 RUN_DEFAULT_KEYS = {"shell", "working-directory"}
 # Local composite metadata, plus a remote node24 action that has main.
@@ -688,7 +694,9 @@ class _Planner:
         }
         if reserve_secret:
             for key in recorded:
-                if isinstance(key, str) and key.startswith("RR_SECRET_"):
+                if isinstance(key, str) and (
+                    key.startswith("RR_SECRET_") or key in OIDC_CONTRACT_ENV
+                ):
                     key_field = _join(path, key)
                     _invalid(f"{key_field}: env key is not accepted", key_field)
         if check is not None:
@@ -844,7 +852,7 @@ class _Planner:
         return order
 
     def _permissions(self, items, field):
-        """Record a read-only permissions value. No token is created."""
+        """Record a permissions value. Only `id-token` accepts write. No token is created."""
 
         if "permissions" not in items:
             return None
@@ -863,7 +871,7 @@ class _Planner:
                 if key not in PERMISSION_SCOPES:
                     _unsupported(child)
                 access = self._string_scalar(value, child)
-                if access not in PERMISSION_ACCESS:
+                if access not in PERMISSION_ACCESS and (key, access) != (ID_TOKEN_SCOPE, "write"):
                     _unsupported(child)
                 recorded[key] = access
             return recorded

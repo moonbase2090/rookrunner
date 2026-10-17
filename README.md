@@ -124,6 +124,16 @@ shows the configured key directory is not a usable directory in that image. A wo
 that starts with `--docker-socket` warns that the exposure includes
 `~/.config/rookrunner/keys/` and
 `~/.config/rookrunner/files/`.
+
+`--oidc-issuer URL` turns on job identity tokens. It is off by default
+and needs `--github-repository`, `--network bridge`, and keys under
+`oidc/` in the key directory (`rookrunner oidc publish` writes the
+files the issuer host serves). A job that grants `id-token: write` on a
+trusted run receives `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, so `aws-actions/configure-aws-credentials`
+and `azure/login` can request a five-minute token. Forks never receive
+one. Same-repository pull requests receive one only with
+`--oidc-pull-request`. See `docs/design/oidc-identity-tokens.md`.
 GitHub requires that service to be installed and running on a self-hosted runner
 (https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners).
 

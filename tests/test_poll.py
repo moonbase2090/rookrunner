@@ -1655,6 +1655,11 @@ class PollTests(unittest.TestCase):
         allowed = self.poll(allow_pr_workflow=["COLLABORATOR"])
         self.assertEqual(self.runs(), 1)
         self.assertEqual(allowed["submitted"][0]["event"], "pull_request")
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"], "pull request workflow change allowed for COLLABORATOR"
+        )
         self.assertEqual(
             allowed["warnings"],
             [
