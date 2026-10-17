@@ -1,0 +1,22 @@
+#!/bin/sh
+# Check formatting of staged Python files under src/ and tests/.
+
+set -u
+
+list=$(mktemp) || exit 1
+trap 'rm -f "$list"' EXIT
+git diff --cached --name-only --diff-filter=ACMR | grep -E '^(src|tests)/.+\.py$' > "$list" || true
+if [ ! -s "$list" ]; then
+  exit 0
+fi
+
+set --
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  set -- "$@" "$path"
+done < "$list"
+
+if ! .venv/bin/ruff format --check -- "$@"; then
+  printf '%s\n' '.venv/bin/ruff format src tests'
+  exit 1
+fi
