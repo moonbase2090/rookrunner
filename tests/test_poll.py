@@ -1404,18 +1404,65 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(manifest["base_commit"], tip)
 
-    def test_a_non_collaborator_is_refused_with_a_named_warning(self):
+    def _assert_same_repository_association_runs(self, association):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        self._open_feature(9, mutate, association=association)
+        result = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(result["warnings"], [])
+        record = self.worker.get(result["submitted"][0]["run_id"])
+        self.assertNotIn("untrusted_override", record)
+
+    def test_a_same_repository_contributor_runs_when_its_commits_can_write(self):
+        # GitHub reports an organization owner or member as CONTRIBUTOR
+        # when the app cannot read organization membership.
+        self._assert_same_repository_association_runs("CONTRIBUTOR")
+
+    def test_a_same_repository_app_pull_request_runs_when_its_commits_can_write(self):
+        # GitHub reports a pull request opened by an app as NONE.
+        self._assert_same_repository_association_runs("NONE")
+
+    def test_a_same_repository_non_collaborator_author_is_refused_by_a_reader_commit(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, association="NONE")
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        refused = self.poll()
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(refused["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            refused["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": "commit author cannot write to the repository",
+                    "message": (
+                        "untrusted code refused: commit author cannot write to the repository"
+                    ),
+                }
+            ],
+        )
+        self.assertFalse((self.clone / "feature-9.txt").exists())
+
+    def test_a_fork_by_a_non_collaborator_is_still_refused_before_any_fetch(self):
         tip = self._tip()
         head = "ab" * 20
         self.server.pulls = [
             {
                 "number": 9,
                 "user": {"login": "Mona"},
-                "author_association": "NONE",
+                "author_association": "CONTRIBUTOR",
                 "head": {
                     "sha": head,
                     "ref": "feature",
-                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                    "repo": {"id": 77, "full_name": "mona/demo"},
                 },
                 "base": {
                     "sha": tip,
@@ -1427,25 +1474,11 @@ class PollTests(unittest.TestCase):
         result = self.poll()
         self.assertEqual(self.runs(), 0)
         self.assertEqual(self.posts(), [])
-        self.assertEqual(result["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(result["skipped"], [{"reason": "fork", "number": 9}])
         self.assertEqual(
-            result["warnings"],
-            [
-                {
-                    "number": 9,
-                    "sha": head,
-                    "action": "refused",
-                    "reason": "author is not a repository collaborator",
-                    "message": ("untrusted code refused: author is not a repository collaborator"),
-                }
-            ],
+            self._messages(result),
+            ["untrusted code refused: head repository is not the owner repository"],
         )
-        again = self.poll()
-        self.assertEqual(again["warnings"], [])
-        self.assertEqual(again["skipped"], [])
-        self.assertEqual(self.runs(), 0)
-        saved = json.loads((self.state / "poll.json").read_text())
-        self.assertNotIn("allow_untrusted", saved)
 
     def test_a_different_head_repository_names_that_reason(self):
         head = "ef" * 20
@@ -1956,6 +1989,53 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(self.runs(), 1)
 
+    def test_an_app_authored_commit_passes_only_when_github_signed_it(self):
+        app = {"login": "helper[bot]", "id": 4242, "type": "Bot"}
+        tip = self._tip()
+        self.server.authors[tip] = app
+        self.server.committers[tip] = "web-flow"
+        self.server.verified.add(tip)
+        self.server.permissions = {"helper[bot]": 404, "helper-bot": 404, "web-flow": "read"}
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        ran = self.poll()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(ran["warnings"], [])
+        self.assertFalse(any("helper" in item["path"] for item in self.server.requests))
+
+        unsigned = self._push_main("unsigned.txt")
+        self.server.authors[unsigned] = app
+        self.server.committers[unsigned] = "web-flow"
+        self.server.branches = [{"name": "main", "commit": {"sha": unsigned}}]
+        self.server.etags["branches"] = "branches-2"
+        self.assertEqual(
+            self._messages(self.poll()),
+            [
+                "untrusted code refused: commit author permission is not readable; "
+                "commit committer cannot write to the repository"
+            ],
+        )
+
+        pushed = self._push_main("pushed.txt")
+        self.server.authors[pushed] = app
+        self.server.branches = [{"name": "main", "commit": {"sha": pushed}}]
+        self.server.etags["branches"] = "branches-3"
+        self.assertEqual(
+            self._messages(self.poll()),
+            ["untrusted code refused: commit author permission is not readable"],
+        )
+
+        named = self._push_main("named.txt")
+        self.server.authors[named] = {"login": "helper-bot", "id": 4243, "type": "User"}
+        self.server.committers[named] = "web-flow"
+        self.server.verified.add(named)
+        self.server.branches = [{"name": "main", "commit": {"sha": named}}]
+        self.server.etags["branches"] = "branches-4"
+        self.assertEqual(
+            self._messages(self.poll()),
+            ["untrusted code refused: commit author permission is not readable"],
+        )
+        self.assertEqual(self.runs(), 1)
+
     def test_a_pull_request_commit_by_a_reader_is_refused_until_that_sha_is_named(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")
@@ -1989,15 +2069,11 @@ class PollTests(unittest.TestCase):
         self.assertEqual(
             self._messages(allowed),
             [
-                "untrusted code allowed by override: author is not a repository collaborator",
                 "untrusted code allowed by override: commit author cannot write to the repository",
             ],
         )
         record = self.worker.get(allowed["submitted"][0]["run_id"])
-        self.assertEqual(
-            record["untrusted_reason"],
-            "author is not a repository collaborator; commit author cannot write to the repository",
-        )
+        self.assertEqual(record["untrusted_reason"], "commit author cannot write to the repository")
 
     def test_an_exhausted_pull_commit_list_stops_the_pass_without_a_refusal(self):
         def mutate(seed):
@@ -2111,12 +2187,14 @@ class PollTests(unittest.TestCase):
             },
         ]
         self.server.etags["pulls"] = "pulls-2"
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
         refused = self.poll()
         self.assertEqual(self.runs(), 0)
         self.assertEqual(
             [item["message"] for item in refused["warnings"]],
             [
-                "untrusted code refused: author is not a repository collaborator",
+                "untrusted code refused: commit author cannot write to the repository",
                 "untrusted code refused: head repository is not the owner repository",
             ],
         )
@@ -2124,13 +2202,10 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
         record = self.worker.get(allowed["submitted"][0]["run_id"])
         self.assertIs(record["untrusted_override"], True)
-        self.assertEqual(
-            record["untrusted_reason"],
-            "author is not a repository collaborator",
-        )
+        self.assertEqual(record["untrusted_reason"], "commit author cannot write to the repository")
         self.assertEqual(
             [item["message"] for item in allowed["warnings"]],
-            ["untrusted code allowed by override: author is not a repository collaborator"],
+            ["untrusted code allowed by override: commit author cannot write to the repository"],
         )
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertNotIn("allow_untrusted", saved)
@@ -2141,7 +2216,7 @@ class PollTests(unittest.TestCase):
                 "head": {
                     "sha": "cd" * 20,
                     "ref": "else",
-                    "repo": {"id": 5150, "full_name": "acme/demo"},
+                    "repo": {"id": 9, "full_name": "other/demo"},
                 },
                 "base": {
                     "sha": tip,
@@ -2155,7 +2230,7 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
         self.assertEqual(
             stuck["warnings"][0]["message"],
-            "untrusted code refused: author is not a repository collaborator",
+            "untrusted code refused: head repository is not the owner repository",
         )
         self.assertEqual(stuck["warnings"][0]["sha"], "cd" * 20)
 
