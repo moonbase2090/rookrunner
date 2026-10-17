@@ -99,6 +99,27 @@ class PreCommitHookTests(unittest.TestCase):
         result = self.hook()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_a_formatted_worktree_does_not_hide_an_unformatted_staged_blob(self):
+        self.write("src/partial.py", "x=1\n")
+        self.git("add", "src/partial.py")
+        self.write("src/partial.py", "x = 1\n")
+        result = self.hook()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(FIX, result.stdout)
+        self.assertEqual((self.repo / "src" / "partial.py").read_text(encoding="utf-8"), "x = 1\n")
+        staged = self.git("show", ":src/partial.py")
+        self.assertEqual(staged.stdout, "x=1\n")
+
+    def test_an_unformatted_worktree_does_not_fail_a_formatted_staged_blob(self):
+        self.write("src/partial.py", "x = 1\n")
+        self.git("add", "src/partial.py")
+        self.write("src/partial.py", "x=1\n")
+        result = self.hook()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        staged = self.git("show", ":src/partial.py")
+        self.assertEqual(staged.stdout, "x = 1\n")
+        self.assertEqual((self.repo / "src" / "partial.py").read_text(encoding="utf-8"), "x=1\n")
+
     def test_install_hooks_sets_the_hooks_path(self):
         destination = self.repo / "scripts" / "install-hooks.sh"
         destination.parent.mkdir()

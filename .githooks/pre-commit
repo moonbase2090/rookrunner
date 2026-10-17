@@ -1,5 +1,7 @@
 #!/bin/sh
-# Check formatting of staged Python files under src/ and tests/.
+# Check formatting of staged Python blobs under src/ and tests/.
+# Ruff reads the index blob, not the working tree, so a formatted
+# worktree cannot hide an unformatted staged file.
 
 set -u
 
@@ -10,13 +12,15 @@ if [ ! -s "$list" ]; then
   exit 0
 fi
 
-set --
+failed=0
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  set -- "$@" "$path"
+  if ! git show ":$path" | .venv/bin/ruff format --check --stdin-filename "$path"; then
+    failed=1
+  fi
 done < "$list"
 
-if ! .venv/bin/ruff format --check -- "$@"; then
+if [ "$failed" -ne 0 ]; then
   printf '%s\n' '.venv/bin/ruff format src tests'
   exit 1
 fi
