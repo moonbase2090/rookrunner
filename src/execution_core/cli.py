@@ -10,6 +10,7 @@ import sys
 import time
 
 from .checks import mint_list_token, post_check_flow, revoke_installation_token
+from .oidc_keys import OidcError, load_key_set, publish
 from .poll import PollError, accept_place, dispatch_once, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
@@ -560,6 +561,16 @@ def _report_app_status(args, decision, repository_root):
     sys.exit(1 if recorded is None or "error" in recorded else 0)
 
 
+def report_oidc_publish(args):
+    try:
+        key_set = load_key_set(args.key_dir)
+        result = publish(key_set, args.issuer, args.out, args.key_dir)
+    except OidcError as error:
+        print(canonical({"error": {"kind": error.kind, "message": str(error)}}), file=sys.stderr)
+        sys.exit(1)
+    print(canonical({"oidc": result}))
+
+
 def _add_key_dir(parser):
     parser.add_argument(
         "--key-dir",
@@ -912,6 +923,23 @@ def main():
         "call",
         help="send one JSON-RPC request from stdin to the local worker socket",
     )
+    oidc = commands.add_parser("oidc", help="job identity token keys")
+    oidc_commands = oidc.add_subparsers(dest="oidc_command", required=True)
+    oidc_publish = oidc_commands.add_parser(
+        "publish",
+        help=(
+            "write .well-known/openid-configuration and .well-known/jwks.json "
+            "from the keys in the oidc/ subdirectory of the key directory. "
+            "Only public key members are written."
+        ),
+    )
+    oidc_publish.add_argument(
+        "--issuer",
+        required=True,
+        help="issuer URL: https, no query, no fragment, no trailing slash",
+    )
+    oidc_publish.add_argument("--out", required=True, help="directory to upload to the issuer host")
+    _add_key_dir(oidc_publish)
     args = parser.parse_args()
     if args.command == "poll" and not args.job:
         parser.error("poll requires at least one --job WORKFLOW JOB_ID")
@@ -946,6 +974,9 @@ def main():
             return
         if args.command == "call":
             _call_stdio(args.state)
+            return
+        if args.command == "oidc":
+            report_oidc_publish(args)
             return
         if args.command == "worker":
             serve(

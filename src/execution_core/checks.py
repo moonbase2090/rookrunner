@@ -236,10 +236,10 @@ def _rsa_from_pkcs1(items):
         numbers.append(_der_integer(blob))
     if numbers[0] != 0:
         raise ValueError("der")
-    modulus, _exponent, private = numbers[1], numbers[2], numbers[3]
-    if modulus.bit_length() < 2048 or private.bit_length() < 2:
+    modulus, exponent, private = numbers[1], numbers[2], numbers[3]
+    if modulus.bit_length() < 2048 or private.bit_length() < 2 or exponent < 3:
         raise ValueError("der")
-    return modulus, private
+    return modulus, exponent, private
 
 
 def _der_items(data):
@@ -259,6 +259,13 @@ _PKCS8_PEM_HEADER = _PEM_BEGIN + "PRIVATE KEY" + _PEM_MARK
 
 
 def _load_rsa(pem):
+    modulus, _exponent, private = _load_rsa_key(pem)
+    return modulus, private
+
+
+def _load_rsa_key(pem):
+    """Return the modulus, public exponent, and private exponent of an RSA PEM."""
+
     try:
         text = pem.decode("ascii")
     except UnicodeError:
