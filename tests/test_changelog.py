@@ -81,7 +81,18 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("The package version is 0.1.5.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
+        self.assertNotIn("A poll can record the pending status it already posted", prose)
+
+    def test_unreleased_records_a_pending_status_after_the_run_finishes(self):
+        section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn(
+            "A poll can record the pending status it already posted when the run has since finished.",
+            prose,
+        )
+        self.assertIn("That record is not a terminal state.", prose)
+        self.assertIn("A later pass still posts the finished state.", prose)
+        self.assertIn("A terminal state that does not match the run is still refused.", prose)
 
     def test_0_1_4_records_the_poll_skip_and_the_mit_license(self):
         self.assertIn("## [0.1.4] - 2026-10-14", TEXT)
@@ -90,7 +101,6 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("That run is skipped and its submission stays.", prose)
         self.assertIn("The project license is the MIT License.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
 
     def test_0_1_3_records_the_network_default_and_the_upgrade(self):
         self.assertIn("## [0.1.3] - 2026-10-11", TEXT)

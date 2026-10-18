@@ -2374,12 +2374,19 @@ class Worker:
             ):
                 return {"action": "skip", "state": state}
             return {"action": "post", "state": state}
+        # A poll can post pending, then the run finishes before the record
+        # call. Store that pending post. A terminal state is stored only
+        # when it is the run's current state.
+        pending_moved_on = posted == "pending" and state in TERMINAL_STATUS
         if posted is not None and (
-            posted != state or posted not in {"pending", "success", "failure", "error"}
+            posted not in {"pending", "success", "failure", "error"}
+            or (posted != state and not pending_moved_on)
         ):
             invalid("recorded state does not match the run")
         if recording_check:
-            self._accept_check_record(p, check_status, check_conclusion)
+            self._accept_check_record(
+                p, check_status, check_conclusion, pending_moved_on=pending_moved_on
+            )
         with self.db:
             if recording_check:
                 self.db.execute(
@@ -2409,18 +2416,27 @@ class Worker:
                 )
         return {"action": "recorded", "state": state}
 
-    def _accept_check_record(self, p, check_status, check_conclusion):
+    def _accept_check_record(self, p, check_status, check_conclusion, *, pending_moved_on=False):
         identifier = integer(p["check_run_id"], 1, 2**63 - 1, "check_run_id")
         p["check_run_id"] = identifier
         if p["check_status"] not in {"queued", "in_progress", "completed"}:
             invalid("recorded check does not match the run")
-        if p["check_status"] != check_status:
+        # The pending decision's check is queued or in progress and has no
+        # conclusion. Keep that posted check when the run has since finished.
+        # A completed check still has to match the run.
+        stale_pending_check = (
+            pending_moved_on
+            and check_conclusion is not None
+            and p["check_status"] in {"queued", "in_progress"}
+            and "check_conclusion" not in p
+        )
+        if p["check_status"] != check_status and not stale_pending_check:
             invalid("recorded check does not match the run")
         recorded_conclusion = p.get("check_conclusion", None)
         if check_conclusion is None:
             if "check_conclusion" in p:
                 invalid("recorded check does not match the run")
-        elif recorded_conclusion != check_conclusion:
+        elif recorded_conclusion != check_conclusion and not stale_pending_check:
             invalid("recorded check does not match the run")
         if recorded_conclusion is not None and recorded_conclusion not in {
             "success",
