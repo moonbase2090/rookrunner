@@ -199,6 +199,7 @@ STEP_KEYS = {
     "working-directory",
     "env",
     "timeout-minutes",
+    "continue-on-error",
     "uses",
     "with",
 }
@@ -1633,6 +1634,9 @@ class _Planner:
             timeout_minutes = self._step_timeout_minutes(body, step_field)
             if timeout_minutes is not None:
                 recorded["timeout_minutes"] = timeout_minutes
+            continue_on_error = self._continue_on_error(body, step_field)
+            if continue_on_error is not None:
+                recorded["continue_on_error"] = continue_on_error
             steps.append(recorded)
         return steps
 
@@ -1656,6 +1660,30 @@ class _Planner:
         if type(value) is not bool:
             _invalid(f"{field} must be a boolean", field)
         return value
+
+    def _continue_on_error(self, items, field):
+        """Store a step `continue-on-error` boolean or expression.
+
+        An omitted key is not stored. A YAML boolean is stored as that
+        boolean. A string is stored and checked as a step `if` expression.
+        It is not evaluated here. Any other value is rejected. Job-level
+        `continue-on-error` is not a job key.
+        """
+
+        if "continue-on-error" not in items:
+            return None
+        path = _join(field, "continue-on-error")
+        node = items["continue-on-error"][1]
+        if isinstance(node, ScalarNode) and node.tag == BOOL_TAG:
+            return self._bool_scalar(node, path)
+        self._enter(node, path)
+        if isinstance(node, ScalarNode) and node.tag == STR_TAG:
+            text = node.value
+            if not isinstance(text, str) or text.strip() == "" or "\0" in text:
+                _invalid(f"{path}: expression is not accepted", path)
+            self._check_expression(text, path, check_step_if)
+            return text
+        _invalid(f"{path} must be a boolean or an expression", path)
 
     def _checkout(self, body, step_field, uses_text):
         """Record an owned checkout of the captured files.

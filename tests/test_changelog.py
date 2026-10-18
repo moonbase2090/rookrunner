@@ -81,7 +81,17 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("The package version is 0.1.5.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
+        self.assertNotIn("A step `continue-on-error` may be true", prose)
+
+    def test_unreleased_records_step_continue_on_error(self):
+        section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("A step `continue-on-error` may be true, false, or an expression", prose)
+        self.assertIn("the outcome is failure, the conclusion is success", prose)
+        self.assertIn("A later step sees `success()` as true.", prose)
+        self.assertIn("False, or an omitted key, still fails the job.", prose)
+        self.assertIn("Job `continue-on-error`", prose)
+        self.assertIn("The capability version stays 12.", prose)
 
     def test_0_1_4_records_the_poll_skip_and_the_mit_license(self):
         self.assertIn("## [0.1.4] - 2026-10-14", TEXT)
@@ -90,7 +100,6 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("That run is skipped and its submission stays.", prose)
         self.assertIn("The project license is the MIT License.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
 
     def test_0_1_3_records_the_network_default_and_the_upgrade(self):
         self.assertIn("## [0.1.3] - 2026-10-11", TEXT)

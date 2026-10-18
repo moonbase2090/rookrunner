@@ -589,6 +589,87 @@ jobs:
         self.assertEqual(steps[1]["if"], "false")
         self.assertNotIn("result", steps[0])
 
+    def test_step_continue_on_error_is_a_boolean_or_an_expression(self):
+        workflow = """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: yes
+        continue-on-error: true
+        run: echo hi
+      - id: no
+        continue-on-error: false
+        run: echo no
+      - id: plain
+        run: echo plain
+      - id: expr
+        continue-on-error: ${{ github.event.kind == 'local' }}
+        run: echo expr
+      - id: word
+        continue-on-error: "true"
+        run: echo word
+"""
+        plan = self.plan(workflow, "test")["plan"]
+        self.assertEqual(plan["capability_version"], 12)
+        steps = {step["id"]: step for step in plan["job"]["steps"]}
+        self.assertIs(steps["yes"]["continue_on_error"], True)
+        self.assertIs(steps["no"]["continue_on_error"], False)
+        self.assertNotIn("continue_on_error", steps["plain"])
+        self.assertEqual(
+            steps["expr"]["continue_on_error"],
+            "${{ github.event.kind == 'local' }}",
+        )
+        self.assertNotIn("result", steps["expr"])
+        self.assertEqual(steps["word"]["continue_on_error"], "true")
+        self.assertIsInstance(steps["word"]["continue_on_error"], str)
+        rejected = {
+            "jobs.test.steps.0.continue-on-error": """\
+on: push
+jobs:
+  test:
+    steps:
+      - continue-on-error: 1
+        run: echo hi
+""",
+            "jobs.test.steps.0.continue-on-error empty": """\
+on: push
+jobs:
+  test:
+    steps:
+      - continue-on-error: ""
+        run: echo hi
+""",
+            "jobs.test.steps.0.continue-on-error map": """\
+on: push
+jobs:
+  test:
+    steps:
+      - continue-on-error:
+          keep: true
+        run: echo hi
+""",
+        }
+        for label, source in rejected.items():
+            with self.subTest(label=label):
+                with self.assertRaises(PlanError) as raised:
+                    self.plan(source, "test")
+                self.assertEqual(raised.exception.kind, "WORKFLOW_INVALID")
+                self.assertEqual(raised.exception.field, "jobs.test.steps.0.continue-on-error")
+                self.assertIn("continue-on-error", str(raised.exception))
+        job_level = """\
+on: push
+jobs:
+  test:
+    continue-on-error: true
+    steps:
+      - run: echo hi
+"""
+        with self.assertRaises(PlanError) as raised:
+            self.plan(job_level, "test")
+        self.assertEqual(raised.exception.kind, "CAPABILITY_UNSUPPORTED")
+        self.assertEqual(raised.exception.field, "jobs.test.continue-on-error")
+
     def test_unavailable_context_and_hashfiles_are_rejected(self):
         secret = """\
 jobs:

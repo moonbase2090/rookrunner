@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from execution_core.actions import ActionStore, stage_node24_actions
 from execution_core.node24 import inspect_node24
@@ -38,6 +39,10 @@ from execution_core.run import (
     _runner_arch,
     _soft_defaults,
     _verify_workspace,
+    _expression_values,
+    _outcome,
+    _step_fails_the_job,
+    _StepTimedOut,
     _with_rendered_step,
     _workflow_for_job,
     _workflow_label,
@@ -988,6 +993,259 @@ class TextRenderTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "skipped")
         self.assertEqual(result["name"], "build one")
+
+
+class ContinueOnErrorTests(unittest.TestCase):
+    def _parts(self, workflow):
+        planned = plan_workflow(workflow.encode(), "test")["plan"]
+        return planned["workflow"], planned["job"], planned["job"]["steps"]
+
+    def _run(self, step, workflow, job, prior=None):
+        return _consider_step(
+            "docker",
+            "name",
+            step,
+            workflow,
+            job,
+            {},
+            None,
+            True,
+            None,
+            None,
+            [] if prior is None else prior,
+            False,
+            {},
+            None,
+            None,
+            None,
+        )
+
+    def test_tolerated_failure_runs_later_steps_and_the_job_succeeds(self):
+        workflow, job, steps = self._parts(
+            """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: first
+        name: first
+        continue-on-error: true
+        if: fromJSON('{')
+        run: echo hi
+      - id: on_success
+        if: success()
+        uses: actions/checkout@v4
+      - id: on_failure
+        if: failure()
+        uses: actions/checkout@v4
+      - id: sees_outcome
+        if: steps.first.outcome == 'failure'
+        uses: actions/checkout@v4
+      - id: sees_conclusion
+        if: steps.first.conclusion == 'success'
+        uses: actions/checkout@v4
+      - id: job_ok
+        if: job.status == 'success'
+        uses: actions/checkout@v4
+"""
+        )
+        self.assertIs(steps[0]["continue_on_error"], True)
+        first = self._run(steps[0], workflow, job)
+        self.assertEqual(first["status"], "failed")
+        self.assertEqual(first["conclusion"], "success")
+        self.assertEqual(first["error"], "expression is not accepted")
+        self.assertFalse(_step_fails_the_job(first))
+        prior = [first]
+        ran = {}
+        for step in steps[1:]:
+            record = self._run(step, workflow, job, prior)
+            ran[step["id"]] = record
+            prior.append(record)
+        self.assertEqual(ran["on_success"]["status"], "succeeded")
+        self.assertEqual(ran["on_success"]["exit_code"], 0)
+        self.assertNotIn("conclusion", ran["on_success"])
+        self.assertEqual(ran["on_failure"]["status"], "skipped")
+        self.assertEqual(ran["sees_outcome"]["status"], "succeeded")
+        self.assertEqual(ran["sees_conclusion"]["status"], "succeeded")
+        self.assertEqual(ran["job_ok"]["status"], "succeeded")
+        context = _expression_values({}, workflow, job, {"env": {}}, [first], False)
+        self.assertEqual(context["job"]["status"], "success")
+        self.assertEqual(context["steps"]["first"]["outcome"], "failure")
+        self.assertEqual(context["steps"]["first"]["conclusion"], "success")
+        outcome = _outcome("digest", "ref", prior, None)
+        self.assertEqual(outcome["status"], "succeeded")
+        self.assertEqual(outcome["exit_code"], 0)
+        self.assertIsNone(outcome["failed_step"])
+
+    def test_false_and_omitted_continue_on_error_fail_the_job(self):
+        for flag in ("false", None):
+            with self.subTest(flag=flag):
+                lines = ["on: push", "jobs:", "  test:", "    steps:", "      - id: first"]
+                if flag is not None:
+                    lines.append(f"        continue-on-error: {flag}")
+                lines.extend(
+                    [
+                        "        if: fromJSON('{')",
+                        "        run: echo hi",
+                        "      - id: next",
+                        "        uses: actions/checkout@v4",
+                        "      - id: job_ok",
+                        "        if: job.status == 'success'",
+                        "        uses: actions/checkout@v4",
+                    ]
+                )
+                workflow, job, steps = self._parts("\n".join(lines) + "\n")
+                if flag is None:
+                    self.assertNotIn("continue_on_error", steps[0])
+                else:
+                    self.assertIs(steps[0]["continue_on_error"], False)
+                first = self._run(steps[0], workflow, job)
+                self.assertEqual(first["status"], "failed")
+                self.assertNotIn("conclusion", first)
+                self.assertTrue(_step_fails_the_job(first))
+                nxt = self._run(steps[1], workflow, job, [first])
+                job_ok = self._run(steps[2], workflow, job, [first, nxt])
+                self.assertEqual(nxt["status"], "skipped")
+                self.assertEqual(job_ok["status"], "skipped")
+                context = _expression_values({}, workflow, job, {"env": {}}, [first], False)
+                self.assertEqual(context["job"]["status"], "failure")
+                self.assertEqual(context["steps"]["first"]["outcome"], "failure")
+                self.assertEqual(context["steps"]["first"]["conclusion"], "failure")
+                outcome = _outcome("digest", "ref", [first, nxt], first)
+                self.assertEqual(outcome["status"], "failed")
+                self.assertEqual(outcome["failed_step"]["id"], "first")
+
+    def test_expression_true_tolerates_and_false_does_not(self):
+        cases = (
+            ("${{ true }}", True),
+            ("'true'", True),
+            ("${{ false }}", False),
+            ("'false'", False),
+        )
+        for flag, tolerated in cases:
+            with self.subTest(flag=flag):
+                workflow, job, steps = self._parts(
+                    f"""\
+on: push
+jobs:
+  test:
+    steps:
+      - id: first
+        continue-on-error: {flag}
+        if: fromJSON('{{')
+        run: echo hi
+      - id: next
+        uses: actions/checkout@v4
+"""
+                )
+                self.assertIsInstance(steps[0]["continue_on_error"], str)
+                first = self._run(steps[0], workflow, job)
+                nxt = self._run(steps[1], workflow, job, [first])
+                self.assertEqual(first["status"], "failed")
+                self.assertEqual(first["error"], "expression is not accepted")
+                if tolerated:
+                    self.assertEqual(first["conclusion"], "success")
+                    self.assertFalse(_step_fails_the_job(first))
+                    self.assertEqual(nxt["status"], "succeeded")
+                else:
+                    self.assertNotIn("conclusion", first)
+                    self.assertTrue(_step_fails_the_job(first))
+                    self.assertEqual(nxt["status"], "skipped")
+
+    def test_non_boolean_continue_on_error_does_not_run_the_step(self):
+        workflow, job, steps = self._parts(
+            """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: first
+        continue-on-error: ${{ 'nope' }}
+        uses: actions/checkout@v4
+"""
+        )
+        first = self._run(steps[0], workflow, job)
+        self.assertEqual(first["status"], "failed")
+        self.assertEqual(first["error"], "continue-on-error did not evaluate to a boolean")
+        self.assertIsNone(first["exit_code"])
+        self.assertNotIn("conclusion", first)
+        self.assertTrue(_step_fails_the_job(first))
+
+    def test_continue_on_error_expression_error_is_not_tolerated(self):
+        workflow, job, steps = self._parts(
+            """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: first
+        continue-on-error: ${{ fromJSON('{') }}
+        uses: actions/checkout@v4
+"""
+        )
+        first = self._run(steps[0], workflow, job)
+        self.assertEqual(first["status"], "failed")
+        self.assertEqual(first["error"], "expression is not accepted")
+        self.assertNotIn("conclusion", first)
+        self.assertIsNone(first["exit_code"])
+        self.assertTrue(_step_fails_the_job(first))
+
+    def test_successful_step_is_unchanged_by_continue_on_error(self):
+        workflow, job, steps = self._parts(
+            """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: kept
+        continue-on-error: true
+        uses: actions/checkout@v4
+"""
+        )
+        record = self._run(steps[0], workflow, job)
+        self.assertEqual(record["status"], "succeeded")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertNotIn("conclusion", record)
+        self.assertFalse(_step_fails_the_job(record))
+
+    def test_step_timeout_is_not_treated_as_continue_on_error(self):
+        workflow, job, steps = self._parts(
+            """\
+on: push
+jobs:
+  test:
+    steps:
+      - id: first
+        continue-on-error: true
+        run: echo hi
+"""
+        )
+        with (
+            patch("execution_core.run._run_step", side_effect=_StepTimedOut(steps[0])),
+            self.assertRaises(_StepTimedOut),
+        ):
+            self._run(steps[0], workflow, job)
+
+    def test_job_loops_fail_the_job_only_through_step_fails_the_job(self):
+        source = Path(__file__).resolve().parents[1] / "src" / "execution_core" / "run.py"
+        tree = ast.parse(source.read_text())
+        tests = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            assigns = False
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name) and target.id == "job_failed":
+                            assigns = True
+            if assigns:
+                tests.append(node.test)
+        self.assertEqual(len(tests), 2)
+        for test in tests:
+            self.assertIsInstance(test, ast.Call)
+            self.assertIsInstance(test.func, ast.Name)
+            self.assertEqual(test.func.id, "_step_fails_the_job")
 
 
 class DockerRunTests(unittest.TestCase):
