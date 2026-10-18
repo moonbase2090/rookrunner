@@ -1,6 +1,6 @@
 [project]
 name = "execution-core"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local execution contract prototype for Rookrunner"
 license = "MIT"
 requires-python = ">=3.11"
