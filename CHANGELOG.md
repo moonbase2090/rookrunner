@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.6. A published release section
+The current package version is 0.1.7. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.7] - 2026-10-18
 
 - Passwordless sudo still drops every capability. It then keeps
   `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
@@ -14,6 +16,8 @@ This file does not reconstruct earlier milestones.
   directory owned by another user, and stat a mode-0700 workspace
   owned by the job user. A job without that opt-in still sets
   no-new-privileges and adds no capabilities.
+- The package version is 0.1.7. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.6] - 2026-10-17
 

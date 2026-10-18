@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""The install page names both 0.1.6 procedures and leaves the hosts alone."""
+"""The install page names both 0.1.7 procedures and leaves the hosts alone."""
 
 import unittest
 from pathlib import Path
@@ -30,12 +30,12 @@ class InstallDocTests(unittest.TestCase):
         self.assertIn("This page does not edit a running unit.", PROSE)
 
     def test_developer_installs_the_wheel_without_pythonpath(self):
-        self.assertIn("execution_core-0.1.6-py3-none-any.whl", TEXT)
+        self.assertIn("execution_core-0.1.7-py3-none-any.whl", TEXT)
         self.assertIn("Do not set `PYTHONPATH`.", TEXT)
         self.assertIn("PyYAML 6.0.3", PROSE)
 
     def test_host_layout_unpacks_the_tarball(self):
-        self.assertIn("execution_core-0.1.6.tar.gz", TEXT)
+        self.assertIn("execution_core-0.1.7.tar.gz", TEXT)
         self.assertIn("--strip-components=1", TEXT)
         self.assertIn("/var/lib/rookrunner/engine/src", TEXT)
         self.assertIn("pyyaml==6.0.3", TEXT)
