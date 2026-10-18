@@ -22,7 +22,7 @@ Review rows stay with Muse until a check exists.
 | User-facing JSON is `protocol.canonical`, printed from `cli.py`. | CI: T20, with `cli.py` as the listed print site |
 | The worker may print the host-control warning to stderr. That call is one row in `docs/lints.md`. | CI |
 | Socket mode stays `0600`. The state directory stays `0700`. | Review, already covered by tests |
-| The capability version stays 12 until a signed-off pull request changes it. `write` stays rejected. | Review |
+| The capability version stays 12 until a signed-off pull request changes it. `write` stays rejected, except `id-token: write`, which only asks for the OIDC token request contract (`docs/design/oidc-identity-tokens.md`). | Review |
 | Formatting is ruff, line length 100, target py311. | CI, already. `check.yml` runs `ruff check src tests` and `ruff format --check src tests`. |
 | Suppression is `# noqa: CODE` or `# type: ignore[code]` with a reason, and a row in `docs/lints.md`. A bare `# noqa` or a bare `# type: ignore` fails. | CI (planned) |
 | Subprocess calls that are the engine's process spawn stay in the modules that already own them. A new module does not add one. | CI (planned): S603 and S607 |

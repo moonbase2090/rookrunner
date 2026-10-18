@@ -641,9 +641,13 @@ These stay out of this design.
   post token or the private key in the job.
 - A new App permission, a Secrets API permission, and any use of
   the GitHub secrets API.
-- `write-all`, `id-token` as a minted OIDC token, `security-events:
+- `write-all`, `security-events:
   write`, `actions: write`, packages write, and pull-requests write.
 - Contents write, and the poller skip for the Rookrunner-App bot.
+
+`id-token: write` was on this list. It is now accepted for the OIDC
+token request contract only, behind `worker --oidc-issuer`; see
+[oidc-identity-tokens](oidc-identity-tokens.md).
   The skip is recorded above and is not implemented.
 - Organization secrets, environment secrets, Dependabot secrets,
   environments, and approvals.

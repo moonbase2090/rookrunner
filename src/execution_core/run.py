@@ -216,6 +216,7 @@ or stderr.
 import contextlib
 import contextvars
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -224,6 +225,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -269,6 +271,15 @@ from .job_token import (
     public_token_revocation,
     resolved_permissions,
 )
+from .oidc_claims import OidcRefusal
+from .oidc_endpoint import (
+    CONTAINER_HOST as _OIDC_HOST,
+    NETWORK_MESSAGE,
+    JobListener,
+    OidcRun,
+    id_token_write_granted,
+)
+from .oidc_keys import OidcError
 from .status import StatusError
 from .secrets import (
     SecretAccess,
@@ -366,6 +377,8 @@ class _JobRuntime:
         self.action_state = {}
         self.javascript_inputs = {}
         self.javascript_ran = set()
+        # The token request endpoint for this job, or None.
+        self.oidc = None
 
 
 def _reserved_env(script_name):
@@ -800,6 +813,10 @@ def _merged_env(workflow, job, step, runtime, script_name, path_value, extra_res
     held = _held_job_token(runtime)
     if held is not None:
         merged["GITHUB_TOKEN"] = held
+    # The token request contract, only while this job's endpoint is open.
+    listener = None if runtime is None else getattr(runtime, "oidc", None)
+    if listener is not None:
+        merged.update(listener.env())
     return [(key, merged[key]) for key in sorted(merged)]
 
 
@@ -1544,6 +1561,7 @@ def _create_args(
     socket_volume=None,
     account=None,
     passwordless_sudo=False,
+    oidc_host=False,
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1558,6 +1576,9 @@ def _create_args(
         *_limit_args(),
         *_job_isolation_args(passwordless_sudo),
     ]
+    if oidc_host:
+        # The token endpoint listens on the host. Only a bridge network reaches it.
+        args.extend(["--add-host", f"{_OIDC_HOST}:host-gateway"])
     if socket_path is not None:
         # The engine socket is often mode 0660. The host gid opens a native
         # root:docker socket. Some engines present the same mount as
@@ -2600,6 +2621,114 @@ def _prepare_job_token(runtime, config, job, workflow, now, fail):
     return True
 
 
+def _oidc_identity(workflow, manifest):
+    """The top-level workflow label and path. The called path is read per job."""
+
+    path = manifest.get("workflow") if isinstance(manifest, dict) else None
+    name = workflow.get("name") if isinstance(workflow, dict) else None
+    label = name if isinstance(name, str) and name != "" else path
+    return {"workflow": label, "workflow_path": path, "sha": _commit_sha(manifest)}
+
+
+def _oidc_address(docker, deadline):
+    """The host address the token endpoint binds: the Docker bridge gateway.
+
+    Docker Desktop on macOS forwards host.docker.internal to the host
+    loopback, so the endpoint binds 127.0.0.1 there.
+    """
+
+    if sys.platform == "darwin":
+        return "127.0.0.1"
+    code, stdout, _stderr = _invoke_within(
+        docker,
+        ["network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}"],
+        30,
+        deadline,
+    )
+    if code != 0:
+        return None
+    for text in _text(stdout).split():
+        try:
+            address = ipaddress.IPv4Address(text)
+        except ValueError:
+            continue
+        if address.is_private and not address.is_loopback:
+            return str(address)
+    return None
+
+
+def _prepare_oidc(
+    runtime, oidc, job, workflow, event, event_name, network, identity, address, fail
+):
+    """Open the token endpoint when every gate passes. True means the steps may run.
+
+    A job without ``id-token: write``, or whose run is refused, still runs
+    without the contract, as on GitHub. A job that would receive the
+    contract on a ``none`` network fails before its first step.
+    """
+
+    if oidc is None:
+        return True
+    if not id_token_write_granted(resolved_permissions(job, workflow)):
+        return True
+    job_id = job.get("id")
+    reason = oidc.refusal(event, event_name, job_id)
+    if reason is None and identity.get("sha") is None:
+        reason = "snapshot is not one clean commit"
+    if reason is not None:
+        runtime.secret_notes.append(f"id-token: write did not receive a token request: {reason}")
+        return True
+    if network != "bridge":
+        fail(NETWORK_MESSAGE)
+        return False
+    host = _oidc_address(*address)
+    if host is None:
+        fail("oidc endpoint address could not be found")
+        return False
+    called = _WORKFLOW_PATH.get()
+    try:
+        runtime.oidc = JobListener(
+            oidc,
+            job_id=job_id,
+            event=event,
+            event_name=event_name,
+            sha=identity["sha"],
+            workflow=identity["workflow"],
+            workflow_path=identity["workflow_path"],
+            job_workflow_path=called if called != identity["workflow_path"] else None,
+            masks=runtime.masks,
+            address=host,
+        )
+    except (OSError, OidcRefusal, OidcError):
+        fail("oidc endpoint could not start")
+        return False
+    return True
+
+
+def _oidc_step(runtime, index):
+    listener = getattr(runtime, "oidc", None)
+    if listener is not None:
+        listener.step_index = index
+
+
+def _stamp_oidc_notes(record, runtime):
+    """Prepend one line per mint during this step: aud and sub, never the token."""
+
+    listener = getattr(runtime, "oidc", None)
+    if listener is None or not isinstance(record, dict):
+        return
+    notes = listener.drain_notes()
+    if notes:
+        record["stderr"] = "\n".join(notes) + "\n" + (record.get("stderr") or "")
+
+
+def _close_oidc(runtime):
+    listener = getattr(runtime, "oidc", None)
+    runtime.oidc = None
+    if listener is not None:
+        listener.close()
+
+
 def _stamp_token_warning(record, runtime, now):
     """Prepend the one expiry warning. The text does not include the token."""
 
@@ -2680,6 +2809,7 @@ def run_job(
     secrets=None,
     job_token=None,
     token_clock=None,
+    oidc=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -2747,6 +2877,8 @@ def run_job(
         _setup("secret configuration is not accepted")
     if job_token is not None and not isinstance(job_token, JobTokenConfig):
         _setup("job token configuration is not accepted")
+    if oidc is not None and not isinstance(oidc, OidcRun):
+        _setup("oidc configuration is not accepted")
     started = time.monotonic()
     reference, digest, workflow, jobs, event_bytes, workspace, manifest = _prepare(
         snapshot_dir, snapshot_digest, workspace, plan, image, event
@@ -2829,6 +2961,7 @@ def run_job(
                 socket_volume,
                 account,
                 passwordless_sudo if account is not None else False,
+                oidc is not None and network == "bridge",
             ),
             60,
             deadline,
@@ -3175,12 +3308,28 @@ def run_job(
                                     if fail_fast:
                                         break
                                     continue
+                                if not _prepare_oidc(
+                                    runtime,
+                                    oidc,
+                                    active_job,
+                                    active_workflow,
+                                    event,
+                                    event_name,
+                                    network,
+                                    _oidc_identity(workflow, manifest),
+                                    (docker_bin, deadline),
+                                    _fail_text,
+                                ):
+                                    if fail_fast:
+                                        break
+                                    continue
                                 prelude = _secret_prelude(runtime)
                                 _share_secret_masks(runtime.masks, secret_sink)
                                 attached = False
                                 for step in active_job["steps"]:
                                     if deadline - time.monotonic() <= 0:
                                         raise _JobDeadline()
+                                    _oidc_step(runtime, step.get("index"))
                                     record = _consider_step(
                                         docker_bin,
                                         name,
@@ -3206,6 +3355,7 @@ def run_job(
                                         _attach_prelude(record, prelude)
                                         attached = True
                                     _stamp_token_warning(record, runtime, token_now())
+                                    _stamp_oidc_notes(record, runtime)
                                     records.append(record)
                                     prior.append(record)
                                     if _step_fails_the_job(record):
@@ -3229,6 +3379,7 @@ def run_job(
                                         break
                                     if deadline - time.monotonic() <= 0:
                                         raise _JobDeadline()
+                                    _oidc_step(runtime, post_index)
                                     record = _consider_post(
                                         docker_bin,
                                         name,
@@ -3252,6 +3403,7 @@ def run_job(
                                         inputs=inputs,
                                     )
                                     _stamp_token_warning(record, runtime, token_now())
+                                    _stamp_oidc_notes(record, runtime)
                                     records.append(record)
                                     post_index += 1
                                     if _step_fails_the_job(record):
@@ -3282,6 +3434,7 @@ def run_job(
                                 if job_failed and fail_fast:
                                     break
                             finally:
+                                _close_oidc(runtime)
                                 if job_token is not None or _held_job_token(runtime) is not None:
                                     finish_job_token(
                                         runtime,

@@ -674,6 +674,27 @@ def main():
     )
     _add_key_dir(worker)
     worker.add_argument(
+        "--oidc-issuer",
+        help=(
+            "issuer URL for job identity tokens. Off by default. "
+            "Requires --github-repository and keys in the oidc/ subdirectory of the "
+            "key directory; startup refuses when the active key is missing, unreadable, "
+            "or below 2048 bits. A job that grants id-token: write on a trusted run "
+            "receives ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN. "
+            "The run is trusted when --secret-ref, --secret-pusher, or the default "
+            "branch rule matches. Needs --network bridge. Combined with --docker-socket, "
+            "startup refuses unless --runner-image is set and the key-directory probe exits 0."
+        ),
+    )
+    worker.add_argument(
+        "--oidc-pull-request",
+        action="store_true",
+        help=(
+            "also mint for same-repository pull requests, with sub "
+            "repo:OWNER/REPO:pull_request. Forks never receive a token. Requires --oidc-issuer."
+        ),
+    )
+    worker.add_argument(
         "--api-base",
         default=DEFAULT_API_BASE,
         help=f"GitHub API origin (default {DEFAULT_API_BASE})",
@@ -996,6 +1017,8 @@ def main():
                 api_base=args.api_base,
                 key_dir=args.key_dir,
                 docker_context=args.docker_context,
+                oidc_issuer=args.oidc_issuer,
+                oidc_pull_request=args.oidc_pull_request,
             )
             return
         if args.command == "describe":

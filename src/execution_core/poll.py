@@ -1856,8 +1856,13 @@ class Pass:
         if verdict == "refused":
             return True
         changed = _diff(self.clone, base_sha, head_sha)
-        if not self._accept_pr_workflow(number, head_sha, item, base_sha, changed):
+        accepted, workflow_override = self._accept_pr_workflow(
+            number, head_sha, item, base_sha, changed
+        )
+        if not accepted:
             return True
+        if workflow_override is not None:
+            override = workflow_override if override is None else f"{override}; {workflow_override}"
         _checkout(self.clone, merge)
         repo = self._repository_body()
         if repo is None:
@@ -2074,13 +2079,14 @@ class Pass:
     def _accept_pr_workflow(self, number, head_sha, item, base_sha, changed):
         """Refuse a pull request whose diff changes a workflow file.
 
-        Return true when its jobs may be submitted. An allowed author
-        association records a warning and still returns true.
+        Return ``(accepted, override)``. An allowed author association
+        records a warning, and its runs record the override, so an
+        identity token is never minted for them.
         """
 
         kind, paths = self._pr_workflow_change(base_sha, head_sha, changed)
         if kind is None:
-            return True
+            return True, None
         association = _association(item.get("author_association"))
         allowed = association in self.allow_pr_workflow
         reason = "workflow_changed" if kind == "changed" else "workflow_diff_unavailable"
@@ -2094,9 +2100,9 @@ class Pass:
         }
         if allowed:
             self.result["warnings"].append(entry)
-            return True
+            return True, f"pull request workflow change allowed for {association}"
         self._record_workflow_refusal(number, head_sha, reason, entry)
-        return False
+        return False, None
 
     def _pr_workflow_change(self, base_sha, head_sha, changed):
         if changed is None:

@@ -195,7 +195,7 @@ def accept_app_key(value, key_dir=None):
 def _repository(value, required):
     if value is None:
         if required:
-            raise ValueError("worker --secrets requires --github-repository")
+            raise ValueError(f"worker {required} requires --github-repository")
         return None
     if not isinstance(value, str) or _REPOSITORY.fullmatch(value) is None:
         raise ValueError("worker --github-repository must be owner/name")
@@ -453,12 +453,16 @@ def accept_socket_flags(
     secret_pushers,
     runner_image,
     key_dir=None,
+    oidc=False,
 ):
     """Validate the worker flags. Probe only for a socket combination."""
 
     if type(secrets) is not bool:
         raise ValueError("worker --secrets takes no path")
-    repository = _repository(github_repository, secrets)
+    if type(oidc) is not bool:
+        raise ValueError("worker --oidc-issuer is not accepted")
+    required = "--secrets" if secrets else ("--oidc-issuer" if oidc else None)
+    repository = _repository(github_repository, required)
     key = None if app_key is None else accept_app_key(app_key, key_dir)
     refs = _sequence(secret_refs, _secret_ref, "worker --secret-ref must be a full ref")
     pushers = _sequence(
@@ -469,6 +473,8 @@ def accept_socket_flags(
         partners.append("--app-key")
     if secrets:
         partners.append("--secrets")
+    if oidc:
+        partners.append("--oidc-issuer")
     if docker_socket and partners:
         if runner_image is None:
             raise ValueError(
