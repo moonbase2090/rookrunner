@@ -14,6 +14,10 @@ This file does not reconstruct earlier milestones.
   omitted key, still fails the job. A non-boolean is rejected. Job
   `continue-on-error` and a composite step's `continue-on-error` stay
   unsupported. The capability version stays 12.
+- A poll can record the pending status it already posted when the run
+  has since finished. That record is not a terminal state. A later pass
+  still posts the finished state. A terminal state that does not match
+  the run is still refused.
 
 ## [0.1.5] - 2026-10-17
 

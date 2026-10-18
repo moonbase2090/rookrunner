@@ -234,6 +234,104 @@ class WorkerStatusTests(unittest.TestCase):
         run = _record(self.worker, snapshot_id, digest, state="failed", exit_code=1)
         reply = self._reply(_params(run["run_id"], record="success"))
         self.assertEqual(reply["error"]["data"]["kind"], "INVALID_PARAMS")
+        self.assertEqual(reply["error"]["message"], "recorded state does not match the run")
+        self.assertEqual(self._status_states(run["run_id"]), [])
+
+    def _finish(self, run, state, exit_code):
+        run["state"] = state
+        run["exit_code"] = exit_code
+        with self.worker.guard:
+            self.worker.db.execute(
+                "UPDATE runs SET record=? WHERE id=?",
+                (canonical(run), run["run_id"]),
+            )
+
+    def _status_states(self, run_id):
+        rows = self.worker.db.execute(
+            "SELECT state FROM status_posts WHERE run_id=? ORDER BY state",
+            (run_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def _check_row(self, run_id):
+        return self.worker.db.execute(
+            "SELECT check_run_id, status, conclusion FROM check_posts WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+
+    def test_a_pending_record_after_the_run_finishes_is_not_terminal(self):
+        cases = (
+            ("succeeded", 0, "success"),
+            ("failed", 1, "failure"),
+            ("cancelled", None, "error"),
+        )
+        for run_state, exit_code, github in cases:
+            with self.subTest(run_state=run_state):
+                snapshot_id, digest = _snapshot(self.state)
+                run = _record(self.worker, snapshot_id, digest, state="running", exit_code=None)
+                decision = self._reply(_params(run["run_id"]))
+                self.assertEqual(decision["result"], {"action": "post", "state": "pending"})
+                self._finish(run, run_state, exit_code)
+                recorded = self._reply(_params(run["run_id"], record="pending"))
+                self.assertEqual(
+                    recorded.get("result", {}).get("action"),
+                    "recorded",
+                    recorded.get("error"),
+                )
+                self.assertEqual(self._status_states(run["run_id"]), ["pending"])
+                again = self._reply(_params(run["run_id"]))
+                self.assertEqual(again["result"], {"action": "post", "state": github})
+
+    def test_a_terminal_record_for_a_different_state_is_not_stored(self):
+        snapshot_id, digest = _snapshot(self.state)
+        running = _record(self.worker, snapshot_id, digest, state="running", exit_code=None)
+        early = self._reply(_params(running["run_id"], record="success"))
+        self.assertEqual(early["error"]["message"], "recorded state does not match the run")
+        self.assertEqual(self._status_states(running["run_id"]), [])
+        other_id, other_digest = _snapshot(self.state)
+        finished = _record(self.worker, other_id, other_digest, state="succeeded", exit_code=0)
+        wrong = self._reply(_params(finished["run_id"], record="failure"))
+        self.assertEqual(wrong["error"]["message"], "recorded state does not match the run")
+        self.assertEqual(self._status_states(finished["run_id"]), [])
+        mismatched = self._reply(_params(finished["run_id"], record="error"))
+        self.assertEqual(mismatched["error"]["message"], "recorded state does not match the run")
+        self.assertEqual(self._status_states(finished["run_id"]), [])
+
+    def test_a_pending_check_posted_before_the_run_finishes_is_not_terminal(self):
+        snapshot_id, digest = _snapshot(self.state)
+        run = _record(self.worker, snapshot_id, digest, state="running", exit_code=None)
+        decision = self._reply({**_params(run["run_id"]), "checks": True})
+        self.assertEqual(decision["result"]["action"], "post")
+        self.assertEqual(decision["result"]["state"], "pending")
+        self.assertEqual(decision["result"]["check_status"], "in_progress")
+        self.assertNotIn("check_conclusion", decision["result"])
+        self._finish(run, "succeeded", 0)
+        posted = _params(run["run_id"], record="pending")
+        posted["check_run_id"] = 424242
+        posted["check_status"] = "in_progress"
+        recorded = self._reply(posted)
+        self.assertEqual(
+            recorded.get("result", {}).get("action"),
+            "recorded",
+            recorded.get("error"),
+        )
+        self.assertEqual(tuple(self._check_row(run["run_id"])), (424242, "in_progress", None))
+        self.assertEqual(self._status_states(run["run_id"]), ["pending"])
+        again = self._reply({**_params(run["run_id"]), "checks": True})
+        self.assertEqual(again["result"]["action"], "post")
+        self.assertEqual(again["result"]["state"], "success")
+        self.assertEqual(again["result"]["check_status"], "completed")
+        self.assertEqual(again["result"]["check_conclusion"], "success")
+        self.assertEqual(again["result"]["check_run_id"], 424242)
+        self.assertNotIn("status_recorded", again["result"])
+        wrong = _params(run["run_id"], record="pending")
+        wrong["check_run_id"] = 424243
+        wrong["check_status"] = "completed"
+        wrong["check_conclusion"] = "failure"
+        refused = self._reply(wrong)
+        self.assertEqual(refused["error"]["message"], "recorded check does not match the run")
+        self.assertEqual(tuple(self._check_row(run["run_id"])), (424242, "in_progress", None))
+        self.assertEqual(self._status_states(run["run_id"]), ["pending"])
 
 
 class _Handler(BaseHTTPRequestHandler):
