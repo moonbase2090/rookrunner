@@ -488,9 +488,67 @@ class RunnerAccountTests(unittest.TestCase):
         self.assertNotIn("no-new-privileges", job)
         self.assertEqual(job[job.index("--cap-drop") + 1], "ALL")
         adds = [job[index + 1] for index, part in enumerate(job) if part == "--cap-add"]
-        self.assertEqual(adds, ["SETUID", "SETGID", "AUDIT_WRITE"])
+        self.assertEqual(
+            adds,
+            [
+                "SETUID",
+                "SETGID",
+                "AUDIT_WRITE",
+                "CHOWN",
+                "DAC_OVERRIDE",
+                "DAC_READ_SEARCH",
+                "FOWNER",
+            ],
+        )
         self.assertTrue(
             any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)
+        )
+
+    def test_passwordless_sudo_can_fix_apt_partial_dirs_and_read_workspace(self):
+        workflow = _workflow(
+            step=(
+                'test "$(id -u)" != 0\n'
+                'test "$(stat -c %a "$GITHUB_WORKSPACE")" = 700\n'
+                'test "$(stat -c %u "$GITHUB_WORKSPACE")" = "$(id -u)"\n'
+                'printf marker > "$GITHUB_WORKSPACE/marker.txt"\n'
+                "sudo -n mkdir -p /tmp/ws-copy\n"
+                'sudo -n cp -a "$GITHUB_WORKSPACE/." /tmp/ws-copy/\n'
+                "sudo -n test -f /tmp/ws-copy/marker.txt\n"
+                "sudo -n mkdir -p /var/lib/apt/lists/partial"
+                " /var/cache/apt/archives/partial\n"
+                "sudo -n sh -c 'printf x > /var/cache/apt/archives/partial/example.deb'\n"
+                "sudo -n chown 42:0 /var/lib/apt/lists/partial\n"
+                "sudo -n chmod 700 /var/lib/apt/lists/partial\n"
+                'test "$(sudo -n stat -c %u:%g:%a /var/lib/apt/lists/partial)"'
+                " = 42:0:700\n"
+                "sudo -n chown 42:42 /var/cache/apt/archives/partial\n"
+                "sudo -n chmod 700 /var/cache/apt/archives/partial\n"
+                "sudo -n rm -f /var/cache/apt/archives/partial/example.deb\n"
+                "sudo -n test ! -e /var/cache/apt/archives/partial/example.deb\n"
+            )
+        )
+        result, _workspace = self._run(
+            workflow, self.sudo_image, self.sudo_image, passwordless_sudo=True
+        )
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual(result["exit_code"], 0)
+        calls = _calls(self.log)
+        job = next(call for call in calls if call and call[0] == "create")
+        self.assertNotIn("--privileged", job)
+        self.assertNotIn("no-new-privileges", job)
+        self.assertEqual(job[job.index("--cap-drop") + 1], "ALL")
+        adds = [job[index + 1] for index, part in enumerate(job) if part == "--cap-add"]
+        self.assertEqual(
+            adds,
+            [
+                "SETUID",
+                "SETGID",
+                "AUDIT_WRITE",
+                "CHOWN",
+                "DAC_OVERRIDE",
+                "DAC_READ_SEARCH",
+                "FOWNER",
+            ],
         )
 
     def test_a_different_image_does_not_gain_sudoers(self):

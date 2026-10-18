@@ -42,9 +42,9 @@ that changes that set. The account-setup container still runs as root
 to write passwd, and it does not receive those flags. Passwordless
 sudo is off unless the worker is started with `--passwordless-sudo`.
 That flag writes a sudoers file for the caller, omits
-no-new-privileges on the job, keeps only `SETUID`, `SETGID`, and
-`AUDIT_WRITE`, and warns that the job can become root in its
-container. With `--docker-socket`, that is control of the host
+no-new-privileges on the job, and keeps `SETUID`, `SETGID`,
+`AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, and
+`FOWNER`. It warns that the job can become root in its container. With `--docker-socket`, that is control of the host
 engine. A step cannot gain privileges through sudo.
 
 A bash or sh `run` script does not insert a `${{ }}` value as raw

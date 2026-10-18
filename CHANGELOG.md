@@ -7,6 +7,14 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Passwordless sudo still drops every capability. It then keeps
+  `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
+  `DAC_READ_SEARCH`, and `FOWNER`. Root in that job can chown and
+  chmod the apt partial directories, unlink a file in a mode-0700
+  directory owned by another user, and stat a mode-0700 workspace
+  owned by the job user. A job without that opt-in still sets
+  no-new-privileges and adds no capabilities.
+
 ## [0.1.6] - 2026-10-17
 
 - A step `continue-on-error` may be true, false, or an expression that

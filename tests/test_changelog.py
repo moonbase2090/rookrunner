@@ -83,14 +83,20 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_6_is_the_current_version_and_unreleased_is_empty(self):
+    def test_0_1_6_is_the_current_version(self):
         self.assertIn("The current package version is 0.1.6.", TEXT)
         self.assertIn("## [0.1.6] - 2026-10-17", TEXT)
+        self.assertNotIn("## [0.1.7]", TEXT)
         section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.6.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertIn("## [Unreleased]\n\n## [0.1.6] - 2026-10-17", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.6]", 1)[0]
+        pending = " ".join(unreleased.split())
+        self.assertIn("Passwordless sudo still drops every capability.", pending)
+        self.assertIn("`CHOWN`, `DAC_OVERRIDE`", pending)
+        self.assertIn("stat a mode-0700 workspace", pending)
+        self.assertIn("adds no capabilities.", pending)
 
     def test_0_1_6_records_step_continue_on_error(self):
         section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
