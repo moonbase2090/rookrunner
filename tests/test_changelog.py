@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -60,7 +60,6 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("its first parent is the listed base", PROSE)
 
     def test_0_1_5_records_the_same_repository_pull_request_rule(self):
-        self.assertIn("The current package version is 0.1.5.", TEXT)
         self.assertIn("## [0.1.5] - 2026-10-17", TEXT)
         section = TEXT.split("## [0.1.5] - 2026-10-17", 1)[1].split("## [0.1.4]", 1)[0]
         prose = " ".join(section.split())
@@ -84,8 +83,17 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_unreleased_records_step_continue_on_error(self):
-        section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]
+    def test_0_1_6_is_the_current_version_and_unreleased_is_empty(self):
+        self.assertIn("The current package version is 0.1.6.", TEXT)
+        self.assertIn("## [0.1.6] - 2026-10-17", TEXT)
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.6.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("## [Unreleased]\n\n## [0.1.6] - 2026-10-17", TEXT)
+
+    def test_0_1_6_records_step_continue_on_error(self):
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("A step `continue-on-error` may be true, false, or an expression", prose)
         self.assertIn("the outcome is failure, the conclusion is success", prose)
@@ -94,8 +102,8 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("Job `continue-on-error`", prose)
         self.assertIn("The capability version stays 12.", prose)
 
-    def test_unreleased_records_a_pending_status_after_the_run_finishes(self):
-        section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]
+    def test_0_1_6_records_a_pending_status_after_the_run_finishes(self):
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn(
             "A poll can record the pending status it already posted when the run has since finished.",
