@@ -896,6 +896,9 @@ def _functions(prior, cancelled):
 
 
 def _conclusion(record):
+    explicit = record.get("conclusion")
+    if explicit in {"success", "failure", "cancelled", "skipped"}:
+        return explicit
     status = record.get("status")
     if status == "succeeded":
         return "success"
