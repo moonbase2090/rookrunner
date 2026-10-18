@@ -10,8 +10,10 @@ it. It writes the caller uid into the attempt directory
 Passwordless sudo is off unless the caller passes `passwordless_sudo`.
 The job container drops every capability and sets no-new-privileges,
 so a step cannot gain privileges through sudo. The opt-in writes a
-sudoers file, omits no-new-privileges, and keeps only `SETUID`,
-`SETGID`, and `AUDIT_WRITE`. A different digest keeps today's image.
+sudoers file and omits no-new-privileges. It keeps `SETUID`,
+`SETGID`, and `AUDIT_WRITE` so `sudo` can change uid, plus `CHOWN`,
+`DAC_OVERRIDE`, `DAC_READ_SEARCH`, and `FOWNER` so that root can
+administer files it does not own. A different digest keeps today's image.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -64,8 +66,9 @@ default capability set, including `CAP_CHOWN`. It does not receive
 that set. The one-shot account setup container stays root so it can
 write passwd. It writes sudoers only when passwordless sudo is
 requested, and it does not receive those flags. The default job
-cannot become root. The opt-in omits no-new-privileges and keeps only
-`SETUID`, `SETGID`, and `AUDIT_WRITE`. The
+cannot become root. The opt-in omits no-new-privileges and keeps
+`SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
+`DAC_READ_SEARCH`, and `FOWNER`. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the socket of the pinned Docker context, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -1471,10 +1474,14 @@ def _job_isolation_args(passwordless_sudo=False):
 
     The account-setup container is separate. It runs as root so it can
     write the caller account, and it does not receive these flags.
-    ``passwordless_sudo`` omits no-new-privileges and keeps only
-    ``SETUID``, ``SETGID``, and ``AUDIT_WRITE``. ``sudo`` needs the
-    first two to change uid and gid. The third lets its audit plugin
-    run. Without that opt-in the job cannot become root.
+    ``passwordless_sudo`` omits no-new-privileges. ``sudo`` needs
+    ``SETUID`` and ``SETGID`` to change uid and gid, and
+    ``AUDIT_WRITE`` for its audit plugin. ``CHOWN`` and ``FOWNER``
+    let root chown a directory and then chmod it, which is what apt
+    does for its partial directories. ``DAC_OVERRIDE`` lets root
+    unlink a file in a mode-0700 directory owned by another user.
+    ``DAC_READ_SEARCH`` lets root stat a mode-0700 workspace owned
+    by the job user. Without that opt-in the job cannot become root.
     """
 
     if type(passwordless_sudo) is not bool:
@@ -1489,6 +1496,14 @@ def _job_isolation_args(passwordless_sudo=False):
             "SETGID",
             "--cap-add",
             "AUDIT_WRITE",
+            "--cap-add",
+            "CHOWN",
+            "--cap-add",
+            "DAC_OVERRIDE",
+            "--cap-add",
+            "DAC_READ_SEARCH",
+            "--cap-add",
+            "FOWNER",
         ]
     return [
         "--security-opt",
