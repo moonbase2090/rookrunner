@@ -1,6 +1,7 @@
 # Project instructions
 
 The working title is Rookrunner. Treat `execution-platform` as a temporary directory name.
+Run `scripts/install-hooks.sh` once per clone to install the formatting hook.
 
 Read README.md, docs/prd.md, docs/design/architecture.md, and docs/roadmap.md before implementation.
 Document proposed decisions separately from accepted direction and implemented behavior.
