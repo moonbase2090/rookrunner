@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.5. A published release section
+The current package version is 0.1.6. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.6] - 2026-10-17
 
 - A step `continue-on-error` may be true, false, or an expression that
   evaluates to a boolean. When the step fails and the value is true,
@@ -18,6 +20,8 @@ This file does not reconstruct earlier milestones.
   has since finished. That record is not a terminal state. A later pass
   still posts the finished state. A terminal state that does not match
   the run is still refused.
+- The package version is 0.1.6. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.5] - 2026-10-17
 
