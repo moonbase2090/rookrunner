@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -59,8 +59,31 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("its first parent is the listed base", PROSE)
 
+    def test_0_1_5_records_the_same_repository_pull_request_rule(self):
+        self.assertIn("The current package version is 0.1.5.", TEXT)
+        self.assertIn("## [0.1.5] - 2026-10-17", TEXT)
+        section = TEXT.split("## [0.1.5] - 2026-10-17", 1)[1].split("## [0.1.4]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn(
+            "A same-repository pull request with a listed association goes on "
+            "to the per-commit write check",
+            prose,
+        )
+        self.assertIn(
+            "A fork, a missing association, and an unrecognized association are still refused.",
+            prose,
+        )
+        self.assertIn("GitHub reports the type as Bot", prose)
+        self.assertIn("GitHub committed and signed it as web-flow.", prose)
+        self.assertIn(
+            "`--allow-pr-workflow` still accepts only OWNER, MEMBER, and COLLABORATOR.",
+            prose,
+        )
+        self.assertIn("The package version is 0.1.5.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
+
     def test_0_1_4_records_the_poll_skip_and_the_mit_license(self):
-        self.assertIn("The current package version is 0.1.4.", TEXT)
         self.assertIn("## [0.1.4] - 2026-10-14", TEXT)
         section = TEXT.split("## [0.1.4] - 2026-10-14", 1)[1].split("## [0.1.3]", 1)[0]
         prose = " ".join(section.split())
