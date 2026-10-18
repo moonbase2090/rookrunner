@@ -81,7 +81,18 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("The package version is 0.1.5.", prose)
         self.assertIn("This change does not create a tag.", prose)
+        self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
+
+    def test_unreleased_records_step_continue_on_error(self):
+        section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("A step `continue-on-error` may be true, false, or an expression", prose)
+        self.assertIn("the outcome is failure, the conclusion is success", prose)
+        self.assertIn("A later step sees `success()` as true.", prose)
+        self.assertIn("False, or an omitted key, still fails the job.", prose)
+        self.assertIn("Job `continue-on-error`", prose)
+        self.assertIn("The capability version stays 12.", prose)
 
     def test_unreleased_records_a_pending_status_after_the_run_finishes(self):
         section = TEXT.split("## [Unreleased]\n", 1)[1].split("## [0.1.5]", 1)[0]

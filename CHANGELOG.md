@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A step `continue-on-error` may be true, false, or an expression that
+  evaluates to a boolean. When the step fails and the value is true,
+  the outcome is failure, the conclusion is success, and the job
+  continues. A later step sees `success()` as true. False, or an
+  omitted key, still fails the job. A non-boolean is rejected. Job
+  `continue-on-error` and a composite step's `continue-on-error` stay
+  unsupported. The capability version stays 12.
 - A poll can record the pending status it already posted when the run
   has since finished. That record is not a terminal state. A later pass
   still posts the finished state. A terminal state that does not match
