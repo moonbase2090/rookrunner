@@ -1,6 +1,6 @@
 # OIDC identity tokens for jobs
 
-Status: accepted direction. MB2090 decided open questions 1 to 5 on
+Status: accepted direction. Open questions 1 to 5 were decided on
 2026-10-17; the answers are under "Decisions" at the end. Questions 6
 and 7 stay open. Phase 1 (keys and `oidc publish`) is implemented.
 Phases 2 and 3 are not. Nothing here is a GitHub-equivalence claim.
@@ -105,7 +105,7 @@ certificate. Three choices meet the AWS and Entra fetch rules:
    published.
 
 All three are HTTPS on a public CA, need no server on the worker host,
-and survive a worker outage. MB2090 chose option 2: Cloudflare Workers
+and survive a worker outage. The project chose option 2: Cloudflare Workers
 static assets, served alongside the Rookrunner website at
 `oidc.rookrunner.com`. Publishing there is phase 4.
 
@@ -419,7 +419,7 @@ Phases 1 and 2 add no runtime behavior. Phase 3 is behind
 
 ## Decisions
 
-MB2090 decided these on 2026-10-17.
+These were decided on 2026-10-17.
 
 1. **Issuer host and domain.** `https://oidc.rookrunner.com`, served
    from Cloudflare Workers static assets alongside the Rookrunner
@@ -432,7 +432,7 @@ MB2090 decided these on 2026-10-17.
    (`--secret-ref` and `--secret-pusher`).
 5. **Token lifetime.** Five minutes.
 
-## Open decisions for MB2090
+## Open decisions
 
 6. **Azure CLI in the runner image** for `azure/login`, or document
    the direct token exchange only.
