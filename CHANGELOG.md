@@ -1,11 +1,25 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.4. A published release section
+The current package version is 0.1.5. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.5] - 2026-10-17
+
+- A same-repository pull request with a listed association goes on
+  to the per-commit write check instead of being refused for the
+  association alone. A fork, a missing association, and an
+  unrecognized association are still refused.
+- A commit authored by a GitHub App passes the author check only
+  when GitHub reports the type as Bot and GitHub committed and
+  signed it as web-flow.
+- `--allow-pr-workflow` still accepts only OWNER, MEMBER, and
+  COLLABORATOR.
+- The package version is 0.1.5. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.4] - 2026-10-14
 
