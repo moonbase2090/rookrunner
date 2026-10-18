@@ -131,7 +131,18 @@ class ContainerLimitTests(unittest.TestCase):
         self.assertEqual(_flag(job, "--cap-drop"), "ALL")
         self.assertEqual(job.count("--cap-drop"), 1)
         adds = [job[index + 1] for index, part in enumerate(job) if part == "--cap-add"]
-        self.assertEqual(adds, ["SETUID", "SETGID", "AUDIT_WRITE"])
+        self.assertEqual(
+            adds,
+            [
+                "SETUID",
+                "SETGID",
+                "AUDIT_WRITE",
+                "CHOWN",
+                "DAC_OVERRIDE",
+                "DAC_READ_SEARCH",
+                "FOWNER",
+            ],
+        )
         self.assertTrue(any("destination=/etc/passwd,readonly" in part for part in job))
         self.assertTrue(
             any("destination=/etc/sudoers.d/rookrunner,readonly" in part for part in job)

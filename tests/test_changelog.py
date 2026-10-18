@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -59,15 +59,83 @@ class ChangelogTests(unittest.TestCase):
         )
         self.assertIn("its first parent is the listed base", PROSE)
 
+    def test_0_1_5_records_the_same_repository_pull_request_rule(self):
+        self.assertIn("## [0.1.5] - 2026-10-17", TEXT)
+        section = TEXT.split("## [0.1.5] - 2026-10-17", 1)[1].split("## [0.1.4]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn(
+            "A same-repository pull request with a listed association goes on "
+            "to the per-commit write check",
+            prose,
+        )
+        self.assertIn(
+            "A fork, a missing association, and an unrecognized association are still refused.",
+            prose,
+        )
+        self.assertIn("GitHub reports the type as Bot", prose)
+        self.assertIn("GitHub committed and signed it as web-flow.", prose)
+        self.assertIn(
+            "`--allow-pr-workflow` still accepts only OWNER, MEMBER, and COLLABORATOR.",
+            prose,
+        )
+        self.assertIn("The package version is 0.1.5.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertNotIn("A step `continue-on-error` may be true", prose)
+        self.assertNotIn("A poll can record the pending status it already posted", prose)
+
+    def test_0_1_7_is_the_current_version_and_unreleased_is_empty(self):
+        self.assertIn("The current package version is 0.1.7.", TEXT)
+        self.assertIn("## [0.1.7] - 2026-10-18", TEXT)
+        section = TEXT.split("## [0.1.7] - 2026-10-18", 1)[1].split("## [0.1.6]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.7.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("## [Unreleased]\n\n## [0.1.7] - 2026-10-18", TEXT)
+
+    def test_0_1_7_records_passwordless_sudo_file_capabilities(self):
+        section = TEXT.split("## [0.1.7] - 2026-10-18", 1)[1].split("## [0.1.6]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("Passwordless sudo still drops every capability.", prose)
+        self.assertIn("`CHOWN`, `DAC_OVERRIDE`", prose)
+        self.assertIn("stat a mode-0700 workspace", prose)
+        self.assertIn("adds no capabilities.", prose)
+
+    def test_0_1_6_records_its_package_version(self):
+        self.assertIn("## [0.1.6] - 2026-10-17", TEXT)
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.6.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertNotIn("Passwordless sudo still drops every capability.", prose)
+
+    def test_0_1_6_records_step_continue_on_error(self):
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("A step `continue-on-error` may be true, false, or an expression", prose)
+        self.assertIn("the outcome is failure, the conclusion is success", prose)
+        self.assertIn("A later step sees `success()` as true.", prose)
+        self.assertIn("False, or an omitted key, still fails the job.", prose)
+        self.assertIn("Job `continue-on-error`", prose)
+        self.assertIn("The capability version stays 12.", prose)
+
+    def test_0_1_6_records_a_pending_status_after_the_run_finishes(self):
+        section = TEXT.split("## [0.1.6] - 2026-10-17", 1)[1].split("## [0.1.5]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn(
+            "A poll can record the pending status it already posted when the run has since finished.",
+            prose,
+        )
+        self.assertIn("That record is not a terminal state.", prose)
+        self.assertIn("A later pass still posts the finished state.", prose)
+        self.assertIn("A terminal state that does not match the run is still refused.", prose)
+
     def test_0_1_4_records_the_poll_skip_and_the_mit_license(self):
-        self.assertIn("The current package version is 0.1.4.", TEXT)
         self.assertIn("## [0.1.4] - 2026-10-14", TEXT)
         section = TEXT.split("## [0.1.4] - 2026-10-14", 1)[1].split("## [0.1.3]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("That run is skipped and its submission stays.", prose)
         self.assertIn("The project license is the MIT License.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertNotIn("## [Unreleased]\n\n-", TEXT)
 
     def test_0_1_3_records_the_network_default_and_the_upgrade(self):
         self.assertIn("## [0.1.3] - 2026-10-11", TEXT)

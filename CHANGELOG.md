@@ -1,11 +1,53 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.4. A published release section
+The current package version is 0.1.7. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.7] - 2026-10-18
+
+- Passwordless sudo still drops every capability. It then keeps
+  `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
+  `DAC_READ_SEARCH`, and `FOWNER`. Root in that job can chown and
+  chmod the apt partial directories, unlink a file in a mode-0700
+  directory owned by another user, and stat a mode-0700 workspace
+  owned by the job user. A job without that opt-in still sets
+  no-new-privileges and adds no capabilities.
+- The package version is 0.1.7. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
+
+## [0.1.6] - 2026-10-17
+
+- A step `continue-on-error` may be true, false, or an expression that
+  evaluates to a boolean. When the step fails and the value is true,
+  the outcome is failure, the conclusion is success, and the job
+  continues. A later step sees `success()` as true. False, or an
+  omitted key, still fails the job. A non-boolean is rejected. Job
+  `continue-on-error` and a composite step's `continue-on-error` stay
+  unsupported. The capability version stays 12.
+- A poll can record the pending status it already posted when the run
+  has since finished. That record is not a terminal state. A later pass
+  still posts the finished state. A terminal state that does not match
+  the run is still refused.
+- The package version is 0.1.6. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
+
+## [0.1.5] - 2026-10-17
+
+- A same-repository pull request with a listed association goes on
+  to the per-commit write check instead of being refused for the
+  association alone. A fork, a missing association, and an
+  unrecognized association are still refused.
+- A commit authored by a GitHub App passes the author check only
+  when GitHub reports the type as Bot and GitHub committed and
+  signed it as web-flow.
+- `--allow-pr-workflow` still accepts only OWNER, MEMBER, and
+  COLLABORATOR.
+- The package version is 0.1.5. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.4] - 2026-10-14
 

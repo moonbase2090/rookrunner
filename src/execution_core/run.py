@@ -10,8 +10,10 @@ it. It writes the caller uid into the attempt directory
 Passwordless sudo is off unless the caller passes `passwordless_sudo`.
 The job container drops every capability and sets no-new-privileges,
 so a step cannot gain privileges through sudo. The opt-in writes a
-sudoers file, omits no-new-privileges, and keeps only `SETUID`,
-`SETGID`, and `AUDIT_WRITE`. A different digest keeps today's image.
+sudoers file and omits no-new-privileges. It keeps `SETUID`,
+`SETGID`, and `AUDIT_WRITE` so `sudo` can change uid, plus `CHOWN`,
+`DAC_OVERRIDE`, `DAC_READ_SEARCH`, and `FOWNER` so that root can
+administer files it does not own. A different digest keeps today's image.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -64,8 +66,9 @@ default capability set, including `CAP_CHOWN`. It does not receive
 that set. The one-shot account setup container stays root so it can
 write passwd. It writes sudoers only when passwordless sudo is
 requested, and it does not receive those flags. The default job
-cannot become root. The opt-in omits no-new-privileges and keeps only
-`SETUID`, `SETGID`, and `AUDIT_WRITE`. The
+cannot become root. The opt-in omits no-new-privileges and keeps
+`SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
+`DAC_READ_SEARCH`, and `FOWNER`. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the socket of the pinned Docker context, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -1471,10 +1474,14 @@ def _job_isolation_args(passwordless_sudo=False):
 
     The account-setup container is separate. It runs as root so it can
     write the caller account, and it does not receive these flags.
-    ``passwordless_sudo`` omits no-new-privileges and keeps only
-    ``SETUID``, ``SETGID``, and ``AUDIT_WRITE``. ``sudo`` needs the
-    first two to change uid and gid. The third lets its audit plugin
-    run. Without that opt-in the job cannot become root.
+    ``passwordless_sudo`` omits no-new-privileges. ``sudo`` needs
+    ``SETUID`` and ``SETGID`` to change uid and gid, and
+    ``AUDIT_WRITE`` for its audit plugin. ``CHOWN`` and ``FOWNER``
+    let root chown a directory and then chmod it, which is what apt
+    does for its partial directories. ``DAC_OVERRIDE`` lets root
+    unlink a file in a mode-0700 directory owned by another user.
+    ``DAC_READ_SEARCH`` lets root stat a mode-0700 workspace owned
+    by the job user. Without that opt-in the job cannot become root.
     """
 
     if type(passwordless_sudo) is not bool:
@@ -1489,6 +1496,14 @@ def _job_isolation_args(passwordless_sudo=False):
             "SETGID",
             "--cap-add",
             "AUDIT_WRITE",
+            "--cap-add",
+            "CHOWN",
+            "--cap-add",
+            "DAC_OVERRIDE",
+            "--cap-add",
+            "DAC_READ_SEARCH",
+            "--cap-add",
+            "FOWNER",
         ]
     return [
         "--security-opt",
@@ -2670,11 +2685,15 @@ def run_job(
 
     Setup failures raise RunError with kind SETUP_FAILED. They are not a step
     result and they are not exit code 0. A returned result has status
-    succeeded and exit_code 0 only when every step that ran exited 0. A step
-    whose `if` is false is skipped and does not run. A failed step does not
-    run later steps whose condition is false, and it does not stop a later
-    step whose condition is true. The result names the first failed step, its
-    exit code, and the image digest.
+    succeeded and exit_code 0 when no step failure counts against the job.
+    A step whose `if` is false is skipped and does not run. A failed step
+    does not run later steps whose condition is false, and it does not stop
+    a later step whose condition is true. A step `continue-on-error` of
+    true, or an expression that evaluates to true, records outcome failure
+    and conclusion success. That step does not fail the job, and a later
+    step sees `success()` as true. False, or an omitted key, keeps the
+    failure. The result names the first failed step that failed the job,
+    its exit code, and the image digest. The capability version stays 12.
 
     The first top-level concrete job's deadline is that job's
     `timeout_minutes` (default 360) measured from the start of this call.
@@ -3189,7 +3208,7 @@ def run_job(
                                     _stamp_token_warning(record, runtime, token_now())
                                     records.append(record)
                                     prior.append(record)
-                                    if record["status"] == "failed":
+                                    if _step_fails_the_job(record):
                                         job_failed = True
                                         if failed is None:
                                             failed = record
@@ -3235,7 +3254,7 @@ def run_job(
                                     _stamp_token_warning(record, runtime, token_now())
                                     records.append(record)
                                     post_index += 1
-                                    if record["status"] == "failed":
+                                    if _step_fails_the_job(record):
                                         job_failed = True
                                         if failed is None:
                                             failed = record
@@ -3434,8 +3453,9 @@ def _expression_values(
     steps = {}
     for record in prior:
         step_id = record.get("id")
-        conclusion = _conclusion(record.get("status"))
-        if not isinstance(step_id, str) or step_id == "" or conclusion is None:
+        outcome = _conclusion(record.get("status"))
+        conclusion = _step_context_conclusion(record)
+        if not isinstance(step_id, str) or step_id == "" or outcome is None:
             continue
         if output_map is not None:
             outputs = dict(output_map.get(step_id, {}))
@@ -3443,8 +3463,8 @@ def _expression_values(
             outputs = dict(runtime.outputs.get(step_id, {}))
         else:
             outputs = {}
-        steps[step_id] = {"outcome": conclusion, "conclusion": conclusion, "outputs": outputs}
-    if cancelled or any(record.get("status") == "failed" for record in prior):
+        steps[step_id] = {"outcome": outcome, "conclusion": conclusion, "outputs": outputs}
+    if cancelled or any(_step_fails_the_job(record) for record in prior):
         job_status = "cancelled" if cancelled else "failure"
     else:
         job_status = "success"
@@ -3582,6 +3602,52 @@ def _job_outputs(job, values, used, masks=None):
     return produced, used
 
 
+def _step_context_conclusion(record):
+    """Return the conclusion a later step sees.
+
+    A tolerated failure keeps status `failed` and sets conclusion
+    `success`. Other records use the status.
+    """
+
+    explicit = record.get("conclusion")
+    if explicit in {"success", "failure", "cancelled", "skipped"}:
+        return explicit
+    return _conclusion(record.get("status"))
+
+
+def _step_fails_the_job(record):
+    """Return whether this step's failure fails the job."""
+
+    return record.get("status") == "failed" and _step_context_conclusion(record) == "failure"
+
+
+def _continue_on_error_flag(step, values, prior, cancelled):
+    """Return the step's continue-on-error value.
+
+    True and False are the stored boolean. A string is evaluated in the
+    step `if` context and must be a boolean. None means the value is not
+    a boolean. An expression error propagates.
+    """
+
+    flag = step.get("continue_on_error", False)
+    if flag is False or flag is None:
+        return False
+    if flag is True:
+        return True
+    if not isinstance(flag, str):
+        return None
+    value = evaluate(flag, values, prior, cancelled)
+    if type(value) is not bool:
+        return None
+    return value
+
+
+def _finish_considered(record, tolerate):
+    if tolerate and record.get("status") == "failed":
+        record["conclusion"] = "success"
+    return record
+
+
 def _consider_step(
     docker,
     name,
@@ -3604,6 +3670,7 @@ def _consider_step(
     inputs=None,
 ):
     job_id = job.get("id")
+    tolerate = step.get("continue_on_error") is True
     try:
         prepared, values = _with_rendered_step(
             step,
@@ -3618,9 +3685,24 @@ def _consider_step(
             matrix=matrix,
             strategy=strategy,
         )
+        decided = _continue_on_error_flag(step, values, prior, cancelled)
+        if decided is None:
+            return _step_result(
+                step,
+                "failed",
+                None,
+                "",
+                "",
+                "continue-on-error did not evaluate to a boolean",
+                job_id,
+            )
+        tolerate = decided
         enabled = step_is_enabled(step.get("if"), values, prior, cancelled)
     except ExprError as exc:
-        return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
+        return _finish_considered(
+            _step_result(step, "failed", None, "", "", str(exc)[:512], job_id),
+            tolerate,
+        )
     if not enabled:
         return _step_result(prepared, "skipped", None, "", "", None, job_id)
     if (
@@ -3640,70 +3722,85 @@ def _consider_step(
             if secret_env:
                 prepared["_rr_secrets"] = secret_env
         except ExprError as exc:
-            return _step_result(prepared, "failed", None, "", "", str(exc)[:512], job_id)
+            return _finish_considered(
+                _step_result(prepared, "failed", None, "", "", str(exc)[:512], job_id),
+                tolerate,
+            )
     if step.get("checkout") == "captured":
         return _step_result(prepared, "succeeded", 0, "", "", None, job_id)
     if step.get("upload") in {"files", "sarif"}:
-        return _run_upload(prepared, workspace, values, job_id, runtime)
+        return _finish_considered(
+            _run_upload(prepared, workspace, values, job_id, runtime),
+            tolerate,
+        )
     if prepared.get("javascript") == "node24":
-        return _run_javascript(
-            docker,
-            name,
-            prepared,
-            workflow,
-            job,
-            event,
-            workspace,
-            bash_ok,
-            step_timeout,
-            deadline,
-            prior,
-            cancelled,
-            needs,
-            script_name,
-            runtime,
-            commands,
-            job_id,
-            matrix=matrix,
-            strategy=strategy,
-            inputs=inputs,
+        return _finish_considered(
+            _run_javascript(
+                docker,
+                name,
+                prepared,
+                workflow,
+                job,
+                event,
+                workspace,
+                bash_ok,
+                step_timeout,
+                deadline,
+                prior,
+                cancelled,
+                needs,
+                script_name,
+                runtime,
+                commands,
+                job_id,
+                matrix=matrix,
+                strategy=strategy,
+                inputs=inputs,
+            ),
+            tolerate,
         )
     if "uses" in prepared:
-        return _run_composite(
+        return _finish_considered(
+            _run_composite(
+                docker,
+                name,
+                prepared,
+                workflow,
+                job,
+                event,
+                workspace,
+                bash_ok,
+                step_timeout,
+                deadline,
+                prior,
+                cancelled,
+                needs,
+                script_name,
+                runtime,
+                commands,
+                job_id,
+                matrix=matrix,
+                strategy=strategy,
+            ),
+            tolerate,
+        )
+    return _finish_considered(
+        _run_step(
             docker,
             name,
             prepared,
             workflow,
             job,
-            event,
             workspace,
             bash_ok,
             step_timeout,
             deadline,
-            prior,
-            cancelled,
-            needs,
             script_name,
+            job_id,
             runtime,
             commands,
-            job_id,
-            matrix=matrix,
-            strategy=strategy,
-        )
-    return _run_step(
-        docker,
-        name,
-        prepared,
-        workflow,
-        job,
-        workspace,
-        bash_ok,
-        step_timeout,
-        deadline,
-        script_name,
-        job_id,
-        runtime,
-        commands,
+        ),
+        tolerate,
     )
 
 

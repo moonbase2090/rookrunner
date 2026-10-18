@@ -183,8 +183,9 @@ The implementation does the following.
    worker is not root. A different caller image does not get that
    command or those mounts. By default the job is created with
    `--security-opt no-new-privileges` and `--cap-drop ALL`. The opt-in
-   omits no-new-privileges and keeps only `SETUID`, `SETGID`, and
-   `AUDIT_WRITE`. The worker warns that the job can become root in
+   omits no-new-privileges and keeps `SETUID`, `SETGID`,
+   `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, and
+   `FOWNER`. The worker warns that the job can become root in
    its container. With `--docker-socket` that is control of the host
    engine.
 
