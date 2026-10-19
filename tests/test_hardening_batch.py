@@ -348,8 +348,10 @@ class StatusPageStallTests(unittest.TestCase):
             handled.join(timeout=30)
             elapsed = time.monotonic() - started
             self.assertFalse(handled.is_alive(), "a trickling client held the page past its budget")
+            # The request budget is 10s: bound completion near it (with
+            # scheduling tolerance) so a regression past the budget fails.
             self.assertLess(
-                elapsed, 30, f"the page held a trickling client for {elapsed:.1f}s, past its budget"
+                elapsed, 13, f"the page held a trickling client for {elapsed:.1f}s, past its budget"
             )
         finally:
             stop.set()
