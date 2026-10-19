@@ -619,13 +619,15 @@ a match. A schedule or workflow_dispatch event has no actor login.
 Omitting `--secrets` is how the operator turns file secrets off.
 
 `poll` copies `repository.id`, `repository.default_branch`, and the
-actor login into the event it already stores. For a push, the login
-is the commit `author.login` when that field is a string. For a
-pull request, the login is `user.login` on the pull request. A
-missing login does not match a pusher entry. The default branch is
-the `default_branch` string on the repository object. It is not the
-local clone's `HEAD`. A local submit that does not carry those
-event fields does not match the default rule.
+actor login into the event it already stores. Only a pull request
+carries an actor login: `user.login` on the pull request, which is
+the account GitHub authenticated. A push carries none. The tip
+commit's resolved `author.login` comes from the commit author email,
+which anyone with push access can forge, so a pusher entry never
+matches a push. A missing login does not match a pusher entry. The
+default branch is the `default_branch` string on the repository
+object. It is not the local clone's `HEAD`. A local submit that does
+not carry those event fields does not match the default rule.
 
 The match is computed from the stored event. It is not a new plan
 field. The plan schema stays unchanged.

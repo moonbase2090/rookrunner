@@ -2509,7 +2509,7 @@ class PollTests(unittest.TestCase):
 
 
 class AllowlistTests(unittest.TestCase):
-    def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
+    def test_only_the_default_push_a_listed_ref_or_a_pull_request_actor_matches(self):
         default = {
             "ref": "refs/heads/main",
             "repository": {"id": 5150, "full_name": "acme/demo", "default_branch": "main"},
@@ -2540,7 +2540,7 @@ class AllowlistTests(unittest.TestCase):
         self.assertFalse(allowlist_matches(default, [], [], "pull_request"))
         self.assertTrue(allowlist_matches(other, ["refs/heads/dev"], [], "push"))
         self.assertFalse(allowlist_matches(other, ["refs/heads/Dev"], [], "push"))
-        self.assertTrue(allowlist_matches(other, [], ["octocat"], "push"))
+        self.assertFalse(allowlist_matches(other, [], ["octocat"], "push"))
         self.assertFalse(allowlist_matches(other, [], ["octocat "], "push"))
         self.assertFalse(
             allowlist_matches(

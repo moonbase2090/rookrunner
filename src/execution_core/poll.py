@@ -473,13 +473,17 @@ def _event_repo(repo):
 
 
 def _stored_login(event, event_name):
+    """Return the authenticated actor login for eligibility, or None.
+
+    Only a pull request carries one: ``pull_request.user.login`` is the
+    account GitHub authenticated when the request was opened. A push
+    carries none. The tip commit's resolved ``author.login`` comes from
+    the commit author email, which anyone with push access can forge,
+    so it must not feed secret or token eligibility.
+    """
+
     if not isinstance(event, dict):
         return None
-    if event_name == "push":
-        commits = event.get("commits")
-        if not isinstance(commits, list) or not commits or not isinstance(commits[-1], dict):
-            return None
-        return _login(commits[-1].get("author"))
     if event_name == "pull_request":
         pull = event.get("pull_request")
         if not isinstance(pull, dict):
@@ -512,13 +516,14 @@ def allowlist_matches(event, refs, pushers, event_name):
     A listed ref matches that ``ref`` exactly. A listed login matches
     the actor login with ASCII case folding. That default-branch push,
     schedule, or workflow_dispatch stays a match when a list is
-    non-empty. For a push, the login is the last commit's
-    ``author.login`` when that field is a non-empty string. For a pull
-    request, the login is ``pull_request.user.login`` on the same
-    condition. A schedule or workflow_dispatch event has no actor login.
-    A missing login does not match a pusher entry. An event that lacks
-    these fields does not match the default rule. This does not read a
-    secret.
+    non-empty. Only a pull request carries an actor login:
+    ``pull_request.user.login`` when that field is a non-empty string.
+    A push carries none, because the tip commit's resolved
+    ``author.login`` comes from the commit author email and anyone with
+    push access can forge it. A schedule or workflow_dispatch event has
+    no actor login. A missing login does not match a pusher entry. An
+    event that lacks these fields does not match the default rule. This
+    does not read a secret.
     """
 
     if _default_branch_run(event, event_name):
