@@ -748,6 +748,7 @@ def main():
         action="store_true",
         help=(
             "add CAP_SYS_CHROOT and a personality seccomp allowance "
+            "restricted to values 0, 262144, and 0xffffffff "
             "for job containers. Off by default. "
             "It does not add other capabilities."
         ),

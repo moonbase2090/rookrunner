@@ -17,11 +17,13 @@ administer files it does not own. A different digest keeps today's image.
 Job privileges are off unless the caller passes `job_privileges`. That
 opt-in keeps `--cap-drop ALL`, adds only `CAP_SYS_CHROOT`, and replaces
 the engine default seccomp profile with `seccomp-personality.json`.
-That profile is the Docker default profile plus an unconditional
-`personality` allowance. It adds no other capability. The profile is
-derived from the moby default seccomp profile (Apache-2.0) at
-`daemon/pkg/oci/fixtures/default.json`, with `personality` added to the
-allowed names. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
+That profile is the Docker default profile plus a `personality`
+allowance restricted to arg0 values 0 (PER_LINUX), 262144
+(PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff
+(reading the current personality). It adds no other capability. The
+profile is derived from the moby default seccomp profile (Apache-2.0)
+at `daemon/pkg/oci/fixtures/default.json`, with `personality` restricted
+to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -1516,8 +1518,9 @@ def _job_isolation_args(passwordless_sudo=False, job_privileges=False):
     by the job user. Without that opt-in the job cannot become root.
     ``job_privileges`` keeps `--cap-drop ALL`, adds only `SYS_CHROOT`,
     and adds the personality seccomp profile on top of the Docker
-    default profile. It does not change no-new-privileges: that stays
-    exactly as `passwordless_sudo` dictates.
+    default profile. That profile allows `personality` only with arg0
+    0, 262144, or 0xffffffff. It does not change no-new-privileges: that
+    stays exactly as `passwordless_sudo` dictates.
     """
 
     if type(passwordless_sudo) is not bool:
@@ -2885,9 +2888,10 @@ def run_job(
     a sudoers file and relaxes job isolation enough for `sudo` to
     change uid. A different image does not. Job privileges are off
     unless `job_privileges` is true. That opt-in adds only
-    `CAP_SYS_CHROOT` and the personality seccomp allowance. It is
-    intended for chroot smoke steps and setarch or callgrind bench
-    steps. It does not add other capabilities.
+    `CAP_SYS_CHROOT` and a personality seccomp allowance restricted to
+    arg0 values 0, 262144, and 0xffffffff. It is intended for chroot
+    smoke steps and setarch or callgrind bench steps. It does not add
+    other capabilities.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
     or that volume.

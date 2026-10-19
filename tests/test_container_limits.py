@@ -202,14 +202,23 @@ class ContainerLimitTests(unittest.TestCase):
         profile_path = seccomp[0].removeprefix("seccomp=")
         profile = json.loads(Path(profile_path).read_text())
         self.assertEqual(profile["defaultAction"], "SCMP_ACT_ERRNO")
-        unconditional = [
-            entry
-            for entry in profile["syscalls"]
-            if entry.get("names") == ["personality"]
-            and entry.get("action") == "SCMP_ACT_ALLOW"
-            and not entry.get("args")
+        personality = [
+            entry for entry in profile["syscalls"] if entry.get("names") == ["personality"]
         ]
-        self.assertEqual(len(unconditional), 1)
+        self.assertTrue(personality)
+        for entry in personality:
+            self.assertEqual(entry.get("action"), "SCMP_ACT_ALLOW")
+            self.assertTrue(
+                entry.get("args"),
+                "personality entry without an argument filter",
+            )
+            self.assertEqual(len(entry["args"]), 1)
+            self.assertEqual(entry["args"][0]["index"], 0)
+            self.assertEqual(entry["args"][0]["op"], "SCMP_CMP_EQ")
+        self.assertEqual(
+            sorted(entry["args"][0]["value"] for entry in personality),
+            [0, 262144, 4294967295],
+        )
         chroot = [entry for entry in profile["syscalls"] if "chroot" in entry.get("names", [])]
         self.assertEqual(len(chroot), 1)
         self.assertEqual(chroot[0]["includes"], {"caps": ["CAP_SYS_CHROOT"]})
@@ -269,9 +278,18 @@ libc = ctypes.CDLL("libc.so.6", use_errno=True)
 libc.syscall.restype = ctypes.c_long
 libc.syscall.argtypes = [ctypes.c_long, ctypes.c_ulong]
 nr = 92 if platform.machine() in ("aarch64", "arm64") else 135
-ctypes.set_errno(0)
-ret = libc.syscall(nr, ctypes.c_ulong(0x0040000))
-print(f"personality_set ret={ret} errno={ctypes.get_errno()}", flush=True)
+def personality(value):
+    ctypes.set_errno(0)
+    ret = libc.syscall(nr, ctypes.c_ulong(value))
+    return ret, ctypes.get_errno()
+ret, err = personality(0xFFFFFFFF)
+print(f"personality_read ret={ret} errno={err}", flush=True)
+ret, err = personality(0x0080000)
+print(f"personality_denied ret={ret} errno={err}", flush=True)
+ret, err = personality(0x0040000)
+print(f"personality_set ret={ret} errno={err}", flush=True)
+ret, err = personality(0)
+print(f"personality_plain ret={ret} errno={err}", flush=True)
 pid = os.fork()
 if pid == 0:
     try:
@@ -332,5 +350,8 @@ class JobPrivilegesDockerTests(unittest.TestCase):
             )
         self.assertIn("personality_set ret=-1 errno=1", default.stdout, default.stderr)
         self.assertIn("chroot_fail errno=1", default.stdout, default.stderr)
+        self.assertIn("personality_read ret=0 errno=0", opted.stdout, opted.stderr)
+        self.assertIn("personality_denied ret=-1 errno=1", opted.stdout, opted.stderr)
         self.assertIn("personality_set ret=0 errno=0", opted.stdout, opted.stderr)
+        self.assertIn("personality_plain ret=262144 errno=0", opted.stdout, opted.stderr)
         self.assertIn("chroot_ok", opted.stdout, opted.stderr)

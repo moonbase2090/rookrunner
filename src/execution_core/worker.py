@@ -20,8 +20,9 @@ still wins. `worker --passwordless-sudo` is off by default. It writes
 passwordless sudo for the caller on that image and warns that the job
 can become root in its container.
 `worker --job-privileges` is off by default. It adds only
-`CAP_SYS_CHROOT` and a `personality` seccomp allowance for job
-containers. It does not add other capabilities.
+`CAP_SYS_CHROOT` and a `personality` seccomp allowance restricted to
+arg0 values 0, 262144, and 0xffffffff for job containers. It does not
+add other capabilities.
 `worker --secrets` takes no path and requires `--github-repository`.
 `worker --app-key` accepts only the Rookrunner App key path. The worker
 opens that file only when a job mints a Contents-read token.

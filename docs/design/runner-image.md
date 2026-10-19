@@ -188,7 +188,7 @@ The implementation does the following.
    `FOWNER`. The worker warns that the job can become root in
    its container. With `--docker-socket` that is control of the host
    engine.
-   `--job-privileges` is off by default. It adds only `CAP_SYS_CHROOT` and a `personality` seccomp allowance for job containers, on top of Docker's default seccomp profile. It does not add other capabilities. It is intended for chroot smoke steps and setarch or callgrind bench steps. The shipped profile `seccomp-personality.json` is derived from the moby default seccomp profile (Apache-2.0) at `daemon/pkg/oci/fixtures/default.json`, with `personality` added to the allowed names. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
+   `--job-privileges` is off by default. It adds only `CAP_SYS_CHROOT` and a `personality` seccomp allowance restricted to arg0 values 0 (PER_LINUX), 262144 (PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff (reading the current personality) for job containers, on top of Docker's default seccomp profile. It does not add other capabilities. It is intended for chroot smoke steps and setarch or callgrind bench steps. The shipped profile `seccomp-personality.json` is derived from the moby default seccomp profile (Apache-2.0) at `daemon/pkg/oci/fixtures/default.json`, with `personality` restricted to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
 
 6. **What stays put.** The capability version stays 12. A version 11
    plan is not migrated. No plan field and no protocol version are
