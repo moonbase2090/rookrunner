@@ -488,11 +488,17 @@ class _BudgetWatch:
                 self.exceeded = True
             if self.exceeded:
                 # A failed stop must not end enforcement: keep stopping
-                # until the container is confirmed stopped.
+                # until the container is confirmed stopped. A 0 return
+                # with no Docker client published yet means "nothing to
+                # stop", not "stopped": only a published lease whose
+                # owned containers and networks are gone (or a closed
+                # lease) ends the watch.
                 if self._owner is None:
                     return
                 with contextlib.suppress(OSError):
-                    if self._owner.stop() == 0:
+                    phase, _name, docker, _cancel = self._owner.snapshot()
+                    self._owner.stop()
+                    if phase == "closed" or (docker and self._owner.removed()):
                         return
 
 

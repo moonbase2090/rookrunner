@@ -22,7 +22,7 @@ from execution_core.disk import (
 )
 from execution_core.protocol import canonical
 from execution_core.run import ContainerLease
-from execution_core.worker import Worker, now
+from execution_core.worker import Worker, _BudgetWatch, now
 from schema_support import validate_response, validator
 
 
@@ -425,6 +425,44 @@ class DiskBudgetTests(unittest.TestCase):
                 self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
             finally:
                 worker.close()
+
+    def test_a_pre_begin_breach_keeps_watching_until_confirmed(self):
+        from types import SimpleNamespace
+
+        calls = []
+        published = []
+
+        class FakeOwner:
+            def snapshot(self):
+                docker = published[0] if published else None
+                phase = "live" if docker is not None else "idle"
+                return (phase, "n", docker, False)
+
+            def stop(self):
+                calls.append(1)
+                return 0
+
+            def removed(self):
+                return True
+
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, FakeOwner()).start()
+        try:
+            deadline = time.monotonic() + 5
+            while len(calls) < 2 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertGreaterEqual(len(calls), 2, "watch exited on a pre-begin stop()==0")
+            self.assertTrue(watch._thread.is_alive())
+            # The container now exists and is stopped: a published
+            # client with everything removed ends the watch.
+            published.append(object())
+            deadline = time.monotonic() + 5
+            while watch._thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(watch._thread.is_alive(), "watch did not exit after a confirmed stop")
+        finally:
+            watch.join()
+        self.assertTrue(watch.exceeded)
 
     def test_running_job_within_its_budget_is_not_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
