@@ -18,9 +18,15 @@ The state directory is mode `0700`. The socket is mode `0600`. Both
 modes are tested. Another account on the machine cannot submit through
 that socket.
 
-The worker has no network listener. Remote execution is a separate
-threat model. A webhook receiver and GitHub runner registration are
-not part of this program.
+The worker exposes no network listener for remote execution or for
+unrelated customers. A webhook receiver and GitHub runner registration
+are not part of this program. Two host-local listeners still exist.
+The status page is a separate read-only process on 127.0.0.1:8765.
+A job whose permissions grant `id-token: write`, on a worker started
+with `--oidc-issuer`, gets one per-job token endpoint bound to a
+host-local address on an ephemeral port for that job only. The job
+container reaches it as `host.docker.internal`. It answers bearer-token
+requests for that job and closes when the job ends.
 
 The Docker socket is not mounted into a job unless the worker is
 started with `--docker-socket`. Every engine call uses the Docker

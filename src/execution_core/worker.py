@@ -617,6 +617,63 @@ class Worker:
         self._pending_concurrency_cancels = []
         self.socket_path = self.state / "worker.sock"
 
+    def _refuse_reset_history(self):
+        """Fail closed when the run database cannot hold prior history.
+
+        An empty file, a symlink, or a non-regular file is not an empty
+        history. A state directory with other entries but no database is a
+        lost history, not a first start: refuse instead of resetting it.
+        """
+
+        db = self.state / "runs.sqlite3"
+        try:
+            info = os.lstat(db)
+        except FileNotFoundError:
+            info = None
+        if info is not None:
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("run database is not a regular file; refusing to reset history")
+            if info.st_size == 0:
+                raise ValueError("run database is empty; refusing to reset history")
+            return
+        others = [name for name in os.listdir(self.state) if name != "worker.lock"]
+        if others:
+            raise ValueError(
+                "run database is missing with prior worker state; refusing to reset history"
+            )
+
+    def _create_private_db(self):
+        """Create the run database owner-only before SQLite opens it.
+
+        SQLite creates the file 0644 under umask 022; pre-creating it 0600
+        keeps the history owner-only from the first byte.
+        """
+
+        fd = os.open(self.state / "runs.sqlite3", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+
+    def _tighten_db_modes(self):
+        """Keep SQLite files owner-only: the database plus WAL sidecars.
+
+        SQLite derives sidecar modes from the umask rather than from the
+        database mode, so tighten each file SQLite may have created.
+        """
+
+        for name in (
+            "runs.sqlite3",
+            "runs.sqlite3-wal",
+            "runs.sqlite3-shm",
+            "runs.sqlite3-journal",
+        ):
+            try:
+                if stat.S_ISREG(os.lstat(self.state / name).st_mode):
+                    os.chmod(self.state / name, 0o600)
+            except FileNotFoundError:
+                continue
+
     def start(self):
         # Never change permissions on a pre-existing shared or foreign directory.
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -632,6 +689,8 @@ class Worker:
         )
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._refuse_reset_history()
+            self._create_private_db()
             self.db = sqlite3.connect(self.state / "runs.sqlite3", check_same_thread=False)
             self.db.row_factory = sqlite3.Row
             self.db.execute("PRAGMA journal_mode=WAL")
@@ -689,6 +748,7 @@ class Worker:
                 self.db.execute(
                     "INSERT OR IGNORE INTO metadata VALUES ('worker_id', ?)", (str(uuid.uuid4()),)
                 )
+            self._tighten_db_modes()
             self.worker_id = self.db.execute(
                 "SELECT value FROM metadata WHERE key='worker_id'"
             ).fetchone()[0]
@@ -1821,6 +1881,8 @@ class Worker:
             raise Fault("CAPABILITY_UNSUPPORTED", message) from exc
         if exc.kind == "SOURCE_UNSTABLE":
             raise Fault("SOURCE_UNSTABLE", message) from exc
+        if exc.kind == "STORAGE_FULL":
+            raise Fault("STORAGE_FULL", _STORAGE_FULL) from exc
         raise Fault("INVALID_PARAMS", message) from exc
 
     def action_store(self):

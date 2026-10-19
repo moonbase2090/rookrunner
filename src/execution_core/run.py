@@ -610,14 +610,39 @@ def _invoke_within(docker, args, cap, deadline):
         raise
 
 
+_DAEMON_MARKERS = (
+    "cannot connect to the docker daemon",
+    "is the docker daemon running",
+    "failed to connect to the docker api",
+    "connection refused",
+)
+
+
+def _daemon_unreachable(stderr):
+    """True when Docker CLI output says the engine cannot be reached.
+
+    A dead engine otherwise surfaces as "image digest will not resolve",
+    which blames the caller pin. Name the engine instead.
+    """
+
+    if not isinstance(stderr, bytes | bytearray):
+        return False
+    text = bytes(stderr).decode("utf-8", errors="replace").lower()
+    return any(marker in text for marker in _DAEMON_MARKERS)
+
+
 def _resolve_image(docker, reference, digest, deadline, pull=True):
-    code, stdout = _inspect(docker, reference, deadline)
+    code, stdout, stderr = _inspect(docker, reference, deadline)
     if code != 0 and reference != digest and pull:
-        pull_code, _stdout, _stderr = _invoke_within(docker, ["pull", reference], 300, deadline)
+        pull_code, _stdout, pull_stderr = _invoke_within(docker, ["pull", reference], 300, deadline)
         if pull_code != 0:
+            if _daemon_unreachable(pull_stderr):
+                _setup("Docker is unreachable; the worker cannot execute this run")
             _setup("image digest will not resolve")
-        code, stdout = _inspect(docker, reference, deadline)
+        code, stdout, stderr = _inspect(docker, reference, deadline)
     if code != 0:
+        if _daemon_unreachable(stderr):
+            _setup("Docker is unreachable; the worker cannot execute this run")
         _setup("image digest will not resolve")
     try:
         info = json.loads(stdout.decode("utf-8"))
@@ -637,10 +662,10 @@ def _resolve_image(docker, reference, digest, deadline, pull=True):
 
 
 def _inspect(docker, reference, deadline):
-    code, stdout, _stderr = _invoke_within(
+    code, stdout, stderr = _invoke_within(
         docker, ["image", "inspect", "--format", _INSPECT, reference], 60, deadline
     )
-    return code, stdout
+    return code, stdout, stderr
 
 
 def _docker_binary(docker):

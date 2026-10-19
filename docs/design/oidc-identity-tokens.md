@@ -333,6 +333,17 @@ container. A Unix socket was considered and rejected, because
 - **Cloud policy is the last gate.** The design does not replace a
   tight trust policy. Every example below pins `aud` and an exact
   `sub`.
+- **Accepted risk: hand-rolled RS256.** Signing builds the PKCS#1 v1.5
+  padding in Python and exponentiates with `pow`, which is not
+  constant-time. This is accepted, not migrated, for three reasons.
+  The worker keeps zero third-party runtime dependencies, and taking a
+  vetted implementation would change packaging and the dependency
+  audit for this one call site. Signing is local-only: the key is read
+  once at worker start behind a `0700` directory, and no remote party
+  can time the signing operation. Re-evaluate if tokens are ever minted
+  across a boundary where signing timing is observable, or when
+  packaging can take a vetted constant-time implementation without
+  widening the runtime dependency set.
 
 ## Cloud setup examples
 
