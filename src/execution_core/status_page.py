@@ -13,10 +13,14 @@ import signal
 import socket
 import sys
 import threading
+import time
 
 ADDRESS = "127.0.0.1"
 PORT = 8765
 _MAX_HEADERS = 8192
+# Total budget for one client, in seconds. The server answers requests one
+# at a time, so a client that trickles bytes must not hold it indefinitely.
+_REQUEST_BUDGET = 10.0
 _BIND_ERROR = "status page could not bind 127.0.0.1:8765\n"
 _HOST = "127.0.0.1:8765"
 _VERSION = re.compile(r"^[0-9A-Za-z._+-]{1,32}$")
@@ -78,12 +82,21 @@ def serve(state):
 
 
 def handle(client, state):
-    """Answer one request. A dropped request writes nothing."""
+    """Answer one request. A dropped request writes nothing.
 
-    text = _read_request(client)
+    One slow client cannot stall the page: reading and sending share a
+    total budget, after which the connection is dropped.
+    """
+
+    deadline = time.monotonic() + _REQUEST_BUDGET
+    text = _read_request(client, deadline)
     if text is None:
         return
     status, body, head_only = _answer(text, state)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return
+    client.settimeout(min(5.0, remaining))
     _send(client, status, body, head_only)
 
 
@@ -99,11 +112,13 @@ def _arm(listener):
     signal.signal(signal.SIGTERM, stop)
 
 
-def _read_request(client):
-    client.settimeout(5)
+def _read_request(client, deadline):
     data = bytearray()
     limit = _MAX_HEADERS + 4
     while b"\r\n\r\n" not in data and len(data) < limit:
+        if time.monotonic() >= deadline:
+            return None
+        client.settimeout(min(5.0, max(0.5, deadline - time.monotonic())))
         try:
             chunk = client.recv(limit - len(data))
         except (TimeoutError, OSError):

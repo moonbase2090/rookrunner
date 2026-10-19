@@ -374,6 +374,21 @@ def _invalid(message, field=None):
     raise PlanError("WORKFLOW_INVALID", message, field)
 
 
+def _require_utf8(value, field):
+    """Return `value` when it encodes as UTF-8.
+
+    A lone surrogate from a YAML escape is not valid UTF-8 and cannot be
+    represented in a response. Reject it here with the field attached
+    instead of failing late downstream.
+    """
+
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        _invalid(f"{field or 'workflow'} is not valid UTF-8", field or None)
+    return value
+
+
 def _location(node):
     mark = node.start_mark
     return {"line": mark.line + 1, "column": mark.column + 1}
@@ -572,6 +587,12 @@ class _Planner:
                 node = loader.get_single_node()
             except yaml.YAMLError:
                 _invalid("workflow YAML is not accepted")
+            except RecursionError:
+                raise PlanError(
+                    "WORKFLOW_INVALID",
+                    f"workflow YAML nesting exceeds the {MAX_DEPTH}-level limit",
+                    "workflow",
+                ) from None
         finally:
             loader.dispose()
         if not isinstance(node, MappingNode):
@@ -627,7 +648,7 @@ class _Planner:
         self._enter(node, field)
         if not isinstance(node, ScalarNode) or node.tag != STR_TAG:
             _invalid(f"{field} must be a string", field)
-        return node.value
+        return _require_utf8(node.value, field)
 
     def _optional_string(self, items, field, key):
         if key not in items:
@@ -661,8 +682,10 @@ class _Planner:
             value = self.constructor.construct_object(node, deep=False)
         except yaml.YAMLError:
             _invalid(f"{field}: YAML value is not accepted", field)
-        if value is None or isinstance(value, str | bool | int):
+        if value is None or isinstance(value, bool | int):
             return value
+        if isinstance(value, str):
+            return _require_utf8(value, field)
         if isinstance(value, float) and math.isfinite(value):
             return value
         _invalid(f"{field}: YAML value is not accepted", field)

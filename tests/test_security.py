@@ -19,7 +19,13 @@ class SecurityPolicyTests(unittest.TestCase):
     def test_local_access_modes(self):
         self.assertIn("state directory is mode `0700`", TEXT)
         self.assertIn("socket is mode `0600`", TEXT)
-        self.assertIn("The worker has no network listener.", TEXT)
+        self.assertIn(
+            "The worker exposes no network listener for remote execution or for unrelated customers.",
+            TEXT,
+        )
+        self.assertIn("one per-job token endpoint on a host-local listener", TEXT)
+        self.assertIn("It is reachable only from that job's container.", TEXT)
+        self.assertIn("a host-local loopback listener", TEXT)
         self.assertIn("Every engine call uses the Docker context named `default`", TEXT)
         self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", TEXT)
         self.assertIn("The scheduler thread uses that same context.", TEXT)

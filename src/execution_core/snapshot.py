@@ -59,6 +59,20 @@ def reject(kind, message):
     raise CaptureError(kind, message)
 
 
+def _io_error(exc):
+    """CaptureError for an OSError during capture.
+
+    ENOSPC means the disk budget is exhausted, which the caller can retry
+    after freeing space. Every other OSError stays SOURCE_IO_ERROR.
+    """
+
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return CaptureError("STORAGE_FULL", "worker storage is full; free space before retrying")
+    return CaptureError(
+        "SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot"
+    )
+
+
 def _check_base(base, algorithm):
     if base is None:
         return
@@ -738,7 +752,10 @@ class SourceCapture:
         private_directory(self.state)
         snapshots = self.state / "snapshots"
         private_directory(snapshots)
-        staging = Path(tempfile.mkdtemp(prefix=".preparing-", dir=snapshots))
+        try:
+            staging = Path(tempfile.mkdtemp(prefix=".preparing-", dir=snapshots))
+        except OSError as exc:
+            raise _io_error(exc) from exc
         prepared = None
         try:
             try:
@@ -749,10 +766,8 @@ class SourceCapture:
                 reject("SOURCE_INVALID", "repository metadata or paths are not supported UTF-8")
             except subprocess.TimeoutExpired:
                 reject("SOURCE_UNSTABLE", "Git inspection timed out")
-            except OSError:
-                reject(
-                    "SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot"
-                )
+            except OSError as exc:
+                raise _io_error(exc) from exc
             yield prepared
         finally:
             if (prepared is None or not prepared.published) and staging.exists():
@@ -869,8 +884,8 @@ class SourceCapture:
             reject("SOURCE_INVALID", "repository metadata or paths are not supported UTF-8")
         except subprocess.TimeoutExpired:
             reject("SOURCE_UNSTABLE", "Git inspection timed out")
-        except OSError:
-            reject("SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot")
+        except OSError as exc:
+            raise _io_error(exc) from exc
 
     def _copy_history(self, prepared):
         """Copy the ancestor closure into the staging store before publish.
@@ -946,8 +961,8 @@ class SourceCapture:
             sync_directory(prepared.snapshots)
         except CaptureError:
             raise
-        except OSError:
-            reject("SOURCE_IO_ERROR", "source capture could not read or persist a safe snapshot")
+        except OSError as exc:
+            raise _io_error(exc) from exc
         objects_canonical = prepared.objects_canonical
         return {
             "snapshot_id": snapshot_id,
