@@ -1,11 +1,31 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.8. A published release section
+The current package version is 0.1.9. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.9] - 2026-10-19
+
+- `worker --job-privileges` is off by default. A job container on a
+  worker started with it keeps `--cap-drop ALL` and adds only
+  `CAP_SYS_CHROOT`, plus a seccomp profile that allows
+  `personality` on top of the Docker default profile. That
+  allowance is restricted to the values `setarch` needs: 0,
+  262144, and 0xffffffff. The profile ships as
+  `seccomp-personality.json`. It is derived from the Docker
+  default profile. Without the flag, the job container
+  arguments are unchanged. The flag composes with
+  `--passwordless-sudo`. A step running as the job user gets the
+  `personality` allowance directly. `chroot` takes effect for
+  steps running as root, for example under
+  `--passwordless-sudo`. That serves a chroot smoke step and a
+  bench step that runs Callgrind under `setarch`. The capability
+  version stays 12.
+- The package version is 0.1.9. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.8] - 2026-10-19
 
