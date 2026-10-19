@@ -11,10 +11,14 @@ Copyright: Ingy döt Net (2017-2021) and Kirill Simonov (2006-2016)
 
 The package does not vendor PyYAML. Installing it pulls pyyaml==6.0.3.
 
-Docker default seccomp profile (moby)
+Docker default seccomp profile (moby/profiles)
 License: Apache-2.0
-Source: https://github.com/moby/moby/blob/master/daemon/pkg/oci/fixtures/default.json
-The shipped `seccomp-personality.json` is that profile with
-`personality` added to the allowed names. No other change.
+Source: https://github.com/moby/profiles/blob/seccomp/v0.2.3/seccomp/default.json
+(vendored in moby docker-v29.7.2 as
+vendor/github.com/moby/profiles/seccomp/default.json; Docker 29.7.2)
+The shipped `seccomp-personality.json` is that profile with the
+`personality` entries restricted to arg0 values 0, 262144, and
+4294967295. No other change. Upstream allows additional
+`personality` values (8, 131072, 131080); those are not shipped.
 Development tools are not part of that distribution and are not listed
 here.
