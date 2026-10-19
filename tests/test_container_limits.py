@@ -223,6 +223,30 @@ class ContainerLimitTests(unittest.TestCase):
         self.assertEqual(len(chroot), 1)
         self.assertEqual(chroot[0]["includes"], {"caps": ["CAP_SYS_CHROOT"]})
 
+    def test_shipped_profile_clone3_matches_upstream_gating(self):
+        import json
+
+        args = _job_isolation_args(job_privileges=True)
+        seccomp = [part for part in args if part.startswith("seccomp=")]
+        profile = json.loads(Path(seccomp[0].removeprefix("seccomp=")).read_text())
+        self.assertEqual(profile["defaultAction"], "SCMP_ACT_ERRNO")
+        clone3 = [entry for entry in profile["syscalls"] if "clone3" in entry.get("names", [])]
+        self.assertTrue(clone3, "shipped profile must contain clone3")
+        allowed = [e for e in clone3 if e.get("action") == "SCMP_ACT_ALLOW"]
+        self.assertEqual(len(allowed), 1)
+        self.assertEqual(allowed[0].get("includes"), {"caps": ["CAP_SYS_ADMIN"]})
+        enosys = [e for e in clone3 if e.get("action") == "SCMP_ACT_ERRNO"]
+        self.assertEqual(len(enosys), 1)
+        self.assertEqual(enosys[0].get("errnoRet"), 38)
+        self.assertEqual(enosys[0].get("excludes"), {"caps": ["CAP_SYS_ADMIN"]})
+        self.assertEqual(enosys[0].get("names"), ["clone3"])
+        pivot = [
+            entry
+            for entry in profile["syscalls"]
+            if "pivot_root" in entry.get("names", []) and entry.get("action") == "SCMP_ACT_ALLOW"
+        ]
+        self.assertEqual(pivot, [])
+
     def test_job_privileges_composes_with_passwordless_sudo(self):
         args = _job_isolation_args(passwordless_sudo=True, job_privileges=True)
         self.assertNotIn("no-new-privileges", args)

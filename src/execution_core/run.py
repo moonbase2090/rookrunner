@@ -22,7 +22,8 @@ allowance restricted to arg0 values 0 (PER_LINUX), 262144
 (PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff
 (reading the current personality). It adds no other capability. The
 profile is derived from the moby default seccomp profile (Apache-2.0)
-at `daemon/pkg/oci/fixtures/default.json`, with `personality` restricted
+from `github.com/moby/profiles/seccomp` v0.2.3 `seccomp/default.json`
+(vendored in moby `docker-v29.7.2`), with `personality` restricted
 to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
