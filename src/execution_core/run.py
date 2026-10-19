@@ -614,7 +614,6 @@ _DAEMON_MARKERS = (
     "cannot connect to the docker daemon",
     "is the docker daemon running",
     "failed to connect to the docker api",
-    "connection refused",
 )
 
 

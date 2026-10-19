@@ -339,11 +339,16 @@ container. A Unix socket was considered and rejected, because
   The worker keeps zero third-party runtime dependencies, and taking a
   vetted implementation would change packaging and the dependency
   audit for this one call site. Signing is local-only: the key is read
-  once at worker start behind a `0700` directory, and no remote party
-  can time the signing operation. Re-evaluate if tokens are ever minted
-  across a boundary where signing timing is observable, or when
-  packaging can take a vetted constant-time implementation without
-  widening the runtime dependency set.
+  once at worker start behind a `0700` directory. One timing exposure
+  remains: a local job that can reach its own per-job token endpoint
+  (possible when the bridge network is enabled) can time the signing
+  path. That oracle is bounded precisely: only a job already authorized
+  to mint for its own `aud`/`sub` can reach its own endpoint, so the
+  timing oracle is not available to any other party. Re-evaluate if
+  tokens are ever minted across a boundary where signing timing is
+  observable beyond that job, or when packaging can take a vetted
+  constant-time implementation without widening the runtime
+  dependency set.
 
 ## Cloud setup examples
 

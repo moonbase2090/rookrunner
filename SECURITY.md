@@ -21,11 +21,12 @@ that socket.
 The worker exposes no network listener for remote execution or for
 unrelated customers. A webhook receiver and GitHub runner registration
 are not part of this program. Two host-local listeners still exist.
-The status page is a separate read-only process on 127.0.0.1:8765.
+The status page is a separate read-only process on a host-local
+loopback listener.
 A job whose permissions grant `id-token: write`, on a worker started
-with `--oidc-issuer`, gets one per-job token endpoint bound to a
-host-local address on an ephemeral port for that job only. The job
-container reaches it as `host.docker.internal`. It answers bearer-token
+with `--oidc-issuer`, gets one per-job token endpoint on a host-local
+listener on an ephemeral port for that job only. It is reachable only
+from that job's container. It answers bearer-token
 requests for that job and closes when the job ends.
 
 The Docker socket is not mounted into a job unless the worker is

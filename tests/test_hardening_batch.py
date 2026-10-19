@@ -10,6 +10,9 @@ Each class covers one batch item and fails on the pre-fix code:
 5. Deeply nested YAML returns a structured input error naming the limit.
 6. A lone surrogate in a workflow name is rejected early with a clear error.
 7. One slow client cannot stall the status page past a bounded budget.
+8. A registry refusal during pull reports image resolution failure, not an
+   unreachable engine.
+9. The worker service file bounds the start loop and delays restarts.
 """
 
 import errno
@@ -25,6 +28,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from execution_core import run as run_module
 from execution_core import status_page as status_page_module
 from execution_core.cli import call
 from execution_core.plan import PlanError, plan_workflow
@@ -60,7 +64,7 @@ def _seed_repo(repo):
         "-c",
         "user.name=Fixture",
         "-c",
-        "user.email=fixture@example.invalid",
+        "user.email=322824348+mb2090@users.noreply.github.com",
         "commit",
         "-m",
         "fixture",
@@ -199,14 +203,11 @@ class DockerUnreachableTests(unittest.TestCase):
         cases = (
             (
                 "docker-down-classic",
-                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
-                "Is the docker daemon running?",
+                "Cannot connect to the Docker daemon. Is the docker daemon running?",
             ),
             (
                 "docker-down-api",
-                "failed to connect to the docker API at unix:///var/run/docker.sock; "
-                "check if the path is correct and if the daemon is running: "
-                "dial unix /var/run/docker.sock: connect: no such file or directory",
+                "failed to connect to the docker API; check if the daemon is running",
             ),
         )
         for key, stderr in cases:
@@ -228,6 +229,40 @@ class DockerUnreachableTests(unittest.TestCase):
                 self.assertEqual(record["state"], "failed")
                 self.assertEqual(record["error"]["kind"], "SETUP_FAILED")
                 self.assertIn("Docker is unreachable", record["error"]["message"])
+
+
+class RegistryRefusalTests(unittest.TestCase):
+    def test_registry_refusal_during_pull_reports_image_failure(self):
+        reference = "demo:latest@sha256:" + "ab" * 32
+        digest = "sha256:" + "cd" * 32
+
+        def fake_invoke(docker, args, cap, deadline):
+            if args[:1] == ["pull"]:
+                return (
+                    1,
+                    b"",
+                    b"Error response from daemon: Get registry: dial tcp: connection refused\n",
+                )
+            return 1, b"", b"Error: No such image\n"
+
+        with (
+            mock.patch.object(run_module, "_invoke_within", side_effect=fake_invoke),
+            self.assertRaises(run_module.RunError) as caught,
+        ):
+            run_module._resolve_image("docker", reference, digest, time.monotonic() + 60)
+        self.assertEqual(caught.exception.kind, "SETUP_FAILED")
+        self.assertIn("image digest will not resolve", str(caught.exception))
+        self.assertNotIn("Docker is unreachable", str(caught.exception))
+
+
+class WorkerServiceTests(unittest.TestCase):
+    def test_crash_loop_is_bounded(self):
+        text = (
+            Path(__file__).resolve().parents[1] / "deploy" / "rookrunner-worker.service"
+        ).read_text()
+        self.assertIn("StartLimitIntervalSec=300", text)
+        self.assertIn("StartLimitBurst=5", text)
+        self.assertIn("RestartSec=5", text)
 
 
 class CaptureEnospcTests(unittest.TestCase):
@@ -308,18 +343,22 @@ class StatusPageStallTests(unittest.TestCase):
             target=status_page_module.handle, args=(server, self._dud_state()), daemon=True
         )
         handled.start()
+        started = time.monotonic()
         try:
-            handled.join(timeout=60)
+            handled.join(timeout=30)
+            elapsed = time.monotonic() - started
             self.assertFalse(handled.is_alive(), "a trickling client held the page past its budget")
+            self.assertLess(
+                elapsed, 30, f"the page held a trickling client for {elapsed:.1f}s, past its budget"
+            )
         finally:
             stop.set()
             trickle.close()
             server.close()
             needle.join(timeout=5)
             handled.join(timeout=5)
-        head, _body = self._exchange(
-            b"GET / HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n\r\n", self._dud_state()
-        )
+        host = f"Host: {status_page_module.ADDRESS}:{status_page_module.PORT}\r\n".encode()
+        head, _body = self._exchange(b"GET / HTTP/1.1\r\n" + host + b"\r\n", self._dud_state())
         self.assertIn("200 OK", head)
 
     def _dud_state(self):

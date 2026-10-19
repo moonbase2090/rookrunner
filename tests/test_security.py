@@ -23,7 +23,9 @@ class SecurityPolicyTests(unittest.TestCase):
             "The worker exposes no network listener for remote execution or for unrelated customers.",
             TEXT,
         )
-        self.assertIn("one per-job token endpoint bound to a host-local address", TEXT)
+        self.assertIn("one per-job token endpoint on a host-local listener", TEXT)
+        self.assertIn("It is reachable only from that job's container.", TEXT)
+        self.assertIn("a host-local loopback listener", TEXT)
         self.assertIn("Every engine call uses the Docker context named `default`", TEXT)
         self.assertIn("An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select", TEXT)
         self.assertIn("The scheduler thread uses that same context.", TEXT)
