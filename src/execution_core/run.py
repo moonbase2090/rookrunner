@@ -2101,6 +2101,7 @@ class ContainerLease:
         self.cancel = False
         self.budget_hold = False
         self.reserve = None
+        self.unreserve = None
         self.blocked_names = frozenset()
         self.services = []
         self.network = None
@@ -2110,17 +2111,39 @@ class ContainerLease:
         return name in self.blocked_names
 
     def begin(self, docker, name):
+        # Checkpointed so the lease lock is never held across the
+        # persistent ownership write (fsync): a slow fsync must not
+        # delay the budget latch. Publish in memory, persist without
+        # the lock, then re-check under the lock and roll back.
         with self._lock:
             if self.cancel or self.phase != "idle":
                 return False
             if self.budget_hold:
                 return False
-            if self.reserve is not None:
-                self.reserve(name)
+            reserve = self.reserve
+            unreserve = self.unreserve
             self.docker = docker
             self.name = name
             self.phase = "creating"
-            return True
+        if reserve is not None:
+            try:
+                reserve(name)
+            except Exception:
+                with self._lock:
+                    self.docker = None
+                    self.name = None
+                    self.phase = "idle"
+                raise
+        with self._lock:
+            breached = self.budget_hold
+            refused = breached or self.cancel
+            if refused:
+                self.docker = None
+                self.name = None
+                self.phase = "idle"
+        if breached and unreserve is not None:
+            unreserve()
+        return not refused
 
     def note_budget_breach(self):
         """Latch a disk-budget breach: no container may be created or started after this."""

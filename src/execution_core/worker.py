@@ -1026,6 +1026,9 @@ class Worker:
                                     attempt_id, name
                                 )
                             )
+                            lease.unreserve = lambda attempt_id=attempt_id: self._delete_ownership(
+                                attempt_id
+                            )
                             self.live[record["run_id"]] = lease
                         with self.db:
                             self.save(record)

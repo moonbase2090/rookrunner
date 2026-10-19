@@ -587,6 +587,57 @@ class DiskBudgetTests(unittest.TestCase):
         self.assertTrue(clean.confirm_started())
         self.assertEqual(clean.snapshot()[0], "running")
 
+    def test_a_slow_reserve_fsync_does_not_delay_the_latch(self):
+        # begin() persists ownership with an fsync; that write must not
+        # hold the lease lock, or a blocked fsync delays the budget latch
+        # and the stop. While begin sits in a slow reserve, the watch
+        # must latch promptly, and begin must then roll back and refuse.
+        from types import SimpleNamespace
+
+        lease = ContainerLease()
+        reserve_calls = []
+        unreserve_calls = []
+        release_fsync = threading.Event()
+
+        def slow_reserve(name):
+            reserve_calls.append(name)
+            self.assertTrue(release_fsync.wait(5))
+
+        lease.reserve = slow_reserve
+        lease.unreserve = lambda: unreserve_calls.append(1)
+        stop_calls = []
+        lease.stop = lambda: stop_calls.append(1) or 0
+        begun = []
+
+        def begin_in_thread():
+            begun.append(lease.begin(object(), "wf-slow-fsync"))
+
+        begin_thread = threading.Thread(target=begin_in_thread)
+        begin_thread.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not reserve_calls and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(reserve_calls, "begin never reached the reserve write")
+            worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+            watch = _BudgetWatch(worker, lease).start()
+            start = time.monotonic()
+            try:
+                deadline = start + 5
+                while not lease.budget_breached() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                latch_delay = time.monotonic() - start
+                self.assertTrue(lease.budget_breached(), "latch blocked on the slow fsync")
+                self.assertLess(latch_delay, 1.5, "watch sat behind begin's fsync")
+            finally:
+                release_fsync.set()
+                watch.join()
+        finally:
+            release_fsync.set()
+            begin_thread.join(5)
+        self.assertEqual(begun, [False], "begin kept a reservation made under breach")
+        self.assertEqual(unreserve_calls, [1], "breached reservation was not rolled back")
+
     def test_running_job_within_its_budget_is_not_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
