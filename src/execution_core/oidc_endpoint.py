@@ -20,7 +20,9 @@ Redirects are not followed and nothing is proxied.
 The request token and every minted JWT are registered on the job mask
 before either can reach a log line. Each mint and each refusal appends
 one JSON line to ``oidc-audit.jsonl`` in the state directory. That line
-never holds the JWT or the request token.
+never holds the JWT or the request token. When the mint line cannot be
+appended, the mint fails closed: the endpoint answers 500 and no token
+is issued.
 
 https://docs.github.com/en/actions/reference/security/oidc
 """
@@ -147,7 +149,7 @@ class OidcRun:
             "job_id": job_id,
         }
         entry.update({key: value for key, value in fields.items() if value is not None})
-        self.settings.audit.append(entry)
+        return self.settings.audit.append(entry)
 
     def refusal(self, event, event_name, job_id):
         """Return the mint refusal for this run, and audit it. None means allowed."""
@@ -277,10 +279,7 @@ class JobListener:
         except OidcRefusal as exc:
             self.run._audit(self.job_id, step_index=step, reason=exc.reason)
             return 400, {"message": exc.reason}
-        token = mint(self.run.settings.key_set, claims)
-        # Masked before the step can receive it, so no log line can carry it.
-        register_mask(self.masks, token, secret=True, name="OIDC token")
-        self.run._audit(
+        audited = self.run._audit(
             self.job_id,
             step_index=step,
             aud=claims["aud"],
@@ -289,6 +288,11 @@ class JobListener:
             kid=self.run.settings.key_set.active.kid,
             exp=claims["exp"],
         )
+        if not audited:
+            return 500, {"message": "audit log is not writable"}
+        token = mint(self.run.settings.key_set, claims)
+        # Masked before the step can receive it, so no log line can carry it.
+        register_mask(self.masks, token, secret=True, name="OIDC token")
         with self._guard:
             self.notes.append(f"oidc token minted for aud {claims['aud']} sub {claims['sub']}")
         return 200, {"value": token}

@@ -272,6 +272,26 @@ class ListenerTests(_Keyed):
         self.assertEqual(codes[:MAX_REQUESTS], [200] * MAX_REQUESTS)
         self.assertEqual(codes[MAX_REQUESTS], 429)
 
+    def test_a_failed_audit_log_issues_no_token(self):
+        masks = MaskList()
+        listener = self.listener(masks)
+        with (
+            mock.patch.object(listener.run.settings.audit, "append", return_value=False),
+            mock.patch(
+                "execution_core.oidc_endpoint.mint",
+                side_effect=AssertionError("mint must not run without an audit record"),
+            ),
+        ):
+            code, body = listener.answer(
+                f"/token?job={listener.opaque}&audience=sts.amazonaws.com",
+                f"Bearer {listener.request_token}",
+            )
+        self.assertEqual(code, 500)
+        self.assertNotIn("value", body)
+        self.assertNotRegex(json.dumps(body), JWT)
+        self.assertEqual(listener.drain_notes(), [])
+        self.assertEqual(list(masks.secrets), [listener.request_token])
+
     def test_a_same_repository_pull_request_gets_the_pull_request_subject(self):
         listener = self.listener(event=PULL, event_name="pull_request")
         code, body = listener.answer(
