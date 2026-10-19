@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -22,7 +23,7 @@ from execution_core.disk import (
 )
 from execution_core.protocol import canonical
 from execution_core.run import ContainerLease
-from execution_core.worker import Worker, now
+from execution_core.worker import Worker, _BudgetWatch, now
 from schema_support import validate_response, validator
 
 
@@ -309,6 +310,378 @@ class DiskBudgetTests(unittest.TestCase):
                 self.assertEqual(finished["state"], "failed")
                 self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
                 self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
+    def test_running_job_writing_past_its_budget_is_stopped_and_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-over")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 65536
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                # Publish a client the way begin() would, so the watch
+                # has a container to stop; stops always fail here, so
+                # the watch must keep retrying until the run ends.
+                self.assertTrue(lease.begin(object(), "wf-over"))
+                stop_calls = []
+                lease.stop = lambda: stop_calls.append(1) or 1
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "big").write_bytes(b"x" * (reserve + 256 * 1024))
+                    deadline = time.monotonic() + 3
+                    while not stop_calls and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertTrue(stop_calls, "budget watch did not stop the over-budget job")
+                self.assertTrue(lease.budget_breached(), "breach was not latched on the lease")
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "failed")
+                self.assertIsNone(finished["exit_code"])
+                self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
+                self.assertEqual(finished["error"]["message"], _STORAGE_FULL)
+                self.assertNotIn(str(state), json.dumps(finished))
+                self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
+    def test_a_failed_stop_is_retried_until_the_container_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-retry-stop")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 65536
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                self.assertTrue(lease.begin(object(), "wf-retry-stop"))
+                stop_calls = []
+
+                def flaky_stop():
+                    stop_calls.append(1)
+                    if len(stop_calls) < 3:
+                        return 1
+                    return 0
+
+                lease.stop = flaky_stop
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "big").write_bytes(b"x" * (reserve + 256 * 1024))
+                    deadline = time.monotonic() + 5
+                    while len(stop_calls) < 3 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertGreaterEqual(
+                    len(stop_calls), 3, "budget watch gave up after a failed stop"
+                )
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "failed")
+                self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
+                self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
+    def test_a_breached_lease_refuses_begin(self):
+        lease = ContainerLease()
+        self.assertFalse(lease.budget_breached())
+        self.assertTrue(lease.begin(object(), "wf-hold"))
+        breached = ContainerLease()
+        breached.note_budget_breach()
+        self.assertTrue(breached.budget_breached())
+        self.assertFalse(breached.begin(object(), "wf-held"))
+
+    def test_a_pre_begin_breach_keeps_watching_until_close(self):
+        from types import SimpleNamespace
+
+        calls = []
+        noted = []
+        closed = []
+
+        class FakeOwner:
+            def snapshot(self):
+                return ("closed" if closed else "idle", "n", None, False)
+
+            def stop(self):
+                calls.append(1)
+                return 0
+
+            def note_budget_breach(self):
+                noted.append(1)
+
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, FakeOwner()).start()
+        try:
+            # Pre-begin there is nothing to stop, but the breach is
+            # latched and the watch must stay alive: exiting here
+            # would leave a later container unmonitored.
+            deadline = time.monotonic() + 5
+            while len(noted) < 1 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(noted, "breach was not latched on the lease")
+            self.assertTrue(watch.exceeded)
+            time.sleep(0.6)
+            self.assertTrue(watch._thread.is_alive(), "watch exited before the lease closed")
+            self.assertEqual(calls, [], "watch stopped a container that does not exist yet")
+            closed.append(1)
+            deadline = time.monotonic() + 5
+            while watch._thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(watch._thread.is_alive(), "watch did not exit on lease close")
+        finally:
+            watch.join()
+
+    def test_a_creating_phase_breach_keeps_watching_until_close(self):
+        from types import SimpleNamespace
+
+        calls = []
+        closed = []
+
+        class FakeOwner:
+            def snapshot(self):
+                return ("closed" if closed else "creating", "n", object(), False)
+
+            def stop(self):
+                calls.append(1)
+                return 0
+
+            def note_budget_breach(self):
+                pass
+
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, FakeOwner()).start()
+        try:
+            # stop() succeeds while nothing exists yet, but the lease
+            # is not terminal, so the watch must not exit: the
+            # container may still be created (the latch refuses that).
+            time.sleep(0.6)
+            self.assertTrue(watch._thread.is_alive(), "watch exited during creating")
+            self.assertTrue(calls, "watch never attempted a stop")
+            closed.append(1)
+            deadline = time.monotonic() + 5
+            while watch._thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(watch._thread.is_alive(), "watch did not exit on lease close")
+        finally:
+            watch.join()
+        self.assertTrue(watch.exceeded)
+
+    def test_the_watch_latches_promptly_during_slow_admission(self):
+        # Liveness regression test: the lease lock must never be held
+        # across Docker I/O. While one thread performs the admission
+        # checkpoint sequence with a slow step in the middle, the watch
+        # must latch promptly instead of blocking behind admission. The
+        # old design held admission_window across the slow step; take it
+        # when present so this test pins the fix.
+        from types import SimpleNamespace
+
+        lease = ContainerLease()
+        self.assertTrue(lease.begin(object(), "wf-slow"))
+        stop_calls = []
+        lease.stop = lambda: stop_calls.append(1) or 0
+        release = threading.Event()
+        confirmed = []
+
+        def slow_admission():
+            import contextlib
+
+            window = getattr(lease, "admission_window", None)
+            ctx = window() if window is not None else contextlib.nullcontext()
+            with ctx:
+                if lease.budget_breached():
+                    return
+                if not release.wait(3):
+                    return
+                # A breach landed mid-admission: the late confirm refuses.
+                confirmed.append(lease.confirm_created())
+
+        admission_thread = threading.Thread(target=slow_admission)
+        start = time.monotonic()
+        admission_thread.start()
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, lease).start()
+        try:
+            deadline = start + 5
+            while not lease.budget_breached() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            latch_delay = time.monotonic() - start
+            self.assertTrue(lease.budget_breached(), "latch never landed during slow admission")
+            self.assertLess(latch_delay, 1.5, "watch blocked behind admission I/O")
+        finally:
+            release.set()
+            admission_thread.join(5)
+            watch.join()
+        self.assertEqual(confirmed, [False])
+
+    def test_checkpoints_refuse_each_breach_interleaving(self):
+        # Latch before begin refuses admission outright.
+        refused = ContainerLease()
+        refused.note_budget_breach()
+        self.assertFalse(refused.begin(object(), "wf-never"))
+        # Latch after begin but before the create checkpoint: the
+        # just-created container must not start.
+        created = ContainerLease()
+        self.assertTrue(created.begin(object(), "wf-created"))
+        created.note_budget_breach()
+        self.assertFalse(created.confirm_created())
+        # Latch after the create checkpoint but before start: the
+        # started container must not run steps.
+        started = ContainerLease()
+        self.assertTrue(started.begin(object(), "wf-started"))
+        self.assertTrue(started.confirm_created())
+        started.note_budget_breach()
+        self.assertFalse(started.confirm_started())
+        # No breach anywhere: both confirms pass and phases advance.
+        clean = ContainerLease()
+        self.assertTrue(clean.begin(object(), "wf-clean"))
+        self.assertTrue(clean.confirm_created())
+        self.assertTrue(clean.confirm_started())
+        self.assertEqual(clean.snapshot()[0], "running")
+
+    def test_a_slow_reserve_fsync_does_not_delay_the_latch(self):
+        # begin() persists ownership with an fsync; that write must not
+        # hold the lease lock, or a blocked fsync delays the budget latch
+        # and the stop. While begin sits in a slow reserve, the watch
+        # must latch promptly, and begin must then roll back and refuse.
+        from types import SimpleNamespace
+
+        lease = ContainerLease()
+        reserve_calls = []
+        unreserve_calls = []
+        release_fsync = threading.Event()
+
+        def slow_reserve(name):
+            reserve_calls.append(name)
+            self.assertTrue(release_fsync.wait(5))
+
+        lease.reserve = slow_reserve
+        lease.unreserve = lambda: unreserve_calls.append(1)
+        stop_calls = []
+        lease.stop = lambda: stop_calls.append(1) or 0
+        begun = []
+
+        def begin_in_thread():
+            begun.append(lease.begin(object(), "wf-slow-fsync"))
+
+        begin_thread = threading.Thread(target=begin_in_thread)
+        begin_thread.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not reserve_calls and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(reserve_calls, "begin never reached the reserve write")
+            worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+            watch = _BudgetWatch(worker, lease).start()
+            start = time.monotonic()
+            try:
+                deadline = start + 5
+                while not lease.budget_breached() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                latch_delay = time.monotonic() - start
+                self.assertTrue(lease.budget_breached(), "latch blocked on the slow fsync")
+                self.assertLess(latch_delay, 1.5, "watch sat behind begin's fsync")
+            finally:
+                release_fsync.set()
+                watch.join()
+        finally:
+            release_fsync.set()
+            begin_thread.join(5)
+        self.assertEqual(begun, [False], "begin kept a reservation made under breach")
+        self.assertEqual(unreserve_calls, [1], "breached reservation was not rolled back")
+
+    def test_running_job_within_its_budget_is_not_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-under")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 1024 * 1024
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                stop_calls = []
+                original_stop = lease.stop
+                lease.stop = lambda: stop_calls.append(1) or original_stop()
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "small").write_bytes(b"x" * 65536)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertEqual(stop_calls, [])
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "succeeded")
+                self.assertEqual(finished["exit_code"], 0)
             finally:
                 worker.close()
 

@@ -2088,13 +2088,20 @@ class ContainerLease:
     """
 
     def __init__(self):
+        # Short-lock discipline: no method holds this lock across I/O.
+        # The budget watch must be able to latch promptly even while
+        # run_job is inside a slow Docker call, so admission uses
+        # checkpoint methods (each takes the lock briefly) instead of
+        # holding it across create+start.
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self.phase = "idle"
         self.name = None
         self.docker = None
         self.cancel = False
+        self.budget_hold = False
         self.reserve = None
+        self.unreserve = None
         self.blocked_names = frozenset()
         self.services = []
         self.network = None
@@ -2104,21 +2111,71 @@ class ContainerLease:
         return name in self.blocked_names
 
     def begin(self, docker, name):
+        # Checkpointed so the lease lock is never held across the
+        # persistent ownership write (fsync): a slow fsync must not
+        # delay the budget latch. Publish in memory, persist without
+        # the lock, then re-check under the lock and roll back.
         with self._lock:
             if self.cancel or self.phase != "idle":
                 return False
-            if self.reserve is not None:
-                self.reserve(name)
+            if self.budget_hold:
+                return False
+            reserve = self.reserve
+            unreserve = self.unreserve
             self.docker = docker
             self.name = name
             self.phase = "creating"
-            return True
-
-    def created(self):
+        if reserve is not None:
+            try:
+                reserve(name)
+            except Exception:
+                with self._lock:
+                    self.docker = None
+                    self.name = None
+                    self.phase = "idle"
+                raise
         with self._lock:
+            breached = self.budget_hold
+            refused = breached or self.cancel
+            if refused:
+                self.docker = None
+                self.name = None
+                self.phase = "idle"
+        if breached and unreserve is not None:
+            unreserve()
+        return not refused
+
+    def note_budget_breach(self):
+        """Latch a disk-budget breach: no container may be created or started after this."""
+        with self._lock:
+            self.budget_hold = True
+
+    def budget_breached(self):
+        with self._lock:
+            return self.budget_hold
+
+    def confirm_created(self):
+        """End the create step. Returns False when a breach landed during
+        create: the caller must remove the just-created container and
+        abort instead of starting it."""
+        with self._lock:
+            if self.budget_hold:
+                return False
             if self.phase == "creating":
                 self.phase = "live"
             self._ready.set()
+            return True
+
+    def confirm_started(self):
+        """End the start step. Returns False when a breach landed during
+        start: the caller must stop, remove, and abort instead of running
+        steps in the container."""
+        with self._lock:
+            if self.budget_hold:
+                return False
+            if self.phase == "live":
+                self.phase = "running"
+            return True
 
     def closed(self):
         with self._lock:
@@ -2986,8 +3043,17 @@ def run_job(
             if "," in os.fspath(label) or "\n" in os.fspath(label):
                 _setup("workspace path is not accepted")
         name = _container_name(owner)
+        # Admission checkpoints the latch around each Docker step but never
+        # holds the lease lock across one, so the budget watch can always
+        # latch promptly. A breach is either refused at the next
+        # checkpoint (the just-created container is removed by cleanup) or
+        # lands after start and is stopped by the watch.
         if owner is not None and not owner.begin(docker_bin, name):
+            if owner.budget_breached():
+                _setup("disk budget exceeded; container was not created")
             _setup("run was cancelled before the container existed")
+        if owner is not None and owner.budget_breached():
+            _setup("disk budget exceeded; container was not created")
         code, _stdout, _stderr = _invoke_within(
             docker_bin,
             _create_args(
@@ -3016,13 +3082,16 @@ def run_job(
             _setup("container setup failed")
         created = True
         if owner is not None:
-            owner.created()
+            if not owner.confirm_created():
+                _setup("disk budget exceeded; container was not started")
             if owner.cancelled():
                 graceful = True
                 _setup("run was cancelled before the container existed")
         code, _stdout, _stderr = _invoke_within(docker_bin, ["start", name], 60, deadline)
         if code != 0:
             _setup("container setup failed")
+        if owner is not None and not owner.confirm_started():
+            _setup("disk budget exceeded; container was not started")
         probe, _stdout, _stderr = _invoke_within(
             docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30, deadline
         )

@@ -277,7 +277,8 @@ No numeric service level is defined. The development worker retains run
 records and submission keys. Finished run folders older than 90 days, or
 beyond the newest 100, are removed, oldest first when the disk budget needs
 room. In-flight runs stay. A configured disk budget refuses a new submission
-that still would not fit. The worker is not an unattended production service.
+that still would not fit, and stops a running attempt that exceeds it: that
+run fails. The worker is not an unattended production service.
 
 ## Open questions
 
