@@ -473,18 +473,19 @@ def _event_repo(repo):
 
 
 def _stored_login(event, event_name):
+    """Return the authenticated actor login for eligibility, or None.
+
+    No polled event carries one. A push carries none, and a pull
+    request carries none: ``pull_request.user.login`` is the request
+    author, but the poller cannot see which account opened the request
+    or pushed its latest update — first observation of a pre-existing
+    request is indistinguishable from a genuine opened event — so
+    eligibility and claims fail closed instead of using the author as
+    a stand-in.
+    """
+
     if not isinstance(event, dict):
         return None
-    if event_name == "push":
-        commits = event.get("commits")
-        if not isinstance(commits, list) or not commits or not isinstance(commits[-1], dict):
-            return None
-        return _login(commits[-1].get("author"))
-    if event_name == "pull_request":
-        pull = event.get("pull_request")
-        if not isinstance(pull, dict):
-            return None
-        return _login(pull.get("user"))
     return None
 
 
@@ -512,13 +513,12 @@ def allowlist_matches(event, refs, pushers, event_name):
     A listed ref matches that ``ref`` exactly. A listed login matches
     the actor login with ASCII case folding. That default-branch push,
     schedule, or workflow_dispatch stays a match when a list is
-    non-empty. For a push, the login is the last commit's
-    ``author.login`` when that field is a non-empty string. For a pull
-    request, the login is ``pull_request.user.login`` on the same
-    condition. A schedule or workflow_dispatch event has no actor login.
-    A missing login does not match a pusher entry. An event that lacks
-    these fields does not match the default rule. This does not read a
-    secret.
+    non-empty. No polled event carries an actor login: neither a push
+    nor a pull request (opened or synchronize) yields one, because the
+    poller cannot verify which account triggered the run. A missing
+    login does not match a pusher entry, so pusher entries only constrain
+    events that carry a verified actor. An event that lacks these fields
+    does not match the default rule. This does not read a secret.
     """
 
     if _default_branch_run(event, event_name):
@@ -1889,6 +1889,7 @@ class Pass:
             "after": merge,
             "repository": _event_repository(self.repository, repo),
             "number": number,
+            "action": activity,
             "pull_request": pull_request,
         }
         submitted = self._submit_jobs(

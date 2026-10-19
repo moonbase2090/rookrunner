@@ -985,6 +985,9 @@ class PollTests(unittest.TestCase):
         )
         self.assertIs(type(event["repository"]["id"]), int)
         self.assertEqual(event["pull_request"]["user"], {"login": "Mona"})
+        # Cold start: first observation synthesizes action opened, but
+        # that alone grants no actor trust.
+        self.assertEqual(event["action"], "opened")
         self.assertEqual(
             event["pull_request"]["head"]["repo"],
             {"id": 5150, "full_name": "other/demo"},
@@ -998,7 +1001,9 @@ class PollTests(unittest.TestCase):
         self.assertNotIn("hidden@example.invalid", encoded)
         self.assertNotIn("private", encoded)
         self.assertFalse(allowlist_matches(event, [], [], "pull_request"))
-        self.assertTrue(allowlist_matches(event, [], ["mona"], "pull_request"))
+        # First observation is not verified opened-by-author: no
+        # eligibility through the request author even on cold start.
+        self.assertFalse(allowlist_matches(event, [], ["mona"], "pull_request"))
         self.assertTrue(allowlist_matches(event, ["refs/pull/9/merge"], [], "pull_request"))
         self.assertTrue(
             all(
@@ -2509,7 +2514,7 @@ class PollTests(unittest.TestCase):
 
 
 class AllowlistTests(unittest.TestCase):
-    def test_only_the_default_push_or_a_listed_ref_or_login_matches(self):
+    def test_only_the_default_push_or_a_listed_ref_matches(self):
         default = {
             "ref": "refs/heads/main",
             "repository": {"id": 5150, "full_name": "acme/demo", "default_branch": "main"},
@@ -2524,6 +2529,7 @@ class AllowlistTests(unittest.TestCase):
         pull = {
             "ref": "refs/pull/9/merge",
             "repository": {"id": 5150, "default_branch": "main"},
+            "action": "opened",
             "pull_request": {"user": {"login": "Mona"}},
         }
         bare_pull = {
@@ -2540,7 +2546,7 @@ class AllowlistTests(unittest.TestCase):
         self.assertFalse(allowlist_matches(default, [], [], "pull_request"))
         self.assertTrue(allowlist_matches(other, ["refs/heads/dev"], [], "push"))
         self.assertFalse(allowlist_matches(other, ["refs/heads/Dev"], [], "push"))
-        self.assertTrue(allowlist_matches(other, [], ["octocat"], "push"))
+        self.assertFalse(allowlist_matches(other, [], ["octocat"], "push"))
         self.assertFalse(allowlist_matches(other, [], ["octocat "], "push"))
         self.assertFalse(
             allowlist_matches(
@@ -2557,7 +2563,9 @@ class AllowlistTests(unittest.TestCase):
         self.assertFalse(allowlist_matches(other, [], ["octocat"], "workflow_dispatch"))
         self.assertFalse(allowlist_matches({"ref": "refs/heads/dev"}, [], ["octocat"], "push"))
         self.assertFalse(allowlist_matches(pull, [], [], "pull_request"))
-        self.assertTrue(allowlist_matches(pull, [], ["mona"], "pull_request"))
+        # No polled event carries a verifiable actor: the request author
+        # grants nothing even on an opened event.
+        self.assertFalse(allowlist_matches(pull, [], ["mona"], "pull_request"))
         self.assertTrue(allowlist_matches(pull, ["refs/pull/9/merge"], [], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], ["mona"], "pull_request"))
         self.assertFalse(allowlist_matches(bare_pull, [], [""], "pull_request"))

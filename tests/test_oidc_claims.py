@@ -118,7 +118,6 @@ class ClaimTests(unittest.TestCase):
                     "octo-org/octo-repo/.github/workflows/deploy.yml@refs/heads/main"
                 ),
                 "event_name": "push",
-                "actor": "octocat",
                 "runner_environment": "self-hosted",
             },
         )
@@ -245,7 +244,10 @@ class MintDecisionTests(unittest.TestCase):
         branch["ref"] = "refs/heads/feature"
         self.assertEqual(_refusal(branch, "push"), "ref and actor are not on the allowlist")
         self.assertIsNone(_refusal(branch, "push", refs=("refs/heads/feature",)))
-        self.assertIsNone(_refusal(branch, "push", pushers=("OctoCat",)))
+        self.assertEqual(
+            _refusal(branch, "push", pushers=("OctoCat",)),
+            "ref and actor are not on the allowlist",
+        )
         self.assertEqual(_refusal(TAG, "push"), "ref and actor are not on the allowlist")
 
     def test_other_events_are_refused(self):
