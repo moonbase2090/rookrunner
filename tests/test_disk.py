@@ -515,37 +515,77 @@ class DiskBudgetTests(unittest.TestCase):
             watch.join()
         self.assertTrue(watch.exceeded)
 
-    def test_the_breach_latch_waits_for_the_admission_window(self):
-        # Either interleaving — latch attempted between check and create,
-        # or between create and start — lands inside run_job's admission
-        # window, so it must block until admission releases instead of
-        # slipping through. Afterwards the latched hold refuses begin.
+    def test_the_watch_latches_promptly_during_slow_admission(self):
+        # Liveness regression test: the lease lock must never be held
+        # across Docker I/O. While one thread performs the admission
+        # checkpoint sequence with a slow step in the middle, the watch
+        # must latch promptly instead of blocking behind admission. The
+        # old design held admission_window across the slow step; take it
+        # when present so this test pins the fix.
+        from types import SimpleNamespace
+
         lease = ContainerLease()
-        entered = threading.Event()
+        self.assertTrue(lease.begin(object(), "wf-slow"))
+        stop_calls = []
+        lease.stop = lambda: stop_calls.append(1) or 0
         release = threading.Event()
-        done = threading.Event()
+        confirmed = []
 
-        def holder():
-            with lease.admission_window():
-                entered.set()
-                self.assertTrue(release.wait(5))
+        def slow_admission():
+            import contextlib
 
-        holder_thread = threading.Thread(target=holder)
-        holder_thread.start()
+            window = getattr(lease, "admission_window", None)
+            ctx = window() if window is not None else contextlib.nullcontext()
+            with ctx:
+                if lease.budget_breached():
+                    return
+                if not release.wait(3):
+                    return
+                # A breach landed mid-admission: the late confirm refuses.
+                confirmed.append(lease.confirm_created())
+
+        admission_thread = threading.Thread(target=slow_admission)
+        start = time.monotonic()
+        admission_thread.start()
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, lease).start()
         try:
-            self.assertTrue(entered.wait(5))
-            noter = threading.Thread(target=lambda: (lease.note_budget_breach(), done.set()))
-            noter.start()
-            time.sleep(0.5)
-            self.assertFalse(done.is_set(), "latch landed inside the admission window")
-            release.set()
-            noter.join(5)
-            self.assertTrue(done.is_set(), "latch never applied after admission released")
-            self.assertTrue(lease.budget_breached())
-            self.assertFalse(lease.begin(object(), "wf-window"))
+            deadline = start + 5
+            while not lease.budget_breached() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            latch_delay = time.monotonic() - start
+            self.assertTrue(lease.budget_breached(), "latch never landed during slow admission")
+            self.assertLess(latch_delay, 1.5, "watch blocked behind admission I/O")
         finally:
             release.set()
-            holder_thread.join(5)
+            admission_thread.join(5)
+            watch.join()
+        self.assertEqual(confirmed, [False])
+
+    def test_checkpoints_refuse_each_breach_interleaving(self):
+        # Latch before begin refuses admission outright.
+        refused = ContainerLease()
+        refused.note_budget_breach()
+        self.assertFalse(refused.begin(object(), "wf-never"))
+        # Latch after begin but before the create checkpoint: the
+        # just-created container must not start.
+        created = ContainerLease()
+        self.assertTrue(created.begin(object(), "wf-created"))
+        created.note_budget_breach()
+        self.assertFalse(created.confirm_created())
+        # Latch after the create checkpoint but before start: the
+        # started container must not run steps.
+        started = ContainerLease()
+        self.assertTrue(started.begin(object(), "wf-started"))
+        self.assertTrue(started.confirm_created())
+        started.note_budget_breach()
+        self.assertFalse(started.confirm_started())
+        # No breach anywhere: both confirms pass and phases advance.
+        clean = ContainerLease()
+        self.assertTrue(clean.begin(object(), "wf-clean"))
+        self.assertTrue(clean.confirm_created())
+        self.assertTrue(clean.confirm_started())
+        self.assertEqual(clean.snapshot()[0], "running")
 
     def test_running_job_within_its_budget_is_not_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
