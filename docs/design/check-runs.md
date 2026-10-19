@@ -202,7 +202,7 @@ The secrets design does not change this post
 `--passwordless-sudo` writes all-command `NOPASSWD` for the caller.
 Together with the Docker client and `--docker-socket`, that is
 control of the host engine
-([runner image](runner-image.md)). This post does not mount the key
+([runner image](runner-image.md)). `--job-privileges` is off by default. It adds only `CAP_SYS_CHROOT` and a `personality` seccomp allowance for job containers, on top of Docker's default seccomp profile. It does not add other capabilities. It is intended for chroot smoke steps and setarch or callgrind bench steps. The shipped profile `seccomp-personality.json` is derived from the moby default seccomp profile (Apache-2.0) at `daemon/pkg/oci/fixtures/default.json`, with `personality` added to the allowed names. The `chroot` entry stays gated on `CAP_SYS_CHROOT`. This post does not mount the key
 directory into the job, and it does not put the installation token in
 the job. A job on a worker started with `--docker-socket` can still
 ask that engine to mount the host directory that holds the key. P5

@@ -19,6 +19,9 @@ The worker does not pull, build, or publish it. An explicit `image`
 still wins. `worker --passwordless-sudo` is off by default. It writes
 passwordless sudo for the caller on that image and warns that the job
 can become root in its container.
+`worker --job-privileges` is off by default. It adds only
+`CAP_SYS_CHROOT` and a `personality` seccomp allowance for job
+containers. It does not add other capabilities.
 `worker --secrets` takes no path and requires `--github-repository`.
 `worker --app-key` accepts only the Rookrunner App key path. The worker
 opens that file only when a job mints a Contents-read token.
@@ -515,6 +518,7 @@ class Worker:
         network=DEFAULT_NETWORK,
         docker_socket=False,
         passwordless_sudo=False,
+        job_privileges=False,
         action_remote=None,
         node24=None,
         runner_image=None,
@@ -534,6 +538,8 @@ class Worker:
             raise ValueError("docker socket must be a boolean")
         if type(passwordless_sudo) is not bool:
             raise ValueError("passwordless sudo must be a boolean")
+        if type(job_privileges) is not bool:
+            raise ValueError("job privileges must be a boolean")
         if action_remote is None:
             action_remote = DEFAULT_ACTION_REMOTE
         if action_remote != DEFAULT_ACTION_REMOTE:
@@ -546,6 +552,7 @@ class Worker:
         self.network = network
         self.docker_socket = docker_socket
         self.passwordless_sudo = passwordless_sudo
+        self.job_privileges = job_privileges
         self.passwordless_sudo_warning = (
             passwordless_sudo_warning(docker_socket) if passwordless_sudo else None
         )
@@ -1214,6 +1221,7 @@ class Worker:
             network=self.network,
             docker_socket=self.docker_socket,
             passwordless_sudo=self.passwordless_sudo,
+            job_privileges=self.job_privileges,
             event_name=event_name,
             node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
             actions=actions_root,
@@ -2682,6 +2690,7 @@ def serve(
     runner_image=None,
     *,
     passwordless_sudo=False,
+    job_privileges=False,
     secrets=False,
     github_repository=None,
     app_key=None,
@@ -2701,6 +2710,7 @@ def serve(
         network=network,
         docker_socket=docker_socket,
         passwordless_sudo=passwordless_sudo,
+        job_privileges=job_privileges,
         node24=node24,
         runner_image=runner_image,
         secrets=secrets,

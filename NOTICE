@@ -10,5 +10,11 @@ Terms: https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE
 Copyright: Ingy döt Net (2017-2021) and Kirill Simonov (2006-2016)
 
 The package does not vendor PyYAML. Installing it pulls pyyaml==6.0.3.
+
+Docker default seccomp profile (moby)
+License: Apache-2.0
+Source: https://github.com/moby/moby/blob/master/daemon/pkg/oci/fixtures/default.json
+The shipped `seccomp-personality.json` is that profile with
+`personality` added to the allowed names. No other change.
 Development tools are not part of that distribution and are not listed
 here.
