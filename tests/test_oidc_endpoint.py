@@ -315,6 +315,17 @@ class AuditAndContainerTests(_Keyed):
         self.assertTrue(AuditLog(str(path)).append({"reason": "x"}))
         self.assertEqual(json.loads(path.read_text()), {"reason": "x"})
 
+    def test_a_short_write_still_lands_the_full_audit_line(self):
+        path = self.state / AUDIT_FILE
+        real_write = os.write
+
+        def short_write(fd, data):
+            return real_write(fd, data[:1])
+
+        with mock.patch("os.write", side_effect=short_write):
+            self.assertTrue(AuditLog(str(path)).append({"reason": "x"}))
+        self.assertEqual(json.loads(path.read_text()), {"reason": "x"})
+
     def test_the_container_maps_the_host_name_only_for_oidc(self):
         dirs = {"home": "/h", "runner-temp": "/t", "tool-cache": "/c"}
 

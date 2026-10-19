@@ -95,7 +95,15 @@ class AuditLog:
                     or stat.S_IMODE(info.st_mode) != 0o600
                 ):
                     return False
-                os.write(fd, line)
+                # POSIX write can short-write: loop until the full line
+                # lands, otherwise a truncated audit record would read back
+                # as success and the mint path would issue a token.
+                remaining = line
+                while remaining:
+                    written = os.write(fd, remaining)
+                    if written <= 0:
+                        return False
+                    remaining = remaining[written:]
                 return True
             except OSError:
                 return False
