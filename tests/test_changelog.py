@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -83,14 +83,33 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_8_is_the_current_version_and_unreleased_is_empty(self):
-        self.assertIn("The current package version is 0.1.8.", TEXT)
+    def test_0_1_9_is_the_current_version_and_unreleased_is_empty(self):
+        self.assertIn("The current package version is 0.1.9.", TEXT)
+        self.assertIn("## [0.1.9] - 2026-10-19", TEXT)
+        section = TEXT.split("## [0.1.9] - 2026-10-19", 1)[1].split("## [0.1.8]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.9.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("## [Unreleased]\n\n## [0.1.9] - 2026-10-19", TEXT)
+
+    def test_0_1_9_records_job_privileges(self):
+        section = TEXT.split("## [0.1.9] - 2026-10-19", 1)[1].split("## [0.1.8]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("`worker --job-privileges` is off by default.", prose)
+        self.assertIn("adds only `CAP_SYS_CHROOT`", prose)
+        self.assertIn("restricted to the values `setarch` needs: 0, 262144, and 0xffffffff.", prose)
+        self.assertIn("The flag composes with `--passwordless-sudo`.", prose)
+        self.assertIn("`chroot` takes effect for steps running as root", prose)
+        self.assertIn("a bench step that runs Callgrind under `setarch`", prose)
+        self.assertIn("The capability version stays 12.", prose)
+
+    def test_0_1_8_records_its_package_version(self):
         self.assertIn("## [0.1.8] - 2026-10-19", TEXT)
         section = TEXT.split("## [0.1.8] - 2026-10-19", 1)[1].split("## [0.1.7]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.8.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertIn("## [Unreleased]\n\n## [0.1.8] - 2026-10-19", TEXT)
+        self.assertNotIn("`worker --job-privileges` is off by default.", prose)
 
     def test_0_1_8_records_the_oidc_token_endpoint(self):
         section = TEXT.split("## [0.1.8] - 2026-10-19", 1)[1].split("## [0.1.7]", 1)[0]
