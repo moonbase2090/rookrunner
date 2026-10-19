@@ -37,6 +37,7 @@ PULL = {
     "after": SHA,
     "repository": {"full_name": REPOSITORY, "id": REPOSITORY_ID, "default_branch": "main"},
     "number": 7,
+    "action": "opened",
     "pull_request": {
         "head": {"sha": "d" * 40, "ref": "feature", "repo": {"id": REPOSITORY_ID}},
         "base": {"sha": "c" * 40, "ref": "main", "repo": {"id": REPOSITORY_ID}},
@@ -100,6 +101,29 @@ class ForgedAuthorEligibilityTests(unittest.TestCase):
             )
         )
         self.assertEqual(_claims(PULL, "pull_request")["actor"], "octocat")
+
+    def test_a_synchronize_grants_nothing_through_the_request_author(self):
+        # The update may have been pushed by a different account than the
+        # request author, and the poller cannot see which. Eligibility and
+        # claims fail closed instead of using the author as a stand-in.
+        event = copy.deepcopy(PULL)
+        event["action"] = "synchronize"
+        access = SecretAccess(REPOSITORY, pushers=("OctoCat",))
+
+        self.assertFalse(allowlist_matches(event, [], ["OctoCat"], "pull_request"))
+        self.assertFalse(secrets_allowed(access, event, "pull_request"))
+        # Pull-request token gating is by flag plus same-repo, never by
+        # pusher login: the mint is allowed but carries no actor claim.
+        self.assertIsNone(
+            mint_refusal(
+                event,
+                "pull_request",
+                repository=REPOSITORY,
+                pushers=("OctoCat",),
+                pull_requests=True,
+            )
+        )
+        self.assertNotIn("actor", _claims(event, "pull_request"))
 
 
 if __name__ == "__main__":

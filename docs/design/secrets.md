@@ -620,14 +620,15 @@ Omitting `--secrets` is how the operator turns file secrets off.
 
 `poll` copies `repository.id`, `repository.default_branch`, and the
 actor login into the event it already stores. Only a pull request
-carries an actor login: `user.login` on the pull request, which is
-the account GitHub authenticated. A push carries none. The tip
-commit's resolved `author.login` comes from the commit author email,
-which anyone with push access can forge, so a pusher entry never
-matches a push. A missing login does not match a pusher entry. The
-default branch is the `default_branch` string on the repository
-object. It is not the local clone's `HEAD`. A local submit that does
-not carry those event fields does not match the default rule.
+opened event carries an actor login: `user.login` on the pull
+request, which is the account GitHub authenticated when the request
+was opened. A push carries none, and a synchronize carries none: the
+poller cannot see which account pushed the update, so a pusher entry
+never matches those events. A missing login does not match a pusher
+entry. The default branch is the `default_branch` string on the
+repository object. It is not the local clone's `HEAD`. A local submit
+that does not carry those event fields does not match the default
+rule.
 
 The match is computed from the stored event. It is not a new plan
 field. The plan schema stays unchanged.

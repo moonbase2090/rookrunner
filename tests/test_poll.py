@@ -2524,6 +2524,7 @@ class AllowlistTests(unittest.TestCase):
         pull = {
             "ref": "refs/pull/9/merge",
             "repository": {"id": 5150, "default_branch": "main"},
+            "action": "opened",
             "pull_request": {"user": {"login": "Mona"}},
         }
         bare_pull = {
