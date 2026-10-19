@@ -14,6 +14,16 @@ sudoers file and omits no-new-privileges. It keeps `SETUID`,
 `SETGID`, and `AUDIT_WRITE` so `sudo` can change uid, plus `CHOWN`,
 `DAC_OVERRIDE`, `DAC_READ_SEARCH`, and `FOWNER` so that root can
 administer files it does not own. A different digest keeps today's image.
+Job privileges are off unless the caller passes `job_privileges`. That
+opt-in keeps `--cap-drop ALL`, adds only `CAP_SYS_CHROOT`, and replaces
+the engine default seccomp profile with `seccomp-personality.json`.
+That profile is the Docker default profile plus a `personality`
+allowance restricted to arg0 values 0 (PER_LINUX), 262144
+(PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff
+(reading the current personality). It adds no other capability. The
+profile is derived from the moby default seccomp profile (Apache-2.0)
+at `daemon/pkg/oci/fixtures/default.json`, with `personality` restricted
+to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
 
 Shell behavior follows GitHub's workflow syntax for Linux runners, reviewed
 2026-10-02. An omitted shell is `bash -e {0}`. `shell: bash` is
@@ -1486,7 +1496,14 @@ def _limit_args():
     ]
 
 
-def _job_isolation_args(passwordless_sudo=False):
+def _seccomp_personality_opt():
+    """Return the seccomp security-opt for the personality profile."""
+
+    profile = Path(__file__).resolve().parent / "seccomp-personality.json"
+    return f"seccomp={profile}"
+
+
+def _job_isolation_args(passwordless_sudo=False, job_privileges=False):
     """Drop every capability and refuse new privileges for a job container.
 
     The account-setup container is separate. It runs as root so it can
@@ -1499,12 +1516,19 @@ def _job_isolation_args(passwordless_sudo=False):
     unlink a file in a mode-0700 directory owned by another user.
     ``DAC_READ_SEARCH`` lets root stat a mode-0700 workspace owned
     by the job user. Without that opt-in the job cannot become root.
+    ``job_privileges`` keeps `--cap-drop ALL`, adds only `SYS_CHROOT`,
+    and adds the personality seccomp profile on top of the Docker
+    default profile. That profile allows `personality` only with arg0
+    0, 262144, or 0xffffffff. It does not change no-new-privileges: that
+    stays exactly as `passwordless_sudo` dictates.
     """
 
     if type(passwordless_sudo) is not bool:
         _setup("passwordless sudo must be a boolean")
+    if type(job_privileges) is not bool:
+        _setup("job privileges must be a boolean")
     if passwordless_sudo:
-        return [
+        args = [
             "--cap-drop",
             "ALL",
             "--cap-add",
@@ -1522,12 +1546,23 @@ def _job_isolation_args(passwordless_sudo=False):
             "--cap-add",
             "FOWNER",
         ]
-    return [
-        "--security-opt",
-        "no-new-privileges",
-        "--cap-drop",
-        "ALL",
-    ]
+    else:
+        args = [
+            "--security-opt",
+            "no-new-privileges",
+            "--cap-drop",
+            "ALL",
+        ]
+    if job_privileges:
+        args.extend(
+            [
+                "--cap-add",
+                "SYS_CHROOT",
+                "--security-opt",
+                _seccomp_personality_opt(),
+            ]
+        )
+    return args
 
 
 def _service_isolation_args():
@@ -1561,6 +1596,7 @@ def _create_args(
     socket_volume=None,
     account=None,
     passwordless_sudo=False,
+    job_privileges=False,
     oidc_host=False,
 ):
     if network not in _NETWORKS:
@@ -1574,7 +1610,7 @@ def _create_args(
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         *_limit_args(),
-        *_job_isolation_args(passwordless_sudo),
+        *_job_isolation_args(passwordless_sudo, job_privileges),
     ]
     if oidc_host:
         # The token endpoint listens on the host. Only a bridge network reaches it.
@@ -2802,6 +2838,7 @@ def run_job(
     network=DEFAULT_NETWORK,
     docker_socket=False,
     passwordless_sudo=False,
+    job_privileges=False,
     event_name=None,
     node24=None,
     actions=None,
@@ -2849,7 +2886,12 @@ def run_job(
     the passwd file read-only. Passwordless sudo is off unless
     `passwordless_sudo` is true. That opt-in also writes and mounts
     a sudoers file and relaxes job isolation enough for `sudo` to
-    change uid. A different image does not.
+    change uid. A different image does not. Job privileges are off
+    unless `job_privileges` is true. That opt-in adds only
+    `CAP_SYS_CHROOT` and a personality seccomp allowance restricted to
+    arg0 values 0, 262144, and 0xffffffff. It is intended for chroot
+    smoke steps and setarch or callgrind bench steps. It does not add
+    other capabilities.
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
     or that volume.
@@ -2859,6 +2901,8 @@ def run_job(
         _setup("container network is not accepted")
     if type(passwordless_sudo) is not bool:
         _setup("passwordless sudo must be a boolean")
+    if type(job_privileges) is not bool:
+        _setup("job privileges must be a boolean")
     runner_digest = None
     if runner_image is not None:
         if not isinstance(runner_image, str) or not _DIGEST.fullmatch(runner_image):
@@ -2961,7 +3005,8 @@ def run_job(
                 socket_volume,
                 account,
                 passwordless_sudo if account is not None else False,
-                oidc is not None and network == "bridge",
+                job_privileges=job_privileges,
+                oidc_host=oidc is not None and network == "bridge",
             ),
             60,
             deadline,

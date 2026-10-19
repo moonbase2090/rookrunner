@@ -46,6 +46,7 @@ no-new-privileges on the job, and keeps `SETUID`, `SETGID`,
 `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, and
 `FOWNER`. It warns that the job can become root in its container. With `--docker-socket`, that is control of the host
 engine. A step cannot gain privileges through sudo.
+`--job-privileges` is off by default. It adds only `CAP_SYS_CHROOT` and a `personality` seccomp allowance restricted to arg0 values 0 (PER_LINUX), 262144 (PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff (reading the current personality) for job containers, on top of Docker's default seccomp profile. It does not add other capabilities. It is intended for chroot smoke steps and setarch or callgrind bench steps. The shipped profile `seccomp-personality.json` is derived from the moby default seccomp profile (Apache-2.0) at `daemon/pkg/oci/fixtures/default.json`, with `personality` restricted to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.
 
 A bash or sh `run` script does not insert a `${{ }}` value as raw
 text. An unquoted value is single-quoted. A value already inside

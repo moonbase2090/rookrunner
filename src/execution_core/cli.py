@@ -743,6 +743,16 @@ def main():
             "With --docker-socket that is control of the host engine."
         ),
     )
+    worker.add_argument(
+        "--job-privileges",
+        action="store_true",
+        help=(
+            "add CAP_SYS_CHROOT and a personality seccomp allowance "
+            "restricted to values 0, 262144, and 0xffffffff "
+            "for job containers. Off by default. "
+            "It does not add other capabilities."
+        ),
+    )
     commands.add_parser("describe")
     commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
     commands.add_parser(
@@ -1009,6 +1019,7 @@ def main():
                 node24=args.node24,
                 runner_image=args.runner_image,
                 passwordless_sudo=args.passwordless_sudo,
+                job_privileges=args.job_privileges,
                 secrets=args.secrets,
                 github_repository=args.github_repository,
                 app_key=args.app_key,

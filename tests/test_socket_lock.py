@@ -148,6 +148,14 @@ class FlagTests(_HomeTest):
         with self.assertRaisesRegex(ValueError, "passwordless sudo must be a boolean"):
             self.worker(passwordless_sudo="yes")
 
+    def test_job_privileges_is_off_unless_the_operator_opts_in(self):
+        worker = self.worker()
+        self.assertIs(worker.job_privileges, False)
+        opted = self.worker(job_privileges=True)
+        self.assertIs(opted.job_privileges, True)
+        with self.assertRaisesRegex(ValueError, "job privileges must be a boolean"):
+            self.worker(job_privileges="yes")
+
     def test_docker_socket_alone_warns_and_names_both_directories(self):
         worker = self.worker(docker_socket=True)
         self.assertIs(worker.docker_socket, True)
@@ -413,6 +421,8 @@ class CliTests(_HomeTest):
             "--key-dir",
         ):
             self.assertIn(flag, worker.stdout)
+        self.assertIn("--job-privileges", worker.stdout)
+        self.assertIn("CAP_SYS_CHROOT", worker.stdout)
         self.assertIn("Takes no path", worker.stdout)
         self.assertIn("ROOKRUNNER_KEY_DIR", worker.stdout)
         self.assertIn("~/.config/rookrunner/keys", worker.stdout)
