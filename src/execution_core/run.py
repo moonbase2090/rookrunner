@@ -2094,6 +2094,7 @@ class ContainerLease:
         self.name = None
         self.docker = None
         self.cancel = False
+        self.budget_hold = False
         self.reserve = None
         self.blocked_names = frozenset()
         self.services = []
@@ -2107,12 +2108,23 @@ class ContainerLease:
         with self._lock:
             if self.cancel or self.phase != "idle":
                 return False
+            if self.budget_hold:
+                return False
             if self.reserve is not None:
                 self.reserve(name)
             self.docker = docker
             self.name = name
             self.phase = "creating"
             return True
+
+    def note_budget_breach(self):
+        """Latch a disk-budget breach: no container may be created or started after this."""
+        with self._lock:
+            self.budget_hold = True
+
+    def budget_breached(self):
+        with self._lock:
+            return self.budget_hold
 
     def created(self):
         with self._lock:
@@ -2987,7 +2999,11 @@ def run_job(
                 _setup("workspace path is not accepted")
         name = _container_name(owner)
         if owner is not None and not owner.begin(docker_bin, name):
+            if owner.budget_breached():
+                _setup("disk budget exceeded; container was not created")
             _setup("run was cancelled before the container existed")
+        if owner is not None and owner.budget_breached():
+            _setup("disk budget exceeded; container was not created")
         code, _stdout, _stderr = _invoke_within(
             docker_bin,
             _create_args(
@@ -3017,6 +3033,8 @@ def run_job(
         created = True
         if owner is not None:
             owner.created()
+            if owner.budget_breached():
+                _setup("disk budget exceeded; container was not started")
             if owner.cancelled():
                 graceful = True
                 _setup("run was cancelled before the container existed")

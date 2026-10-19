@@ -459,9 +459,13 @@ class _BudgetWatch:
     """Stop a running workflow attempt when the state exceeds its disk budget.
 
     The watch polls `usage(state)` while `run_job` executes. On a breach it
-    stops the owned container so the running step ends, and records the
-    breach so the worker fails the run instead of publishing its outcome.
-    An unreadable entry fails closed. The poll only measures: unlike
+    latches a budget hold on the lease — so no container can be created or
+    started afterwards — and stops the owned container so the running step
+    ends. It records the breach so the worker fails the run instead of
+    publishing its outcome. The watch exits only on the terminal lease
+    state (closed) or join: container presence is never an exit signal,
+    because pre-begin and creating phases legitimately have no container
+    yet. An unreadable entry fails closed. The poll only measures: unlike
     `_over_budget` it never reclaims or prunes.
     """
 
@@ -486,20 +490,22 @@ class _BudgetWatch:
         while not self._done.wait(_BUDGET_POLL_SECONDS):
             if not self.exceeded and self._worker._runtime_over_budget():
                 self.exceeded = True
+                if self._owner is not None:
+                    with contextlib.suppress(OSError):
+                        self._owner.note_budget_breach()
             if self.exceeded:
-                # A failed stop must not end enforcement: keep stopping
-                # until the container is confirmed stopped. A 0 return
-                # with no Docker client published yet means "nothing to
-                # stop", not "stopped": only a published lease whose
-                # owned containers and networks are gone (or a closed
-                # lease) ends the watch.
+                # Enforcement ends only on the terminal lease state.
+                # Container presence is never an exit signal: pre-begin
+                # and creating phases legitimately have no container yet,
+                # and a failed stop must not end enforcement either.
                 if self._owner is None:
                     return
                 with contextlib.suppress(OSError):
                     phase, _name, docker, _cancel = self._owner.snapshot()
-                    self._owner.stop()
-                    if phase == "closed" or (docker and self._owner.removed()):
+                    if phase == "closed":
                         return
+                    if docker is not None:
+                        self._owner.stop()
 
 
 def _public_steps(steps):

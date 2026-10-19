@@ -337,9 +337,12 @@ class DiskBudgetTests(unittest.TestCase):
                 worker.disk_budget = usage(state) + 2 * reserve + 65536
                 image_digest = record["input"]["image_digest"]
                 lease = ContainerLease()
+                # Publish a client the way begin() would, so the watch
+                # has a container to stop; stops always fail here, so
+                # the watch must keep retrying until the run ends.
+                self.assertTrue(lease.begin(object(), "wf-over"))
                 stop_calls = []
-                original_stop = lease.stop
-                lease.stop = lambda: stop_calls.append(1) or original_stop()
+                lease.stop = lambda: stop_calls.append(1) or 1
 
                 def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
                     (workspace / "big").write_bytes(b"x" * (reserve + 256 * 1024))
@@ -356,6 +359,7 @@ class DiskBudgetTests(unittest.TestCase):
                 with patch("execution_core.worker.run_job", side_effect=fake_run_job):
                     worker._execute_workflow(record, request, lease)
                 self.assertTrue(stop_calls, "budget watch did not stop the over-budget job")
+                self.assertTrue(lease.budget_breached(), "breach was not latched on the lease")
                 finished = worker.get(record["run_id"])
                 self.assertEqual(finished["state"], "failed")
                 self.assertIsNone(finished["exit_code"])
@@ -391,14 +395,14 @@ class DiskBudgetTests(unittest.TestCase):
                 worker.disk_budget = usage(state) + 2 * reserve + 65536
                 image_digest = record["input"]["image_digest"]
                 lease = ContainerLease()
+                self.assertTrue(lease.begin(object(), "wf-retry-stop"))
                 stop_calls = []
-                original_stop = lease.stop
 
                 def flaky_stop():
                     stop_calls.append(1)
                     if len(stop_calls) < 3:
                         return 1
-                    return original_stop()
+                    return 0
 
                 lease.stop = flaky_stop
 
@@ -426,40 +430,86 @@ class DiskBudgetTests(unittest.TestCase):
             finally:
                 worker.close()
 
-    def test_a_pre_begin_breach_keeps_watching_until_confirmed(self):
+    def test_a_breached_lease_refuses_begin(self):
+        lease = ContainerLease()
+        self.assertFalse(lease.budget_breached())
+        self.assertTrue(lease.begin(object(), "wf-hold"))
+        breached = ContainerLease()
+        breached.note_budget_breach()
+        self.assertTrue(breached.budget_breached())
+        self.assertFalse(breached.begin(object(), "wf-held"))
+
+    def test_a_pre_begin_breach_keeps_watching_until_close(self):
         from types import SimpleNamespace
 
         calls = []
-        published = []
+        noted = []
+        closed = []
 
         class FakeOwner:
             def snapshot(self):
-                docker = published[0] if published else None
-                phase = "live" if docker is not None else "idle"
-                return (phase, "n", docker, False)
+                return ("closed" if closed else "idle", "n", None, False)
 
             def stop(self):
                 calls.append(1)
                 return 0
 
-            def removed(self):
-                return True
+            def note_budget_breach(self):
+                noted.append(1)
 
         worker = SimpleNamespace(_runtime_over_budget=lambda: True)
         watch = _BudgetWatch(worker, FakeOwner()).start()
         try:
+            # Pre-begin there is nothing to stop, but the breach is
+            # latched and the watch must stay alive: exiting here
+            # would leave a later container unmonitored.
             deadline = time.monotonic() + 5
-            while len(calls) < 2 and time.monotonic() < deadline:
+            while len(noted) < 1 and time.monotonic() < deadline:
                 time.sleep(0.05)
-            self.assertGreaterEqual(len(calls), 2, "watch exited on a pre-begin stop()==0")
-            self.assertTrue(watch._thread.is_alive())
-            # The container now exists and is stopped: a published
-            # client with everything removed ends the watch.
-            published.append(object())
+            self.assertTrue(noted, "breach was not latched on the lease")
+            self.assertTrue(watch.exceeded)
+            time.sleep(0.6)
+            self.assertTrue(watch._thread.is_alive(), "watch exited before the lease closed")
+            self.assertEqual(calls, [], "watch stopped a container that does not exist yet")
+            closed.append(1)
             deadline = time.monotonic() + 5
             while watch._thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.05)
-            self.assertFalse(watch._thread.is_alive(), "watch did not exit after a confirmed stop")
+            self.assertFalse(watch._thread.is_alive(), "watch did not exit on lease close")
+        finally:
+            watch.join()
+
+    def test_a_creating_phase_breach_keeps_watching_until_close(self):
+        from types import SimpleNamespace
+
+        calls = []
+        closed = []
+
+        class FakeOwner:
+            def snapshot(self):
+                return ("closed" if closed else "creating", "n", object(), False)
+
+            def stop(self):
+                calls.append(1)
+                return 0
+
+            def note_budget_breach(self):
+                pass
+
+        worker = SimpleNamespace(_runtime_over_budget=lambda: True)
+        watch = _BudgetWatch(worker, FakeOwner()).start()
+        try:
+            # stop() succeeds while nothing exists yet, but the lease
+            # is not terminal, so the watch must not exit: the
+            # container may still be created (the latch refuses that).
+            time.sleep(0.6)
+            self.assertTrue(watch._thread.is_alive(), "watch exited during creating")
+            self.assertTrue(calls, "watch never attempted a stop")
+            closed.append(1)
+            deadline = time.monotonic() + 5
+            while watch._thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(watch._thread.is_alive(), "watch did not exit on lease close")
         finally:
             watch.join()
         self.assertTrue(watch.exceeded)
