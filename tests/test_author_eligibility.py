@@ -86,21 +86,15 @@ class ForgedAuthorEligibilityTests(unittest.TestCase):
             mint_refusal(event, "push", repository=REPOSITORY, refs=("refs/heads/feature",))
         )
 
-    def test_a_listed_pull_request_author_still_grants_the_run(self):
+    def test_first_observation_grants_nothing_through_the_request_author(self):
+        # Cold start synthesizes action opened for a pre-existing
+        # request, but first observation alone is not verified
+        # opened-by-author: no eligibility, no actor claim.
         access = SecretAccess(REPOSITORY, pushers=("OctoCat",))
 
-        self.assertTrue(allowlist_matches(PULL, [], ["OctoCat"], "pull_request"))
-        self.assertTrue(secrets_allowed(access, PULL, "pull_request"))
-        self.assertIsNone(
-            mint_refusal(
-                PULL,
-                "pull_request",
-                repository=REPOSITORY,
-                pushers=("OctoCat",),
-                pull_requests=True,
-            )
-        )
-        self.assertEqual(_claims(PULL, "pull_request")["actor"], "octocat")
+        self.assertFalse(allowlist_matches(PULL, [], ["OctoCat"], "pull_request"))
+        self.assertFalse(secrets_allowed(access, PULL, "pull_request"))
+        self.assertNotIn("actor", _claims(PULL, "pull_request"))
 
     def test_a_synchronize_grants_nothing_through_the_request_author(self):
         # The update may have been pushed by a different account than the
