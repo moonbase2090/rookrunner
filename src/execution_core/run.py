@@ -2088,7 +2088,9 @@ class ContainerLease:
     """
 
     def __init__(self):
-        self._lock = threading.Lock()
+        # Re-entrant: run_job holds the admission window across nested
+        # lease calls (begin/created/budget checks) during create+start.
+        self._lock = threading.RLock()
         self._ready = threading.Event()
         self.phase = "idle"
         self.name = None
@@ -2125,6 +2127,19 @@ class ContainerLease:
     def budget_breached(self):
         with self._lock:
             return self.budget_hold
+
+    @contextlib.contextmanager
+    def admission_window(self):
+        """Hold the lease lock across the admission check and create+start.
+
+        While held, the budget watch cannot latch a breach (it blocks on
+        the lock), so a breach is either observed before admission and
+        refused, or lands after start and is stopped by the watch. Either
+        way no container escapes enforcement: there is no check-to-act
+        gap for the latch to slip through.
+        """
+        with self._lock:
+            yield self
 
     def created(self):
         with self._lock:
@@ -2998,49 +3013,54 @@ def run_job(
             if "," in os.fspath(label) or "\n" in os.fspath(label):
                 _setup("workspace path is not accepted")
         name = _container_name(owner)
-        if owner is not None and not owner.begin(docker_bin, name):
-            if owner.budget_breached():
-                _setup("disk budget exceeded; container was not created")
-            _setup("run was cancelled before the container existed")
-        if owner is not None and owner.budget_breached():
-            _setup("disk budget exceeded; container was not created")
-        code, _stdout, _stderr = _invoke_within(
-            docker_bin,
-            _create_args(
-                name,
-                workspace,
-                private,
-                commands,
-                reference,
-                network,
-                socket_path,
-                socket_gid,
-                runner_dirs,
-                None if node_mount is None else node_mount["root"],
-                actions_root,
-                socket_temp,
-                socket_volume,
-                account,
-                passwordless_sudo if account is not None else False,
-                job_privileges=job_privileges,
-                oidc_host=oidc is not None and network == "bridge",
-            ),
-            60,
-            deadline,
-        )
-        if code != 0:
-            _setup("container setup failed")
-        created = True
-        if owner is not None:
-            owner.created()
-            if owner.budget_breached():
-                _setup("disk budget exceeded; container was not started")
-            if owner.cancelled():
-                graceful = True
+        # Admission holds the lease lock across the check and create+start,
+        # so the budget latch cannot slip between check and act. A breach
+        # is either refused here or lands after start and is stopped.
+        admission = owner.admission_window() if owner is not None else contextlib.nullcontext()
+        with admission:
+            if owner is not None and not owner.begin(docker_bin, name):
+                if owner.budget_breached():
+                    _setup("disk budget exceeded; container was not created")
                 _setup("run was cancelled before the container existed")
-        code, _stdout, _stderr = _invoke_within(docker_bin, ["start", name], 60, deadline)
-        if code != 0:
-            _setup("container setup failed")
+            if owner is not None and owner.budget_breached():
+                _setup("disk budget exceeded; container was not created")
+            code, _stdout, _stderr = _invoke_within(
+                docker_bin,
+                _create_args(
+                    name,
+                    workspace,
+                    private,
+                    commands,
+                    reference,
+                    network,
+                    socket_path,
+                    socket_gid,
+                    runner_dirs,
+                    None if node_mount is None else node_mount["root"],
+                    actions_root,
+                    socket_temp,
+                    socket_volume,
+                    account,
+                    passwordless_sudo if account is not None else False,
+                    job_privileges=job_privileges,
+                    oidc_host=oidc is not None and network == "bridge",
+                ),
+                60,
+                deadline,
+            )
+            if code != 0:
+                _setup("container setup failed")
+            created = True
+            if owner is not None:
+                owner.created()
+                if owner.budget_breached():
+                    _setup("disk budget exceeded; container was not started")
+                if owner.cancelled():
+                    graceful = True
+                    _setup("run was cancelled before the container existed")
+            code, _stdout, _stderr = _invoke_within(docker_bin, ["start", name], 60, deadline)
+            if code != 0:
+                _setup("container setup failed")
         probe, _stdout, _stderr = _invoke_within(
             docker_bin, ["exec", name, "bash", "-c", "exit 0"], 30, deadline
         )

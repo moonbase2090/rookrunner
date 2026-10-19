@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -513,6 +514,38 @@ class DiskBudgetTests(unittest.TestCase):
         finally:
             watch.join()
         self.assertTrue(watch.exceeded)
+
+    def test_the_breach_latch_waits_for_the_admission_window(self):
+        # Either interleaving — latch attempted between check and create,
+        # or between create and start — lands inside run_job's admission
+        # window, so it must block until admission releases instead of
+        # slipping through. Afterwards the latched hold refuses begin.
+        lease = ContainerLease()
+        entered = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+
+        def holder():
+            with lease.admission_window():
+                entered.set()
+                self.assertTrue(release.wait(5))
+
+        holder_thread = threading.Thread(target=holder)
+        holder_thread.start()
+        try:
+            self.assertTrue(entered.wait(5))
+            noter = threading.Thread(target=lambda: (lease.note_budget_breach(), done.set()))
+            noter.start()
+            time.sleep(0.5)
+            self.assertFalse(done.is_set(), "latch landed inside the admission window")
+            release.set()
+            noter.join(5)
+            self.assertTrue(done.is_set(), "latch never applied after admission released")
+            self.assertTrue(lease.budget_breached())
+            self.assertFalse(lease.begin(object(), "wf-window"))
+        finally:
+            release.set()
+            holder_thread.join(5)
 
     def test_running_job_within_its_budget_is_not_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
