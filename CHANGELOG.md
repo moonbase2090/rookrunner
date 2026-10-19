@@ -1,11 +1,28 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.9. A published release section
+The current package version is 0.1.10. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.10] - 2026-10-19
+
+- The `seccomp-personality.json` profile shipped for
+  `worker --job-privileges` is regenerated from the current
+  Docker default profile. The prior profile had no `clone3`
+  entry, so a job container on a `--job-privileges` worker could
+  fail during container setup on current Linux Docker, where
+  `clone3` needs an ENOSYS fallback when `CAP_SYS_ADMIN` is
+  absent. The regenerated profile allows `clone3` with
+  `CAP_SYS_ADMIN` and returns ENOSYS (38) without it, and adds
+  no `pivot_root` allowance. `worker --job-privileges` is off
+  by default. The `personality` allowance stays restricted to
+  the values `setarch` needs: 0, 262144, and 0xffffffff, with
+  no unconditional entry. The capability version stays 12.
+- The package version is 0.1.10. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.9] - 2026-10-19
 
