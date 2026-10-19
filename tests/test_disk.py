@@ -366,6 +366,66 @@ class DiskBudgetTests(unittest.TestCase):
             finally:
                 worker.close()
 
+    def test_a_failed_stop_is_retried_until_the_container_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-retry-stop")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 65536
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                stop_calls = []
+                original_stop = lease.stop
+
+                def flaky_stop():
+                    stop_calls.append(1)
+                    if len(stop_calls) < 3:
+                        return 1
+                    return original_stop()
+
+                lease.stop = flaky_stop
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "big").write_bytes(b"x" * (reserve + 256 * 1024))
+                    deadline = time.monotonic() + 5
+                    while len(stop_calls) < 3 and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertGreaterEqual(
+                    len(stop_calls), 3, "budget watch gave up after a failed stop"
+                )
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "failed")
+                self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
+                self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
     def test_running_job_within_its_budget_is_not_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

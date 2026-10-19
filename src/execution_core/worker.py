@@ -484,13 +484,16 @@ class _BudgetWatch:
 
     def _poll(self):
         while not self._done.wait(_BUDGET_POLL_SECONDS):
-            if self._worker._runtime_over_budget():
+            if not self.exceeded and self._worker._runtime_over_budget():
                 self.exceeded = True
-                owner = self._owner
-                if owner is not None:
-                    with contextlib.suppress(OSError):
-                        owner.stop()
-                return
+            if self.exceeded:
+                # A failed stop must not end enforcement: keep stopping
+                # until the container is confirmed stopped.
+                if self._owner is None:
+                    return
+                with contextlib.suppress(OSError):
+                    if self._owner.stop() == 0:
+                        return
 
 
 def _public_steps(steps):
