@@ -1,11 +1,50 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.7. A published release section
+The current package version is 0.1.8. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.8] - 2026-10-19
+
+- A pre-commit hook rejects an unformatted staged Python file under
+  `src/` or `tests/`. It checks the staged blob, not the working
+  tree. `scripts/install-hooks.sh` points a clone at the hook. CI
+  still runs `ruff format --check`.
+- A design for OIDC identity tokens records Rookrunner as an OIDC
+  issuer. A job can trade a short-lived signed token for a cloud
+  credential without a long-lived cloud secret. Every cloud trust
+  policy names the new issuer.
+- Signing keys are RSA files of at least 2048 bits under `oidc/` in
+  the key directory. Each file is named by its RFC 7638 thumbprint,
+  and `oidc/active` names the key that signs. Every key is
+  published, and only the active key signs. `oidc publish` writes
+  `.well-known/openid-configuration` and `.well-known/jwks.json`
+  with only the public key members. It refuses a non-https issuer,
+  an issuer with a query, a fragment, user info, or a trailing
+  slash, and an output directory inside the key directory.
+- Token claims hold the issuer, the audience, the subject, the
+  repository, the ref, the commit, the run, and the workflow. The
+  subject is `repo:<owner>/<repo>:ref:<ref>`, or
+  `repo:<owner>/<repo>:pull_request` for a same-repository pull
+  request. A token lives for five minutes. The mint decision
+  refuses a fork, an override run, and a run the secret allowlist
+  does not match. A same-repository pull request also needs the
+  pull-request opt-in.
+- A per-job token endpoint runs only when the worker is started
+  with `worker --oidc-issuer`. That flag is off by default. A job
+  must grant `id-token: write`, and the run must be trusted. A job
+  that passes gets `ACTIONS_ID_TOKEN_REQUEST_URL` and
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN` in every step. A job that does
+  not pass runs without them, and the refusal is audited. A passing
+  job on the `none` network fails before its first step and names
+  `--network bridge`. Each mint and each refusal is one line in
+  `oidc-audit.jsonl`, without the token. The capability version
+  stays 12.
+- The package version is 0.1.8. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.7] - 2026-10-18
 
