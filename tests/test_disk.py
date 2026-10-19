@@ -312,6 +312,107 @@ class DiskBudgetTests(unittest.TestCase):
             finally:
                 worker.close()
 
+    def test_running_job_writing_past_its_budget_is_stopped_and_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-over")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 65536
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                stop_calls = []
+                original_stop = lease.stop
+                lease.stop = lambda: stop_calls.append(1) or original_stop()
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "big").write_bytes(b"x" * (reserve + 256 * 1024))
+                    deadline = time.monotonic() + 3
+                    while not stop_calls and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertTrue(stop_calls, "budget watch did not stop the over-budget job")
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "failed")
+                self.assertIsNone(finished["exit_code"])
+                self.assertEqual(finished["error"]["kind"], "SETUP_FAILED")
+                self.assertEqual(finished["error"]["message"], _STORAGE_FULL)
+                self.assertNotIn(str(state), json.dumps(finished))
+                self.assertFalse((state / "attempts" / record["attempt_id"]).exists())
+            finally:
+                worker.close()
+
+    def test_running_job_within_its_budget_is_not_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            state = root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                accepted = self._workflow(worker, "wf-under")
+                record = accepted["result"]
+                request = json.loads(
+                    worker.db.execute(
+                        "SELECT request FROM runs WHERE id=?", (record["run_id"],)
+                    ).fetchone()[0]
+                )
+                record.update(state="running", started_at=now(), attempt_id=str(uuid.uuid4()))
+                with worker.db:
+                    worker.save(record)
+                snapshot = state / "snapshots" / record["input"]["snapshot_id"]
+                reserve = usage(snapshot)
+                worker.disk_budget = usage(state) + 2 * reserve + 1024 * 1024
+                image_digest = record["input"]["image_digest"]
+                lease = ContainerLease()
+                stop_calls = []
+                original_stop = lease.stop
+                lease.stop = lambda: stop_calls.append(1) or original_stop()
+
+                def fake_run_job(snapshot_dir, snapshot_digest, workspace, *args, **kwargs):
+                    (workspace / "small").write_bytes(b"x" * 65536)
+                    return {
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "image_digest": image_digest,
+                        "steps": [],
+                    }
+
+                with patch("execution_core.worker.run_job", side_effect=fake_run_job):
+                    worker._execute_workflow(record, request, lease)
+                self.assertEqual(stop_calls, [])
+                finished = worker.get(record["run_id"])
+                self.assertEqual(finished["state"], "succeeded")
+                self.assertEqual(finished["exit_code"], 0)
+            finally:
+                worker.close()
+
     def test_home_file_bytes_count_toward_the_disk_budget(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

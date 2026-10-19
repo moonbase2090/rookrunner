@@ -60,6 +60,7 @@ job that would otherwise succeed. Development fixtures do not.
 """
 
 import base64
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -157,6 +158,8 @@ from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, githu
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
+# The budget watch polls at the same interval as the cancellation poll in run.py.
+_BUDGET_POLL_SECONDS = 0.2
 _ATTEMPT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _STATUS_SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -450,6 +453,44 @@ def _error_text(exc):
         return "workflow attempt could not be prepared"
     text = "".join(ch for ch in " ".join(str(exc).split()) if not 0xD800 <= ord(ch) <= 0xDFFF)
     return text[:512] or "workflow attempt could not be prepared"
+
+
+class _BudgetWatch:
+    """Stop a running workflow attempt when the state exceeds its disk budget.
+
+    The watch polls `usage(state)` while `run_job` executes. On a breach it
+    stops the owned container so the running step ends, and records the
+    breach so the worker fails the run instead of publishing its outcome.
+    An unreadable entry fails closed. The poll only measures: unlike
+    `_over_budget` it never reclaims or prunes.
+    """
+
+    def __init__(self, worker, owner):
+        self._worker = worker
+        self._owner = owner
+        self._done = threading.Event()
+        self.exceeded = False
+        self._thread = threading.Thread(
+            target=self._poll, name="rookrunner-budget-watch", daemon=True
+        )
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def join(self):
+        self._done.set()
+        self._thread.join()
+
+    def _poll(self):
+        while not self._done.wait(_BUDGET_POLL_SECONDS):
+            if self._worker._runtime_over_budget():
+                self.exceeded = True
+                owner = self._owner
+                if owner is not None:
+                    with contextlib.suppress(OSError):
+                        owner.stop()
+                return
 
 
 def _public_steps(steps):
@@ -1211,43 +1252,56 @@ class Worker:
             )
             raise RunError("SETUP_FAILED", message) from exc
         event_name = request.get("event_name") if isinstance(request, dict) else None
-        return run_job(
-            snapshot,
-            pinned["digest"],
-            workspace,
-            planned["plan"],
-            image,
-            event,
-            owner=owner,
-            network=self.network,
-            docker_socket=self.docker_socket,
-            passwordless_sudo=self.passwordless_sudo,
-            job_privileges=self.job_privileges,
-            event_name=event_name,
-            node24=(None if self.node24 is None else (self.node24["root"], self.node24["digest"])),
-            actions=actions_root,
-            runner_image=self.runner_image_digest,
-            secrets=(
-                None
-                if not self.secrets
-                else SecretAccess(
-                    self.github_repository,
-                    self.secret_refs,
-                    self.secret_pushers,
-                )
-            ),
-            job_token=self.job_token_config(),
-            oidc=(
-                None
-                if self.oidc is None
-                else OidcRun(
-                    self.oidc,
-                    run_id=record["run_id"],
-                    attempt=1,
-                    untrusted_override=record.get("untrusted_override") is True,
-                )
-            ),
-        )
+        # The admission checks above only bound the attempt before it starts.
+        # The watch stops the owned container when the state grows past the
+        # budget mid-run. The final check closes the race where the last
+        # bytes land after the last poll.
+        watch = _BudgetWatch(self, owner).start()
+        try:
+            outcome = run_job(
+                snapshot,
+                pinned["digest"],
+                workspace,
+                planned["plan"],
+                image,
+                event,
+                owner=owner,
+                network=self.network,
+                docker_socket=self.docker_socket,
+                passwordless_sudo=self.passwordless_sudo,
+                job_privileges=self.job_privileges,
+                event_name=event_name,
+                node24=(
+                    None if self.node24 is None else (self.node24["root"], self.node24["digest"])
+                ),
+                actions=actions_root,
+                runner_image=self.runner_image_digest,
+                secrets=(
+                    None
+                    if not self.secrets
+                    else SecretAccess(
+                        self.github_repository,
+                        self.secret_refs,
+                        self.secret_pushers,
+                    )
+                ),
+                job_token=self.job_token_config(),
+                oidc=(
+                    None
+                    if self.oidc is None
+                    else OidcRun(
+                        self.oidc,
+                        run_id=record["run_id"],
+                        attempt=1,
+                        untrusted_override=record.get("untrusted_override") is True,
+                    )
+                ),
+            )
+        finally:
+            watch.join()
+        if watch.exceeded or self._runtime_over_budget():
+            raise RunError("SETUP_FAILED", _STORAGE_FULL)
+        return outcome
 
     def _abandoned(self, run_id):
         with self.guard:
@@ -1861,6 +1915,20 @@ class Worker:
         except OSError:
             return True
         return used + incoming > self.disk_budget
+
+    def _runtime_over_budget(self):
+        """Return whether the state already exceeds the disk budget.
+
+        Unlike `_over_budget`, this only measures: the budget watch calls it
+        while a job runs, so it never reclaims or prunes. An unreadable
+        entry fails closed.
+        """
+
+        try:
+            used = usage(self.state)
+        except OSError:
+            return True
+        return used > self.disk_budget
 
     def _publish_artifacts(self, record, selections=None):
         """Record files this attempt wrote. A confirmed terminal run then removes the directory.
