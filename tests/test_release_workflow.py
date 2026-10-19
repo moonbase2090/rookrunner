@@ -278,22 +278,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 check=False,
             )
 
-        match = run("v0.1.9")
+        match = run("v0.1.10")
         self.assertEqual(match.returncode, 0, match.stderr)
         self.assertIn(
-            "RELEASE_WHEEL=execution_core-0.1.9-py3-none-any.whl",
+            "RELEASE_WHEEL=execution_core-0.1.10-py3-none-any.whl",
             match.stdout,
         )
-        self.assertIn("RELEASE_SDIST=execution_core-0.1.9.tar.gz", match.stdout)
-        self.assertIn("RELEASE_TITLE=v0.1.9 preview", match.stdout)
+        self.assertIn("RELEASE_SDIST=execution_core-0.1.10.tar.gz", match.stdout)
+        self.assertIn("RELEASE_TITLE=v0.1.10 preview", match.stdout)
         self.assertIn(
-            "RELEASE_NOTES=.github/v0.1.9-release-notes.md",
+            "RELEASE_NOTES=.github/v0.1.10-release-notes.md",
             match.stdout,
         )
         mismatch = run("v0.1.0")
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn("does not match", mismatch.stderr)
-        bare = run("0.1.9")
+        bare = run("0.1.10")
         self.assertNotEqual(bare.returncode, 0)
 
 
