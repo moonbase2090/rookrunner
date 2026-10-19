@@ -7,6 +7,15 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Passwordless sudo still drops every capability. It then keeps
+  `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, and
+  `FOWNER`. `DAC_READ_SEARCH` is no longer kept: `DAC_OVERRIDE`
+  already covers stat and read of a mode-0700 workspace, and the
+  engine default seccomp profile allows `open_by_handle_at` only
+  when that capability is held. The apt partial-directory, unlink,
+  and workspace flows from 0.1.7 still work. A job without that
+  opt-in still sets no-new-privileges and adds no capabilities.
+
 ## [0.1.10] - 2026-10-19
 
 - The `seccomp-personality.json` profile shipped for

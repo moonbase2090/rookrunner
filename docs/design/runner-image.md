@@ -184,8 +184,11 @@ The implementation does the following.
    command or those mounts. By default the job is created with
    `--security-opt no-new-privileges` and `--cap-drop ALL`. The opt-in
    omits no-new-privileges and keeps `SETUID`, `SETGID`,
-   `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, and
-   `FOWNER`. The worker warns that the job can become root in
+   `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, and
+   `FOWNER`. `DAC_READ_SEARCH` stays dropped: `DAC_OVERRIDE` already
+   covers reading a mode-0700 workspace, and the engine default
+   seccomp profile allows `open_by_handle_at` only when that
+   capability is held. The worker warns that the job can become root in
    its container. With `--docker-socket` that is control of the host
    engine.
    `--job-privileges` is off by default. It adds only `CAP_SYS_CHROOT` and a `personality` seccomp allowance restricted to arg0 values 0 (PER_LINUX), 262144 (PER_LINUX|ADDR_NO_RANDOMIZE, the `setarch -R` value), and 0xffffffff (reading the current personality) for job containers, on top of Docker's default seccomp profile. It does not add other capabilities. It is intended for chroot smoke steps and setarch or callgrind bench steps. The shipped profile `seccomp-personality.json` is derived from the moby default seccomp profile (Apache-2.0) from `github.com/moby/profiles/seccomp` v0.2.3 `seccomp/default.json` (vendored in moby `docker-v29.7.2`), with `personality` restricted to those values. The `chroot` entry stays gated on `CAP_SYS_CHROOT`.

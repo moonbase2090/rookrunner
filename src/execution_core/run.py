@@ -12,8 +12,11 @@ The job container drops every capability and sets no-new-privileges,
 so a step cannot gain privileges through sudo. The opt-in writes a
 sudoers file and omits no-new-privileges. It keeps `SETUID`,
 `SETGID`, and `AUDIT_WRITE` so `sudo` can change uid, plus `CHOWN`,
-`DAC_OVERRIDE`, `DAC_READ_SEARCH`, and `FOWNER` so that root can
-administer files it does not own. A different digest keeps today's image.
+`DAC_OVERRIDE`, and `FOWNER` so that root can
+administer files it does not own. `DAC_READ_SEARCH` stays dropped:
+`DAC_OVERRIDE` already covers reading a mode-0700 workspace, and the
+engine default seccomp profile allows `open_by_handle_at` only when
+that capability is held. A different digest keeps today's image.
 Job privileges are off unless the caller passes `job_privileges`. That
 opt-in keeps `--cap-drop ALL`, adds only `CAP_SYS_CHROOT`, and replaces
 the engine default seccomp profile with `seccomp-personality.json`.
@@ -79,7 +82,7 @@ write passwd. It writes sudoers only when passwordless sudo is
 requested, and it does not receive those flags. The default job
 cannot become root. The opt-in omits no-new-privileges and keeps
 `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`,
-`DAC_READ_SEARCH`, and `FOWNER`. The
+and `FOWNER`. The
 Docker socket stays unmounted unless the caller sets `docker_socket`. That
 mount gives the job the socket of the pinned Docker context, at
 `/var/run/docker.sock` inside the container. The job keeps the caller uid.
@@ -1514,9 +1517,12 @@ def _job_isolation_args(passwordless_sudo=False, job_privileges=False):
     ``AUDIT_WRITE`` for its audit plugin. ``CHOWN`` and ``FOWNER``
     let root chown a directory and then chmod it, which is what apt
     does for its partial directories. ``DAC_OVERRIDE`` lets root
-    unlink a file in a mode-0700 directory owned by another user.
-    ``DAC_READ_SEARCH`` lets root stat a mode-0700 workspace owned
-    by the job user. Without that opt-in the job cannot become root.
+    unlink a file in a mode-0700 directory owned by another user,
+    and stat and read a mode-0700 workspace owned by the job user.
+    ``DAC_READ_SEARCH`` stays dropped: it adds no file access beyond
+    ``DAC_OVERRIDE``, and the engine default seccomp profile allows
+    ``open_by_handle_at`` only when that capability is held. Without
+    that opt-in the job cannot become root.
     ``job_privileges`` keeps `--cap-drop ALL`, adds only `SYS_CHROOT`,
     and adds the personality seccomp profile on top of the Docker
     default profile. That profile allows `personality` only with arg0
@@ -1542,8 +1548,6 @@ def _job_isolation_args(passwordless_sudo=False, job_privileges=False):
             "CHOWN",
             "--cap-add",
             "DAC_OVERRIDE",
-            "--cap-add",
-            "DAC_READ_SEARCH",
             "--cap-add",
             "FOWNER",
         ]

@@ -148,7 +148,6 @@ class ContainerLimitTests(unittest.TestCase):
                 "AUDIT_WRITE",
                 "CHOWN",
                 "DAC_OVERRIDE",
-                "DAC_READ_SEARCH",
                 "FOWNER",
             ],
         )
@@ -177,8 +176,6 @@ class ContainerLimitTests(unittest.TestCase):
                 "CHOWN",
                 "--cap-add",
                 "DAC_OVERRIDE",
-                "--cap-add",
-                "DAC_READ_SEARCH",
                 "--cap-add",
                 "FOWNER",
             ],
@@ -259,12 +256,39 @@ class ContainerLimitTests(unittest.TestCase):
                 "AUDIT_WRITE",
                 "CHOWN",
                 "DAC_OVERRIDE",
-                "DAC_READ_SEARCH",
                 "FOWNER",
                 "SYS_CHROOT",
             ],
         )
         self.assertTrue(any(part.startswith("seccomp=") for part in args))
+
+    def test_passwordless_sudo_omits_dac_read_search_but_keeps_apt_sudo_caps(self):
+        args = _job_isolation_args(passwordless_sudo=True)
+        adds = [args[index + 1] for index, part in enumerate(args) if part == "--cap-add"]
+        self.assertNotIn("DAC_READ_SEARCH", adds)
+        for kept in ("SETUID", "SETGID", "AUDIT_WRITE", "CHOWN", "DAC_OVERRIDE", "FOWNER"):
+            self.assertIn(kept, adds)
+
+    def test_shipped_profile_gates_open_by_handle_at_on_dac_read_search(self):
+        import json
+
+        args = _job_isolation_args(job_privileges=True)
+        seccomp = [part for part in args if part.startswith("seccomp=")]
+        self.assertEqual(len(seccomp), 1)
+        profile = json.loads(Path(seccomp[0].removeprefix("seccomp=")).read_text())
+        self.assertEqual(profile["defaultAction"], "SCMP_ACT_ERRNO")
+        gated = [
+            entry for entry in profile["syscalls"] if "open_by_handle_at" in entry.get("names", [])
+        ]
+        self.assertTrue(gated, "shipped profile must contain open_by_handle_at")
+        for entry in gated:
+            self.assertEqual(entry.get("action"), "SCMP_ACT_ALLOW")
+            self.assertIn("CAP_DAC_READ_SEARCH", entry.get("includes", {}).get("caps", []))
+        sudo_args = _job_isolation_args(passwordless_sudo=True)
+        sudo_adds = [
+            sudo_args[index + 1] for index, part in enumerate(sudo_args) if part == "--cap-add"
+        ]
+        self.assertNotIn("DAC_READ_SEARCH", sudo_adds)
 
     def test_job_privileges_create_args_carry_the_grants(self):
         job = _create_args(
