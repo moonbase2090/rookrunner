@@ -83,14 +83,20 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_10_is_the_current_version_and_unreleased_is_empty(self):
+    def test_0_1_10_is_the_current_version(self):
         self.assertIn("The current package version is 0.1.10.", TEXT)
         self.assertIn("## [0.1.10] - 2026-10-19", TEXT)
+        self.assertNotIn("## [0.1.11]", TEXT)
         section = TEXT.split("## [0.1.10] - 2026-10-19", 1)[1].split("## [0.1.9]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.10.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertIn("## [Unreleased]\n\n## [0.1.10] - 2026-10-19", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.10]", 1)[0]
+        pending = " ".join(unreleased.split())
+        self.assertIn("Passwordless sudo still drops every capability.", pending)
+        self.assertIn("`DAC_READ_SEARCH` is no longer kept", pending)
+        self.assertIn("`open_by_handle_at` only when that capability is held", pending)
+        self.assertIn("adds no capabilities.", pending)
 
     def test_0_1_10_records_the_regenerated_seccomp_profile(self):
         section = TEXT.split("## [0.1.10] - 2026-10-19", 1)[1].split("## [0.1.9]", 1)[0]

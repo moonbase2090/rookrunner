@@ -496,7 +496,6 @@ class RunnerAccountTests(unittest.TestCase):
                 "AUDIT_WRITE",
                 "CHOWN",
                 "DAC_OVERRIDE",
-                "DAC_READ_SEARCH",
                 "FOWNER",
             ],
         )
@@ -546,7 +545,6 @@ class RunnerAccountTests(unittest.TestCase):
                 "AUDIT_WRITE",
                 "CHOWN",
                 "DAC_OVERRIDE",
-                "DAC_READ_SEARCH",
                 "FOWNER",
             ],
         )
