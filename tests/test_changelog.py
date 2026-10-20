@@ -104,7 +104,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("withholds actor eligibility", prose)
         self.assertIn("Passwordless sudo still drops every capability.", prose)
         self.assertIn("`DAC_READ_SEARCH` is no longer kept", prose)
-        self.assertIn("`open_by_handle_at` only when that capability is held", prose)
+        self.assertIn("the apt, unlink, and workspace flows from 0.1.7 still work", prose)
         self.assertIn("adds no capabilities.", prose)
         self.assertIn("A low-severity hardening batch is included", prose)
         self.assertIn("an empty or missing run database fails closed", prose)
