@@ -69,9 +69,11 @@ Local rules, not GitHub-equivalence claims:
   ``mb2090-signoff`` is a failure. No CODEOWNERS blob is skipped and
   recorded. The pass does not apply the label and does not run
   ``signoff.yml``.
-- A terminal run whose snapshot is not readable is skipped. The
+- A terminal run whose snapshot is not readable posts an ``error``
+  status with the reason as its description, in token mode. The
   submission stays, and a later pass tries that run again. The pass
-  still posts every later run. Any other status refusal stops the pass.
+  still posts every later run. App-key mode keeps the skip. Any other
+  status refusal stops the pass.
 - After posts and before the final state save, the pass calls
   ``poll.record`` on the single caller and on each place whose origin
   was accepted. ``PollError`` and ``OSError`` from that call are a
@@ -1000,6 +1002,7 @@ class Pass:
         self.caller = caller
         self.clock = clock
         self.ssh_host = ssh_host
+        self.unplaced = False
         self.places = places
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
@@ -1805,6 +1808,10 @@ class Pass:
             override=reason,
         ):
             return False
+        if self.unplaced:
+            # Keep the tip unsaved and the branch list unapplied so a later pass retries.
+            self.hold_branches = True
+            return True
         self.state["tips"][ref] = sha
         self._checkpoint()
         return True
@@ -1903,7 +1910,9 @@ class Pass:
             False,
             override=override,
         )
-        if submitted:
+        if self.unplaced:
+            self.hold_pulls = True
+        if submitted and not self.unplaced:
             self.state["pulls"][str(number)] = {
                 "head": head_sha,
                 "base": base_sha,
@@ -2180,6 +2189,7 @@ class Pass:
     ):
         """Submit each configured job. Return false when a pending post did not finish."""
 
+        self.unplaced = False
         if self.places is not None:
             return self._submit_placed(
                 event_name,
@@ -2328,6 +2338,8 @@ class Pass:
             if existing is not None:
                 place = self._place_for(existing.get("host"))
                 if place is None or not place.get("reachable"):
+                    if "run_id" not in existing:
+                        self.unplaced = True
                     continue
                 if "run_id" in existing:
                     self._bind(place)
@@ -2346,11 +2358,13 @@ class Pass:
                         )
                     continue
                 if place.get("skip") not in (None, "host_full"):
+                    self.unplaced = True
                     continue
                 claimed = existing
             else:
                 place = self._choose_place()
                 if place is None:
+                    self.unplaced = True
                     self.result["skipped"].append(
                         {
                             "reason": "no_host",
@@ -2510,6 +2524,12 @@ class Pass:
                 self.result["skipped"].append(
                     {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
                 )
+                if not self.app_key and self._post(
+                    entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
+                ):
+                    self.result["statuses"].append(
+                        {"run_id": entry["run_id"], "state": "error", "action": "posted"}
+                    )
                 return
             raise
         if decision["action"] == "skip":
@@ -2542,7 +2562,7 @@ class Pass:
             raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
         return self._post(entry, decision["state"], decision)
 
-    def _post(self, entry, state, decision=None):
+    def _post(self, entry, state, decision=None, description=None, record=True):
         if self.budget.stopped:
             return False
         if self.app_key:
@@ -2560,6 +2580,7 @@ class Pass:
                     state,
                     entry["context"],
                     token,
+                    description,
                 )
             finally:
                 token = None
@@ -2568,16 +2589,19 @@ class Pass:
                 self.budget.stopped = True
                 return False
             raise
-        self.caller(
-            "run.status",
-            {
-                "run_id": entry["run_id"],
-                "tested_commit": entry["tested_commit"],
-                "status_sha": entry["status_sha"],
-                "context": entry["context"],
-                "record": state,
-            },
-        )
+        if record:
+            # The worker refuses to record a run whose snapshot is unreadable,
+            # so the error post is not recorded and may repeat on a later pass.
+            self.caller(
+                "run.status",
+                {
+                    "run_id": entry["run_id"],
+                    "tested_commit": entry["tested_commit"],
+                    "status_sha": entry["status_sha"],
+                    "context": entry["context"],
+                    "record": state,
+                },
+            )
         self.budget.observe(remaining)
         return True
 

@@ -699,6 +699,7 @@ class PollTests(unittest.TestCase):
         first = self.poll()
         older = first["submitted"][0]["run_id"]
         record = self.worker.get(older)
+        older_sha = tip
         record["state"] = "succeeded"
         record["exit_code"] = 0
         with self.worker.guard, self.worker.db:
@@ -740,20 +741,43 @@ class PollTests(unittest.TestCase):
         third = self.poll()
         self.assertEqual(
             [json.loads(item["body"]) for item in self.posts()],
-            [{"context": "rookrunner/check.yml/check", "state": "success"}],
+            [
+                {
+                    "context": "rookrunner/check.yml/check",
+                    "description": "snapshot is not readable",
+                    "state": "error",
+                },
+                {"context": "rookrunner/check.yml/check", "state": "success"},
+            ],
         )
-        self.assertTrue(self.posts()[0]["path"].endswith("/" + new))
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
+        self.assertTrue(self.posts()[1]["path"].endswith("/" + new))
         self.assertEqual(
             [item for item in third["skipped"] if item["reason"] == "snapshot_unreadable"],
             [{"reason": "snapshot_unreadable", "run_id": older}],
         )
-        self.assertEqual([item["action"] for item in third["statuses"]], ["posted"])
-        self.assertEqual(third["statuses"][0]["run_id"], newer)
+        self.assertEqual(
+            third["statuses"],
+            [
+                {"run_id": older, "state": "error", "action": "posted"},
+                {"run_id": newer, "state": "success", "action": "posted"},
+            ],
+        )
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual([item["run_id"] for item in saved["submissions"]], [older, newer])
         self.server.requests.clear()
         fourth = self.poll()
-        self.assertEqual(self.posts(), [])
+        self.assertEqual(
+            [json.loads(item["body"]) for item in self.posts()],
+            [
+                {
+                    "context": "rookrunner/check.yml/check",
+                    "description": "snapshot is not readable",
+                    "state": "error",
+                },
+            ],
+        )
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
         self.assertEqual(self.runs(), 2)
         self.assertEqual(
             [item for item in fourth["skipped"] if item["reason"] == "snapshot_unreadable"],
@@ -761,7 +785,10 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(
             fourth["statuses"],
-            [{"run_id": newer, "state": "success", "action": "skip"}],
+            [
+                {"run_id": older, "state": "error", "action": "posted"},
+                {"run_id": newer, "state": "success", "action": "skip"},
+            ],
         )
 
     def test_a_fork_and_a_missing_merge_ref_run_nothing(self):
@@ -2415,6 +2442,45 @@ class PollTests(unittest.TestCase):
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual(saved["repository"], "acme/demo")
         self.assertIsNone(self._meta("poll_completed_at", worker))
+
+    def test_a_pass_with_no_place_keeps_the_tip_unsaved_until_the_job_is_placed(self):
+        worker = self._place_worker("alpha")
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        clock = datetime(2026, 10, 9, tzinfo=UTC)
+        full_calls = []
+        bound = self._bound(worker, full_calls)
+
+        def unlisted(method, params):
+            if method == "run.list":
+                raise PollError("WORKER_ERROR", "run list refused")
+            return bound(method, params)
+
+        full = self._place("alpha", worker, unlisted)
+        first = self._places([full], clock)
+        self.assertEqual(
+            [item for item in first["skipped"] if item["reason"] == "no_host"],
+            [
+                {
+                    "reason": "no_host",
+                    "event": "push",
+                    "ref": "refs/heads/main",
+                    "workflow": JOB[0],
+                    "job_id": JOB[1],
+                }
+            ],
+        )
+        self.assertNotIn("run.submit", full_calls)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("refs/heads/main", saved["tips"])
+
+        ready_calls = []
+        ready = self._place("alpha", worker, self._bound(worker, ready_calls))
+        second = self._places([ready], clock)
+        self.assertEqual(ready_calls.count("run.submit"), 1)
+        self.assertNotIn("no_host", [item.get("reason") for item in second["skipped"]])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["tips"]["refs/heads/main"], tip)
 
     def test_two_places_record_each_reached_origin(self):
         alpha = self._place_worker("alpha")

@@ -588,6 +588,7 @@ class Worker:
         key_dir=None,
         oidc_issuer=None,
         oidc_pull_request=False,
+        finished_folder_count=None,
     ):
         if network not in {"bridge", "none"}:
             raise ValueError("container network must be bridge or none")
@@ -647,6 +648,11 @@ class Worker:
         if type(disk_budget) is not int or disk_budget < 0:
             raise ValueError("disk budget must be a non-negative integer")
         self.disk_budget = disk_budget
+        if finished_folder_count is None:
+            finished_folder_count = FINISHED_RUN_FOLDER_COUNT
+        if type(finished_folder_count) is not int or finished_folder_count < 1:
+            raise ValueError("finished folder count must be a positive integer")
+        self.finished_folder_count = finished_folder_count
         self.repository = str(Path(repository).resolve(strict=True))
         if not Path(self.repository).is_dir():
             raise ValueError("repository must be a directory")
@@ -1503,7 +1509,22 @@ class Worker:
     def _folder_protected(self, record):
         if record.get("state") not in TERMINAL:
             return True
-        return record.get("cleanup") != "confirmed_no_external_resources"
+        if record.get("cleanup") != "confirmed_no_external_resources":
+            return True
+        # A workflow run's snapshot is read again when its terminal status is
+        # posted. Keep the folder until one such status is recorded.
+        if (record.get("input") or {}).get("kind") == "workflow_job":
+            return not self._terminal_status_recorded(record["run_id"])
+        return False
+
+    def _terminal_status_recorded(self, run_id):
+        states = sorted(TERMINAL_STATUS)
+        marks = ", ".join("?" for _ in states)
+        row = self.db.execute(
+            f"SELECT 1 FROM status_posts WHERE run_id=? AND state IN ({marks}) LIMIT 1",
+            (run_id, *states),
+        ).fetchone()
+        return row is not None
 
     def _folder_names(self, records):
         snapshots = set()
@@ -1544,7 +1565,7 @@ class Worker:
             eligible.append((stamp, record))
         eligible.sort(key=lambda item: item[0])
         current = datetime.now(UTC)
-        newest = {record["run_id"] for _stamp, record in eligible[-FINISHED_RUN_FOLDER_COUNT:]}
+        newest = {record["run_id"] for _stamp, record in eligible[-self.finished_folder_count :]}
         drop_ids = set()
         keep = []
         for stamp, record in eligible:
@@ -2850,6 +2871,7 @@ def serve(
     docker_context=None,
     oidc_issuer=None,
     oidc_pull_request=False,
+    finished_folder_count=None,
 ):
     pin_docker_context(resolve_docker_context(docker_context))
     worker = Worker(
@@ -2871,6 +2893,7 @@ def serve(
         key_dir=key_dir,
         oidc_issuer=oidc_issuer,
         oidc_pull_request=oidc_pull_request,
+        finished_folder_count=finished_folder_count,
     )
     if worker.host_control_warning:
         print(  # noqa: T201  host-control warning on stderr

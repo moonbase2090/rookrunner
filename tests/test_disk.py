@@ -984,7 +984,7 @@ def _snapshot(state, payload):
     return name, path
 
 
-def _store(worker, key, state_name, snapshot_id, finished_at, cleanup):
+def _store(worker, key, state_name, snapshot_id, finished_at, cleanup, posted=True):
     run_id = str(uuid.uuid4())
     record = {
         "run_id": run_id,
@@ -1001,13 +1001,18 @@ def _store(worker, key, state_name, snapshot_id, finished_at, cleanup):
             "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
             (run_id, key, "{}", canonical(record), b""),
         )
+        if posted and state_name in {"succeeded", "failed", "lost", "cancelled"}:
+            worker.db.execute(
+                "INSERT INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
+                (run_id, "rookrunner/check", "a" * 40, "success"),
+            )
     return run_id
 
 
 class FinishedFolderTests(unittest.TestCase):
-    def _worker(self, directory):
+    def _worker(self, directory, **options):
         state = Path(directory) / "state"
-        worker = Worker(directory, state)
+        worker = Worker(directory, state, **options)
         worker.execute_queue = lambda: worker.stop.wait()
         worker.start()
         return worker, state
@@ -1066,6 +1071,77 @@ class FinishedFolderTests(unittest.TestCase):
             finally:
                 if worker.db is not None:
                     worker.close()
+
+    def test_an_unposted_workflow_folder_past_ninety_days_is_kept_until_its_status_is_posted(self):
+        limit = 90 * 24 * 60 * 60
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                name, path = _snapshot(state, b"unposted")
+                run_id = _store(
+                    worker,
+                    "unposted",
+                    "succeeded",
+                    name,
+                    _stamp(limit + 1),
+                    "confirmed_no_external_resources",
+                    posted=False,
+                )
+                worker.close()
+                again = Worker(directory, state)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertTrue(path.exists())
+                    with again.guard, again.db:
+                        again.db.execute(
+                            "INSERT INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
+                            (run_id, "rookrunner/check", "a" * 40, "failure"),
+                        )
+                    again._prune_finished_run_folders(0)
+                    self.assertFalse(path.exists())
+                    self.assertIsNotNone(again.get(run_id))
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_the_finished_folder_count_is_configurable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory, finished_folder_count=2)
+            try:
+                paths = []
+                for index, age in enumerate((300, 200, 100)):
+                    name, path = _snapshot(state, f"f{index}".encode())
+                    paths.append(path)
+                    _store(
+                        worker,
+                        f"counted-{index}",
+                        "succeeded",
+                        name,
+                        _stamp(age),
+                        "confirmed_no_external_resources",
+                    )
+                worker.close()
+                again = Worker(directory, state, finished_folder_count=2)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertFalse(paths[0].exists())
+                    self.assertTrue(paths[1].exists())
+                    self.assertTrue(paths[2].exists())
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_the_finished_folder_count_must_be_a_positive_integer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for value in (0, -1, True, "100"):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    Worker(directory, Path(directory) / "state", finished_folder_count=value)
 
     def test_the_oldest_finished_folder_past_one_hundred_is_removed(self):
         self.assertEqual(FINISHED_RUN_FOLDER_COUNT, 100)
