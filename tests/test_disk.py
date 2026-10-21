@@ -1010,9 +1010,9 @@ def _store(worker, key, state_name, snapshot_id, finished_at, cleanup, posted=Tr
 
 
 class FinishedFolderTests(unittest.TestCase):
-    def _worker(self, directory):
+    def _worker(self, directory, **options):
         state = Path(directory) / "state"
-        worker = Worker(directory, state)
+        worker = Worker(directory, state, **options)
         worker.execute_queue = lambda: worker.stop.wait()
         worker.start()
         return worker, state
@@ -1106,6 +1106,42 @@ class FinishedFolderTests(unittest.TestCase):
             finally:
                 if worker.db is not None:
                     worker.close()
+
+    def test_the_finished_folder_count_is_configurable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory, finished_folder_count=2)
+            try:
+                paths = []
+                for index, age in enumerate((300, 200, 100)):
+                    name, path = _snapshot(state, f"f{index}".encode())
+                    paths.append(path)
+                    _store(
+                        worker,
+                        f"counted-{index}",
+                        "succeeded",
+                        name,
+                        _stamp(age),
+                        "confirmed_no_external_resources",
+                    )
+                worker.close()
+                again = Worker(directory, state, finished_folder_count=2)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertFalse(paths[0].exists())
+                    self.assertTrue(paths[1].exists())
+                    self.assertTrue(paths[2].exists())
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_the_finished_folder_count_must_be_a_positive_integer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for value in (0, -1, True, "100"):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    Worker(directory, Path(directory) / "state", finished_folder_count=value)
 
     def test_the_oldest_finished_folder_past_one_hundred_is_removed(self):
         self.assertEqual(FINISHED_RUN_FOLDER_COUNT, 100)

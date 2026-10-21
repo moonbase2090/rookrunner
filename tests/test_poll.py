@@ -2443,6 +2443,45 @@ class PollTests(unittest.TestCase):
         self.assertEqual(saved["repository"], "acme/demo")
         self.assertIsNone(self._meta("poll_completed_at", worker))
 
+    def test_a_pass_with_no_place_keeps_the_tip_unsaved_until_the_job_is_placed(self):
+        worker = self._place_worker("alpha")
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        clock = datetime(2026, 10, 9, tzinfo=UTC)
+        full_calls = []
+        bound = self._bound(worker, full_calls)
+
+        def unlisted(method, params):
+            if method == "run.list":
+                raise PollError("WORKER_ERROR", "run list refused")
+            return bound(method, params)
+
+        full = self._place("alpha", worker, unlisted)
+        first = self._places([full], clock)
+        self.assertEqual(
+            [item for item in first["skipped"] if item["reason"] == "no_host"],
+            [
+                {
+                    "reason": "no_host",
+                    "event": "push",
+                    "ref": "refs/heads/main",
+                    "workflow": JOB[0],
+                    "job_id": JOB[1],
+                }
+            ],
+        )
+        self.assertNotIn("run.submit", full_calls)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("refs/heads/main", saved["tips"])
+
+        ready_calls = []
+        ready = self._place("alpha", worker, self._bound(worker, ready_calls))
+        second = self._places([ready], clock)
+        self.assertEqual(ready_calls.count("run.submit"), 1)
+        self.assertNotIn("no_host", [item.get("reason") for item in second["skipped"]])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["tips"]["refs/heads/main"], tip)
+
     def test_two_places_record_each_reached_origin(self):
         alpha = self._place_worker("alpha")
         beta = self._place_worker("beta")

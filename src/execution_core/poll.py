@@ -1002,6 +1002,7 @@ class Pass:
         self.caller = caller
         self.clock = clock
         self.ssh_host = ssh_host
+        self.unplaced = False
         self.places = places
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
@@ -1807,6 +1808,10 @@ class Pass:
             override=reason,
         ):
             return False
+        if self.unplaced:
+            # Keep the tip unsaved and the branch list unapplied so a later pass retries.
+            self.hold_branches = True
+            return True
         self.state["tips"][ref] = sha
         self._checkpoint()
         return True
@@ -1905,7 +1910,9 @@ class Pass:
             False,
             override=override,
         )
-        if submitted:
+        if self.unplaced:
+            self.hold_pulls = True
+        if submitted and not self.unplaced:
             self.state["pulls"][str(number)] = {
                 "head": head_sha,
                 "base": base_sha,
@@ -2182,6 +2189,7 @@ class Pass:
     ):
         """Submit each configured job. Return false when a pending post did not finish."""
 
+        self.unplaced = False
         if self.places is not None:
             return self._submit_placed(
                 event_name,
@@ -2330,6 +2338,8 @@ class Pass:
             if existing is not None:
                 place = self._place_for(existing.get("host"))
                 if place is None or not place.get("reachable"):
+                    if "run_id" not in existing:
+                        self.unplaced = True
                     continue
                 if "run_id" in existing:
                     self._bind(place)
@@ -2348,11 +2358,13 @@ class Pass:
                         )
                     continue
                 if place.get("skip") not in (None, "host_full"):
+                    self.unplaced = True
                     continue
                 claimed = existing
             else:
                 place = self._choose_place()
                 if place is None:
+                    self.unplaced = True
                     self.result["skipped"].append(
                         {
                             "reason": "no_host",

@@ -601,6 +601,12 @@ def main():
         ),
     )
     worker.add_argument(
+        "--finished-folder-count",
+        type=int,
+        default=None,
+        help="newest finished run folders kept while younger than 90 days (default 100)",
+    )
+    worker.add_argument(
         "--network",
         choices=["bridge", "none"],
         default="none",
@@ -1030,6 +1036,7 @@ def main():
                 docker_context=args.docker_context,
                 oidc_issuer=args.oidc_issuer,
                 oidc_pull_request=args.oidc_pull_request,
+                finished_folder_count=args.finished_folder_count,
             )
             return
         if args.command == "describe":
