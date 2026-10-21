@@ -984,7 +984,7 @@ def _snapshot(state, payload):
     return name, path
 
 
-def _store(worker, key, state_name, snapshot_id, finished_at, cleanup):
+def _store(worker, key, state_name, snapshot_id, finished_at, cleanup, posted=True):
     run_id = str(uuid.uuid4())
     record = {
         "run_id": run_id,
@@ -1001,6 +1001,11 @@ def _store(worker, key, state_name, snapshot_id, finished_at, cleanup):
             "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
             (run_id, key, "{}", canonical(record), b""),
         )
+        if posted and state_name in {"succeeded", "failed", "lost", "cancelled"}:
+            worker.db.execute(
+                "INSERT INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
+                (run_id, "rookrunner/check", "a" * 40, "success"),
+            )
     return run_id
 
 
@@ -1061,6 +1066,41 @@ class FinishedFolderTests(unittest.TestCase):
                         "SELECT 1 FROM runs WHERE submission_key=?", ("old",)
                     ).fetchone()
                     self.assertIsNotNone(kept)
+                finally:
+                    again.close()
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_an_unposted_workflow_folder_past_ninety_days_is_kept_until_its_status_is_posted(self):
+        limit = 90 * 24 * 60 * 60
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                name, path = _snapshot(state, b"unposted")
+                run_id = _store(
+                    worker,
+                    "unposted",
+                    "succeeded",
+                    name,
+                    _stamp(limit + 1),
+                    "confirmed_no_external_resources",
+                    posted=False,
+                )
+                worker.close()
+                again = Worker(directory, state)
+                again.execute_queue = lambda: again.stop.wait()
+                again.start()
+                try:
+                    self.assertTrue(path.exists())
+                    with again.guard, again.db:
+                        again.db.execute(
+                            "INSERT INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, ?)",
+                            (run_id, "rookrunner/check", "a" * 40, "failure"),
+                        )
+                    again._prune_finished_run_folders(0)
+                    self.assertFalse(path.exists())
+                    self.assertIsNotNone(again.get(run_id))
                 finally:
                     again.close()
             finally:

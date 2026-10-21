@@ -27,6 +27,7 @@ _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
 _REPOSITORY = re.compile(rf"{_NAME.pattern}/{_NAME.pattern}")
 _GITHUB_STATES = frozenset({"pending", "success", "failure", "error"})
+_DESCRIPTION_LENGTH = 140
 TERMINAL_STATUS = frozenset({"success", "failure", "error"})
 # Long enough for `rookrunner/<workflow file>/<job>` and still one protocol field.
 MAX_CONTEXT_LENGTH = 1024
@@ -173,13 +174,16 @@ def _rate_limited(code, headers):
     return remaining == "0" or bool(retry_after)
 
 
-def post_status(api_base, repository, sha, state, context, token):
+def post_status(api_base, repository, sha, state, context, token, description=None):
     """POST one status. A rate-limit response is returned once and is not retried."""
 
     if state not in _GITHUB_STATES:
         raise StatusError("INVALID_PARAMS", "status state is not a commit-status state")
     url = status_url(api_base, repository, sha)
-    body = canonical({"context": context, "state": state}).encode("ascii")
+    payload = {"context": context, "state": state}
+    if description is not None:
+        payload["description"] = description[:_DESCRIPTION_LENGTH]
+    body = canonical(payload).encode("ascii")
     request = urllib.request.Request(url, data=body, method="POST")
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("Content-Type", "application/json")

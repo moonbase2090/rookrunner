@@ -69,9 +69,11 @@ Local rules, not GitHub-equivalence claims:
   ``mb2090-signoff`` is a failure. No CODEOWNERS blob is skipped and
   recorded. The pass does not apply the label and does not run
   ``signoff.yml``.
-- A terminal run whose snapshot is not readable is skipped. The
+- A terminal run whose snapshot is not readable posts an ``error``
+  status with the reason as its description, in token mode. The
   submission stays, and a later pass tries that run again. The pass
-  still posts every later run. Any other status refusal stops the pass.
+  still posts every later run. App-key mode keeps the skip. Any other
+  status refusal stops the pass.
 - After posts and before the final state save, the pass calls
   ``poll.record`` on the single caller and on each place whose origin
   was accepted. ``PollError`` and ``OSError`` from that call are a
@@ -2510,6 +2512,12 @@ class Pass:
                 self.result["skipped"].append(
                     {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
                 )
+                if not self.app_key and self._post(
+                    entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
+                ):
+                    self.result["statuses"].append(
+                        {"run_id": entry["run_id"], "state": "error", "action": "posted"}
+                    )
                 return
             raise
         if decision["action"] == "skip":
@@ -2542,7 +2550,7 @@ class Pass:
             raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
         return self._post(entry, decision["state"], decision)
 
-    def _post(self, entry, state, decision=None):
+    def _post(self, entry, state, decision=None, description=None, record=True):
         if self.budget.stopped:
             return False
         if self.app_key:
@@ -2560,6 +2568,7 @@ class Pass:
                     state,
                     entry["context"],
                     token,
+                    description,
                 )
             finally:
                 token = None
@@ -2568,16 +2577,19 @@ class Pass:
                 self.budget.stopped = True
                 return False
             raise
-        self.caller(
-            "run.status",
-            {
-                "run_id": entry["run_id"],
-                "tested_commit": entry["tested_commit"],
-                "status_sha": entry["status_sha"],
-                "context": entry["context"],
-                "record": state,
-            },
-        )
+        if record:
+            # The worker refuses to record a run whose snapshot is unreadable,
+            # so the error post is not recorded and may repeat on a later pass.
+            self.caller(
+                "run.status",
+                {
+                    "run_id": entry["run_id"],
+                    "tested_commit": entry["tested_commit"],
+                    "status_sha": entry["status_sha"],
+                    "context": entry["context"],
+                    "record": state,
+                },
+            )
         self.budget.observe(remaining)
         return True
 

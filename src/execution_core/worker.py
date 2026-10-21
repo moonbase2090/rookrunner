@@ -1503,7 +1503,22 @@ class Worker:
     def _folder_protected(self, record):
         if record.get("state") not in TERMINAL:
             return True
-        return record.get("cleanup") != "confirmed_no_external_resources"
+        if record.get("cleanup") != "confirmed_no_external_resources":
+            return True
+        # A workflow run's snapshot is read again when its terminal status is
+        # posted. Keep the folder until one such status is recorded.
+        if (record.get("input") or {}).get("kind") == "workflow_job":
+            return not self._terminal_status_recorded(record["run_id"])
+        return False
+
+    def _terminal_status_recorded(self, run_id):
+        states = sorted(TERMINAL_STATUS)
+        marks = ", ".join("?" for _ in states)
+        row = self.db.execute(
+            f"SELECT 1 FROM status_posts WHERE run_id=? AND state IN ({marks}) LIMIT 1",
+            (run_id, *states),
+        ).fetchone()
+        return row is not None
 
     def _folder_names(self, records):
         snapshots = set()

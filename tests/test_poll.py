@@ -699,6 +699,7 @@ class PollTests(unittest.TestCase):
         first = self.poll()
         older = first["submitted"][0]["run_id"]
         record = self.worker.get(older)
+        older_sha = tip
         record["state"] = "succeeded"
         record["exit_code"] = 0
         with self.worker.guard, self.worker.db:
@@ -740,20 +741,43 @@ class PollTests(unittest.TestCase):
         third = self.poll()
         self.assertEqual(
             [json.loads(item["body"]) for item in self.posts()],
-            [{"context": "rookrunner/check.yml/check", "state": "success"}],
+            [
+                {
+                    "context": "rookrunner/check.yml/check",
+                    "description": "snapshot is not readable",
+                    "state": "error",
+                },
+                {"context": "rookrunner/check.yml/check", "state": "success"},
+            ],
         )
-        self.assertTrue(self.posts()[0]["path"].endswith("/" + new))
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
+        self.assertTrue(self.posts()[1]["path"].endswith("/" + new))
         self.assertEqual(
             [item for item in third["skipped"] if item["reason"] == "snapshot_unreadable"],
             [{"reason": "snapshot_unreadable", "run_id": older}],
         )
-        self.assertEqual([item["action"] for item in third["statuses"]], ["posted"])
-        self.assertEqual(third["statuses"][0]["run_id"], newer)
+        self.assertEqual(
+            third["statuses"],
+            [
+                {"run_id": older, "state": "error", "action": "posted"},
+                {"run_id": newer, "state": "success", "action": "posted"},
+            ],
+        )
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual([item["run_id"] for item in saved["submissions"]], [older, newer])
         self.server.requests.clear()
         fourth = self.poll()
-        self.assertEqual(self.posts(), [])
+        self.assertEqual(
+            [json.loads(item["body"]) for item in self.posts()],
+            [
+                {
+                    "context": "rookrunner/check.yml/check",
+                    "description": "snapshot is not readable",
+                    "state": "error",
+                },
+            ],
+        )
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
         self.assertEqual(self.runs(), 2)
         self.assertEqual(
             [item for item in fourth["skipped"] if item["reason"] == "snapshot_unreadable"],
@@ -761,7 +785,10 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(
             fourth["statuses"],
-            [{"run_id": newer, "state": "success", "action": "skip"}],
+            [
+                {"run_id": older, "state": "error", "action": "posted"},
+                {"run_id": newer, "state": "success", "action": "skip"},
+            ],
         )
 
     def test_a_fork_and_a_missing_merge_ref_run_nothing(self):
