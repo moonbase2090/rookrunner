@@ -1171,6 +1171,37 @@ class PollTests(unittest.TestCase):
         self.assertEqual(again["submitted"], [])
         self.assertEqual(self.runs(), 1)
 
+    def test_a_branch_whose_workflow_lacks_the_job_skips_it_and_the_pass_continues(self):
+        main = self._tip()
+        _git(self.seed, "checkout", "-b", "older")
+        (self.seed / ".github/workflows/check.yml").write_text(
+            WORKFLOW.replace("  check:", "  other:")
+        )
+        self._commit_all("rename job")
+        _git(self.seed, "push", "origin", "older")
+        _git(self.seed, "checkout", "main")
+        older = self._tip("refs/heads/older")
+        self.server.branches = [
+            {"name": "older", "commit": {"sha": older}},
+            {"name": "main", "commit": {"sha": main}},
+        ]
+        result = self.poll()
+        self.assertFalse(result["stopped"])
+        self.assertEqual(
+            result["skipped"],
+            [
+                {
+                    "reason": "job_absent",
+                    "event": "push",
+                    "ref": "refs/heads/older",
+                    "workflow": JOB[0],
+                    "job_id": JOB[1],
+                }
+            ],
+        )
+        self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.runs(), 1)
+
     def test_a_workflow_file_that_is_not_regular_still_stops_the_pass(self):
         main = self._tip()
         _git(self.seed, "checkout", "-b", "linked")

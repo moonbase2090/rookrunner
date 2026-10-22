@@ -163,6 +163,8 @@ _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
+# The worker's plan error when the workflow at that commit has no such job.
+_JOB_ABSENT = "no selected job"
 _SNAPSHOT_UNREADABLE = "snapshot is not readable"
 _SIGNOFF_CONTEXT = "rookrunner/signoff"
 _TRUST_CONTEXT = "rookrunner/trust"
@@ -307,6 +309,24 @@ def _association(value):
     if not isinstance(value, str) or value == "":
         return None
     return value
+
+
+def _absent_reason(exc):
+    """Return the skip reason when a configured job cannot exist at this commit.
+
+    A workflow file that is not tracked is ``workflow_absent``. A workflow
+    whose jobs do not include the configured job, as on a branch that
+    predates that job, is ``job_absent``. Either skips that one job, and
+    the pass continues. Any other error is None and still stops the pass.
+    """
+
+    if exc.kind != "INVALID_PARAMS":
+        return None
+    if str(exc) == _WORKFLOW_ABSENT:
+        return "workflow_absent"
+    if str(exc) == _JOB_ABSENT:
+        return "job_absent"
+    return None
 
 
 def untrusted_reason(head, base, author_association):
@@ -2384,12 +2404,13 @@ class Pass:
             try:
                 submitted = self.caller("run.submit", params)
             except PollError as exc:
-                if exc.kind == "INVALID_PARAMS" and str(exc) == _WORKFLOW_ABSENT:
+                absent = _absent_reason(exc)
+                if absent is not None:
                     if claimed is not None and "run_id" not in claimed:
                         self._drop_unstarted(claimed)
                     self.result["skipped"].append(
                         {
-                            "reason": "workflow_absent",
+                            "reason": absent,
                             "event": event_name,
                             "ref": ref,
                             "workflow": workflow,
@@ -2533,12 +2554,13 @@ class Pass:
             try:
                 submitted = self.caller("run.submit", params)
             except PollError as exc:
-                if exc.kind == "INVALID_PARAMS" and str(exc) == _WORKFLOW_ABSENT:
+                absent = _absent_reason(exc)
+                if absent is not None:
                     if "run_id" not in claimed:
                         self._drop_unstarted(claimed)
                     self.result["skipped"].append(
                         {
-                            "reason": "workflow_absent",
+                            "reason": absent,
                             "event": event_name,
                             "ref": ref,
                             "workflow": workflow,
