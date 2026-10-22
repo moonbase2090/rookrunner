@@ -491,10 +491,12 @@ class PollTests(unittest.TestCase):
         self.server.etags["pulls"] = "pulls-2"
         return tip, head
 
-    def _assert_workflow_refused(self, result, head, message, reason="workflow_changed"):
+    def _assert_workflow_refused(
+        self, result, head, message, reason="workflow_changed", posted=True
+    ):
         self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
         self.assertEqual(self.runs(), 0)
-        self.assertEqual(self.posts(), [])
+        self.assert_trust_posts(head, [("failure", "refused: " + message)] if posted else [])
         self.assertEqual(result["skipped"], [{"reason": reason, "number": 9}])
         self.assertEqual(
             result["warnings"],
@@ -514,6 +516,21 @@ class PollTests(unittest.TestCase):
         self.assertEqual(
             saved["workflow_refusals"],
             [{"number": 9, "head_sha": head, "reason": reason}],
+        )
+
+    def assert_trust_posts(self, head, expected):
+        """Every POST is a rookrunner/trust status on head, in this order."""
+
+        self.assertEqual(
+            [item["path"] for item in self.posts()],
+            [f"/repos/acme/demo/statuses/{head}"] * len(expected),
+        )
+        self.assertEqual(
+            [json.loads(item["body"]) for item in self.posts()],
+            [
+                {"context": "rookrunner/trust", "state": state, "description": text[:140]}
+                for state, text in expected
+            ],
         )
 
     def posts(self):
@@ -1465,7 +1482,10 @@ class PollTests(unittest.TestCase):
         self.server.permissions = {"outsider": "read"}
         refused = self.poll()
         self.assertEqual(self.runs(), 0)
-        self.assertEqual(self.posts(), [])
+        self.assert_trust_posts(
+            head,
+            [("failure", "refused: untrusted code: commit author cannot write to the repository")],
+        )
         self.assertEqual(refused["skipped"], [{"reason": "untrusted", "number": 9}])
         self.assertEqual(
             refused["warnings"],
@@ -1715,6 +1735,133 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
         self.assertEqual(repeat["warnings"], [])
 
+    def _workflow_edit(self, seed):
+        (seed / ".github/workflows/check.yml").write_text(WORKFLOW + "# edited\n")
+
+    def _permission_requests(self):
+        return [
+            item["path"]
+            for item in self.server.requests
+            if item["method"] == "GET"
+            and item["path"].endswith("/permission")
+            and "/collaborators/Mona/" in item["path"]
+        ]
+
+    def test_a_contributor_with_write_permission_runs_a_workflow_edit_under_the_flag(self):
+        # GitHub reports an owner or member to an app as CONTRIBUTOR.
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        self.server.permissions = {"Mona": "write"}
+        refused = self.poll()
+        message = "pull request changes a workflow file: .github/workflows/check.yml"
+        self._assert_workflow_refused(refused, head, message)
+        self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+        allowed = self.poll(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(allowed["submitted"][0]["event"], "pull_request")
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"],
+            "pull request workflow change allowed for write permission",
+        )
+        self.assertEqual(
+            [item["message"] for item in allowed["warnings"]],
+            [
+                "pull request workflow change allowed for write permission: "
+                ".github/workflows/check.yml"
+            ],
+        )
+        trust = [
+            json.loads(item["body"])
+            for item in self.posts()
+            if json.loads(item["body"])["context"] == "rookrunner/trust"
+        ]
+        self.assertEqual(
+            trust,
+            [
+                {
+                    "context": "rookrunner/trust",
+                    "state": "failure",
+                    "description": "refused: " + message,
+                },
+                {
+                    "context": "rookrunner/trust",
+                    "state": "success",
+                    "description": "allowed to run",
+                },
+            ],
+        )
+        self.assertIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
+    def test_a_contributor_without_write_permission_is_refused_and_asked_again_next_pass(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        # The commits are by a writer; only the pull request author is a reader.
+        self.server.authors[head] = "writer"
+        self.server.committers[head] = "writer"
+        self.server.permissions = {"Mona": "read", "writer": "write"}
+        message = (
+            "pull request changes a workflow file: .github/workflows/check.yml; "
+            "author cannot write to the repository"
+        )
+        first = self.poll(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(first["skipped"], [{"reason": "workflow_changed", "number": 9}])
+        self.assertEqual([item["message"] for item in first["warnings"]], [message])
+        self.assert_trust_posts(head, [("failure", "refused: " + message)])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved.get("workflow_refusals", []), [])
+        self.assertNotIn("pulls", saved["etags"])
+        asked = len(self._permission_requests())
+        second = self.poll(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual([item["message"] for item in second["warnings"]], [message])
+        self.assertGreater(len(self._permission_requests()), asked)
+        # The same refusal is not posted twice.
+        self.assert_trust_posts(head, [("failure", "refused: " + message)])
+        # Granting write on the same head runs it without a new commit.
+        self.server.permissions = {"Mona": "write", "writer": "write"}
+        third = self.poll(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(third["submitted"][0]["event"], "pull_request")
+
+    def test_an_unreadable_author_permission_refuses_a_workflow_edit(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        self.server.authors[head] = "writer"
+        self.server.committers[head] = "writer"
+        self.server.permissions = {"Mona": 404, "writer": "write"}
+        result = self.poll(allow_pr_workflow=["MEMBER"])
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(result["skipped"], [{"reason": "workflow_changed", "number": 9}])
+        self.assertEqual(
+            [item["message"] for item in result["warnings"]],
+            [
+                "pull request changes a workflow file: .github/workflows/check.yml; "
+                "author permission is not readable"
+            ],
+        )
+
+    def test_a_contributor_workflow_edit_is_refused_without_the_flag_and_asks_nothing(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        self.server.permissions = {"Mona": "admin"}
+        result = self.poll()
+        self._assert_workflow_refused(
+            result, head, "pull request changes a workflow file: .github/workflows/check.yml"
+        )
+
+    def test_a_fork_workflow_edit_is_never_allowed_by_permission(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        self.server.pulls[0]["head"]["repo"] = {"id": 77, "full_name": "mona/demo"}
+        self.server.permissions = {"Mona": "admin"}
+        result = self.poll(allow_pr_workflow=["OWNER"], allow_untrusted=[head])
+        self.assertEqual(self.runs(), 0)
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertIn({"reason": "workflow_changed", "number": 9}, result["skipped"])
+        self.assertIn(
+            "pull request changes a workflow file: .github/workflows/check.yml",
+            [item["message"] for item in result["warnings"]],
+        )
+        self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
     def test_another_workflow_file_and_a_yaml_suffix_are_refused(self):
         def mutate(seed):
             for name in ("other.yml", "other.yaml"):
@@ -1834,6 +1981,7 @@ class PollTests(unittest.TestCase):
             head,
             "fetched merge commit does not match the listed head",
             "merge_commit_mismatch",
+            posted=False,
         )
         self.assertFalse((self.clone / "feature-9.txt").exists())
 

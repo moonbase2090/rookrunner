@@ -61,8 +61,17 @@ Local rules, not GitHub-equivalence claims:
   is the listed head. Any other commit is left unchecked and creates
   no run. ``--allow-pr-workflow ASSOCIATION`` runs
   that pull request when the author association is the named
-  ``OWNER``, ``MEMBER``, or ``COLLABORATOR``. A missing association
-  does not match. The flag is not stored and it is not the default.
+  ``OWNER``, ``MEMBER``, or ``COLLABORATOR``. With the flag, any other
+  listed association on a same-repository pull request runs when
+  ``/collaborators/{login}/permission`` reports the author as write,
+  maintain, or admin, since GitHub reports owners and members to an
+  app as ``CONTRIBUTOR``. A fork and a missing association never match.
+  A refusal from that lookup is not stored, so each pass asks again.
+  The flag is not stored and it is not the default.
+- A refused same-repository pull request gets a ``rookrunner/trust``
+  failure status on the head SHA with the reason, once per head and
+  reason. When a later pass lets that head run, the status turns to
+  success. A fork and a merge-commit mismatch post nothing.
 - A repository with ``.github/CODEOWNERS`` at the pull base or head
   gets a ``rookrunner/signoff`` status on the head SHA. Patterns are
   the union of the two blobs. A protected path without
@@ -156,6 +165,7 @@ _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 _SNAPSHOT_UNREADABLE = "snapshot is not readable"
 _SIGNOFF_CONTEXT = "rookrunner/signoff"
+_TRUST_CONTEXT = "rookrunner/trust"
 _GATE = None
 _SHA = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})")
@@ -373,6 +383,10 @@ def _allow_untrusted(values):
 
 
 _PR_WORKFLOW_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
+# Repository permissions that let an author with another association change
+# a workflow file under --allow-pr-workflow. GitHub reports maintain as write
+# in the legacy permission field; both are accepted.
+_PR_WORKFLOW_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _WORKFLOW_DIR = ".github/workflows/"
 _WORKFLOW_PATH_LIMIT = 5
 
@@ -1866,6 +1880,8 @@ class Pass:
         accepted, workflow_override = self._accept_pr_workflow(
             number, head_sha, item, base_sha, changed
         )
+        if accepted is None:
+            return False
         if not accepted:
             return True
         if workflow_override is not None:
@@ -1984,76 +2000,22 @@ class Pass:
         return True
 
     def _post_signoff(self, number, sha, state, summary, stored):
-        """Post the sign-off status. There is no worker run to record."""
+        """Post the sign-off status. There is no worker run to record.
+
+        Token mode posts no description, as before.
+        """
 
         if self.budget.stopped:
             return False, None
-        described = self.caller("worker.describe", {})
-        root = self._credential_repository(described)
-        if self.app_key:
-            return self._post_signoff_app(number, sha, state, summary, stored, root)
-        try:
-            token = read_credential(self.credential_file, self.state_dir, root)
-            try:
-                remaining = post_status(
-                    self.api_base,
-                    self.repository,
-                    sha,
-                    state,
-                    _SIGNOFF_CONTEXT,
-                    token,
-                )
-            finally:
-                token = None
-        except StatusError as error:
-            if error.kind == "RATE_LIMITED" and error.retryable:
-                self.budget.stopped = True
-                return False, None
-            raise
-        self.budget.observe(remaining)
-        return True, None
-
-    def _post_signoff_app(self, number, sha, state, summary, stored, root):
-        check_run_id = None
-        if isinstance(stored, dict) and is_integer(stored.get("check_run_id")):
-            check_run_id = int(stored["check_run_id"])
-        conclusion = "success" if state == "success" else "failure"
-        try:
-            posted = post_check_flow(
-                api_base=self.api_base,
-                repository=self.repository,
-                sha=sha,
-                context=_SIGNOFF_CONTEXT,
-                run_id=f"signoff-{number}",
-                check_status="completed",
-                check_conclusion=conclusion,
-                check_summary_text=summary,
-                check_run_id=check_run_id,
-                status_state=state,
-                post_status_request=True,
-                app_key=self.app_key,
-                state_dir=self.state_dir,
-                repository_root=root,
-                clock=self.clock,
-                key_dir=self.key_dir,
-            )
-        except StatusError as error:
-            if error.kind == "RATE_LIMITED" and error.retryable:
-                self.budget.stopped = True
-                return False, None
-            raise
-        if (
-            posted.error is not None
-            and posted.error.kind == "RATE_LIMITED"
-            and posted.error.retryable
-        ):
-            self.budget.stopped = True
-            return False, None
-        if posted.error is not None:
-            raise posted.error
-        if posted.status_posted:
-            self.budget.observe(posted.status_remaining)
-        return True, posted.check_id
+        return self._post_context(
+            _SIGNOFF_CONTEXT,
+            f"signoff-{number}",
+            sha,
+            state,
+            summary,
+            stored,
+            describe=bool(self.app_key),
+        )
 
     def _warning(self, number, sha, reason, allowed):
         verb = "allowed by override" if allowed else "refused"
@@ -2084,34 +2046,70 @@ class Pass:
             self.result["skipped"].append({"reason": "untrusted", "number": number})
             self.result["warnings"].append(self._warning(number, head_sha, reason, False))
             self._checkpoint()
+        self._post_refusal_status(number, head_sha, f"untrusted code: {reason}")
         self.hold_pulls = True
 
     def _accept_pr_workflow(self, number, head_sha, item, base_sha, changed):
         """Refuse a pull request whose diff changes a workflow file.
 
-        Return ``(accepted, override)``. An allowed author association
-        records a warning, and its runs record the override, so an
-        identity token is never minted for them.
+        Return ``(accepted, override)``, or ``(None, None)`` when the
+        rate-limit budget stopped the pass. An allowed author records a
+        warning, and its runs record the override, so an identity token is
+        never minted for them.
+
+        With ``--allow-pr-workflow``, a named association is allowed. Any
+        other association on a same-repository pull request is allowed
+        when GitHub reports the author's repository permission as write,
+        maintain, or admin. GitHub reports owners and members to an app as
+        CONTRIBUTOR when it cannot read organization membership. A fork, a
+        missing association, and an unlisted one are never allowed this way. A refusal from that permission lookup is
+        not stored, so a later pass asks again.
         """
 
         kind, paths = self._pr_workflow_change(base_sha, head_sha, changed)
         if kind is None:
+            self._clear_refusal_status(number, head_sha)
             return True, None
         association = _association(item.get("author_association"))
-        allowed = association in self.allow_pr_workflow
+        allowed_by = association if association in self.allow_pr_workflow else None
+        permission_checked = False
+        denial = None
+        if (
+            allowed_by is None
+            and self.allow_pr_workflow
+            and association in _KNOWN_ASSOCIATIONS
+            and _same_repository(item.get("head"), item.get("base"))
+        ):
+            login = _login(item.get("user"))
+            if login is None:
+                denial = "author is not a GitHub user"
+            else:
+                permission = self._permission(login)
+                if permission is _STOPPED:
+                    return None, None
+                permission_checked = True
+                if permission in _PR_WORKFLOW_PERMISSIONS:
+                    allowed_by = f"{permission} permission"
+                elif permission is None:
+                    denial = "author permission is not readable"
+                else:
+                    denial = "author cannot write to the repository"
         reason = "workflow_changed" if kind == "changed" else "workflow_diff_unavailable"
-        message = _workflow_message(kind, paths, association if allowed else None)
+        message = _workflow_message(kind, paths, allowed_by)
+        if allowed_by is None and denial is not None:
+            message = f"{message}; {denial}"
         entry = {
             "number": number,
             "sha": head_sha,
-            "action": "allowed" if allowed else "refused",
+            "action": "allowed" if allowed_by is not None else "refused",
             "reason": reason,
             "message": message,
         }
-        if allowed:
+        if allowed_by is not None:
             self.result["warnings"].append(entry)
-            return True, f"pull request workflow change allowed for {association}"
-        self._record_workflow_refusal(number, head_sha, reason, entry)
+            self._clear_refusal_status(number, head_sha)
+            return True, f"pull request workflow change allowed for {allowed_by}"
+        self._record_workflow_refusal(number, head_sha, reason, entry, store=not permission_checked)
         return False, None
 
     def _pr_workflow_change(self, base_sha, head_sha, changed):
@@ -2145,15 +2143,135 @@ class Pass:
             self._checkpoint()
         self.hold_pulls = True
 
-    def _record_workflow_refusal(self, number, head_sha, reason, entry):
+    def _record_workflow_refusal(self, number, head_sha, reason, entry, store=True):
+        """Record one workflow refusal and post it as a failed trust status.
+
+        ``store`` false leaves the refusal out of poll state, so every
+        pass warns again and asks for the author's permission again.
+        """
+
         row = {"number": number, "head_sha": head_sha, "reason": reason}
         rows = self.state.setdefault("workflow_refusals", [])
-        if row not in rows:
-            rows.append(row)
+        if not store or row not in rows:
+            if store:
+                rows.append(row)
             self.result["skipped"].append({"reason": reason, "number": number})
             self.result["warnings"].append(entry)
             self._checkpoint()
+        self._post_refusal_status(number, head_sha, entry["message"])
         self.hold_pulls = True
+
+    def _post_refusal_status(self, number, head_sha, message):
+        """Post ``rookrunner/trust`` as a failure that says why no run started.
+
+        One post per pull request head and message. A rate-limited post is
+        not recorded, so a later pass posts it again.
+        """
+
+        self._post_trust(number, head_sha, "failure", f"refused: {message}")
+
+    def _clear_refusal_status(self, number, head_sha):
+        """Turn an earlier refusal on this head into a success."""
+
+        stored = self.state.get("trust_statuses")
+        record = stored.get(str(number)) if isinstance(stored, dict) else None
+        if not isinstance(record, dict) or record.get("head") != head_sha:
+            return
+        if record.get("state") != "failure":
+            return
+        self._post_trust(number, head_sha, "success", "allowed to run")
+
+    def _post_trust(self, number, head_sha, state, description):
+        key = str(number)
+        stored = self.state.get("trust_statuses")
+        record = stored.get(key) if isinstance(stored, dict) else None
+        if (
+            isinstance(record, dict)
+            and record.get("head") == head_sha
+            and record.get("state") == state
+            and record.get("description") == description
+        ):
+            return
+        if self.budget.stopped:
+            return
+        posted, check_id = self._post_context(
+            _TRUST_CONTEXT, f"trust-{number}", head_sha, state, description, record
+        )
+        if not posted:
+            return
+        saved = {"head": head_sha, "state": state, "description": description}
+        if check_id is not None:
+            saved["check_run_id"] = check_id
+        if not isinstance(self.state.get("trust_statuses"), dict):
+            self.state["trust_statuses"] = {}
+        self.state["trust_statuses"][key] = saved
+        self._checkpoint()
+        self.result["statuses"].append(
+            {"context": _TRUST_CONTEXT, "state": state, "action": "posted", "sha": head_sha}
+        )
+
+    def _post_context(self, context, run_id, sha, state, description, stored, describe=True):
+        """Post one status that has no worker run. Return ``(posted, check_id)``."""
+
+        described = self.caller("worker.describe", {})
+        root = self._credential_repository(described)
+        if self.app_key:
+            check_run_id = None
+            if isinstance(stored, dict) and is_integer(stored.get("check_run_id")):
+                check_run_id = int(stored["check_run_id"])
+            try:
+                posted = post_check_flow(
+                    api_base=self.api_base,
+                    repository=self.repository,
+                    sha=sha,
+                    context=context,
+                    run_id=run_id,
+                    check_status="completed",
+                    check_conclusion="success" if state == "success" else "failure",
+                    check_summary_text=description,
+                    check_run_id=check_run_id,
+                    status_state=state,
+                    post_status_request=True,
+                    app_key=self.app_key,
+                    state_dir=self.state_dir,
+                    repository_root=root,
+                    clock=self.clock,
+                    key_dir=self.key_dir,
+                )
+            except StatusError as error:
+                if error.kind == "RATE_LIMITED" and error.retryable:
+                    self.budget.stopped = True
+                    return False, None
+                raise
+            if posted.error is not None:
+                if posted.error.kind == "RATE_LIMITED" and posted.error.retryable:
+                    self.budget.stopped = True
+                    return False, None
+                raise posted.error
+            if posted.status_posted:
+                self.budget.observe(posted.status_remaining)
+            return True, posted.check_id
+        try:
+            token = read_credential(self.credential_file, self.state_dir, root)
+            try:
+                remaining = post_status(
+                    self.api_base,
+                    self.repository,
+                    sha,
+                    state,
+                    context,
+                    token,
+                    description=description if describe else None,
+                )
+            finally:
+                token = None
+        except StatusError as error:
+            if error.kind == "RATE_LIMITED" and error.retryable:
+                self.budget.stopped = True
+                return False, None
+            raise
+        self.budget.observe(remaining)
+        return True, None
 
     def _record_push_refusal(self, ref, sha, reason):
         row = {"ref": ref, "sha": sha, "reason": reason}

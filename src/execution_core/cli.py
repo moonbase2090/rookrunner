@@ -942,7 +942,9 @@ def main():
         help=(
             "author association that may run a pull request which changes a "
             "workflow file. OWNER, MEMBER, or COLLABORATOR. Repeat for each "
-            "association. Omit it to refuse those pull requests."
+            "association. With it, an author with another association runs "
+            "when the repository reports write, maintain, or admin permission. "
+            "Omit it to refuse those pull requests."
         ),
     )
     poll.add_argument(

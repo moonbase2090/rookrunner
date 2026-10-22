@@ -222,7 +222,18 @@ class SignoffPostTests(unittest.TestCase):
         self.host.server.permissions = {"outsider": "read"}
         refused = self.host.poll()
         self.assertEqual(self._signoff_posts(), [])
-        self.assertEqual(refused["statuses"], [])
+        # Only the refusal is posted, as a failed trust status on the head.
+        self.assertEqual(
+            refused["statuses"],
+            [
+                {
+                    "context": "rookrunner/trust",
+                    "state": "failure",
+                    "action": "posted",
+                    "sha": head,
+                }
+            ],
+        )
         self.assertEqual(self.host.runs(), 1)
         self.assertEqual(
             [item["message"] for item in refused["warnings"]],
