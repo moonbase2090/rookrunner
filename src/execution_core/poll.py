@@ -824,6 +824,21 @@ def _merge_parents(clone, sha):
     return parents[0], parents[1]
 
 
+def _moved_base_merge(clone, parents, head_sha, base_ref):
+    """Return whether a merge is the head merged onto the base branch's current tip.
+
+    GitHub rebuilds the merge ref when the base branch moves, so its first
+    parent is the new tip while the listed base is still the old one. The
+    second parent must be the head, and the first must be the tip fetched
+    now. Any other merge is not accepted.
+    """
+
+    if parents is None or base_ref is None or parents[1] != head_sha:
+        return False
+    current = _fetch_sha(clone, f"refs/heads/{base_ref}")
+    return current is not None and parents[0] == current
+
+
 def _digest(value):
     if isinstance(value, str) and _IMAGE_DIGEST.fullmatch(value):
         return value
@@ -1521,20 +1536,24 @@ class Pass:
         self.result["warnings"].append(self._warning(number, head_sha, reason, True))
         return "allowed", reason if override is None else f"{override}; {reason}"
 
-    def _fetch_pull_merge(self, number, base_sha, head_sha):
+    def _fetch_pull_merge(self, number, base_sha, head_sha, base_ref):
         """Fetch a pull request's merge commit, or record why it is not used.
 
-        The merge is used only when its parents are the listed base and head.
+        The merge is used when its parents are the listed base and head, or
+        the head and the base branch's current tip after the base moved.
         """
 
         merge = _fetch_sha(self.clone, f"refs/pull/{number}/merge")
         if merge is None:
             self._record_absent(number, head_sha)
             return None
-        if _merge_parents(self.clone, merge) != (base_sha, head_sha):
-            self._record_merge_mismatch(number, head_sha)
-            return None
-        return merge
+        parents = _merge_parents(self.clone, merge)
+        if parents == (base_sha, head_sha) or _moved_base_merge(
+            self.clone, parents, head_sha, base_ref
+        ):
+            return merge
+        self._record_merge_mismatch(number, head_sha)
+        return None
 
     def _seen_pull(self, number, base_sha, head_sha, item, override, seen):
         """Post signoff for a pull request whose head and base already ran.
@@ -1546,7 +1565,9 @@ class Pass:
         """
 
         if seen.get("commits") != "trusted":
-            if self._fetch_pull_merge(number, base_sha, head_sha) is None:
+            base = item.get("base")
+            base_ref = base.get("ref") if isinstance(base, dict) else None
+            if self._fetch_pull_merge(number, base_sha, head_sha, base_ref) is None:
                 return True
             verdict, _override = self._pull_commits_gate(number, base_sha, head_sha, override)
             if verdict == "stop":
@@ -1888,7 +1909,7 @@ class Pass:
         if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
             return self._seen_pull(number, base_sha, head_sha, item, override, seen)
         ref = f"refs/pull/{number}/merge"
-        merge = self._fetch_pull_merge(number, base_sha, head_sha)
+        merge = self._fetch_pull_merge(number, base_sha, head_sha, base_ref)
         if merge is None:
             return True
         verdict, override = self._pull_commits_gate(number, base_sha, head_sha, override)
@@ -2145,7 +2166,10 @@ class Pass:
         return "changed", paths
 
     def _record_merge_mismatch(self, number, head_sha):
-        """Do not check out a merge commit that is not the listed base and head."""
+        """Do not check out a merge commit that is not the listed base and head.
+
+        The head gets a visible error status, so the pull request is not silently skipped.
+        """
 
         row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
         rows = self.state.setdefault("workflow_refusals", [])
@@ -2161,6 +2185,7 @@ class Pass:
             self.result["skipped"].append({"reason": "merge_commit_mismatch", "number": number})
             self.result["warnings"].append(entry)
             self._checkpoint()
+        self._post_trust(number, head_sha, "error", "refused: " + entry["message"])
         self.hold_pulls = True
 
     def _record_workflow_refusal(self, number, head_sha, reason, entry, store=True):
