@@ -1,20 +1,41 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.10. A published release section
+The current package version is 0.1.11. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-10-19
+
+- The worker enforces the per-job disk budget during the run, not
+  just at admission. A submission that would exceed the budget is
+  refused, and a running job that breaches the budget is stopped.
+  The breach is latched on the lease for the run, and the budget
+  watch runs past startup until the container is confirmed stopped.
+- A per-job OIDC token mint fails closed when its audit record
+  cannot be written: no token is issued unless the mint is recorded
+  in `oidc-audit.jsonl`. Each mint and each refusal stays one line
+  in that file, without the token.
+- Secret and token eligibility comes only from the authenticated
+  actor, never the commit author. A pull request run withholds actor
+  eligibility, so a fork, an override run, and a run the secret
+  allowlist does not match receive no secret and no token.
 - Passwordless sudo still drops every capability. It then keeps
   `SETUID`, `SETGID`, `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, and
-  `FOWNER`. `DAC_READ_SEARCH` is no longer kept: `DAC_OVERRIDE`
-  already covers stat and read of a mode-0700 workspace, and the
-  engine default seccomp profile allows `open_by_handle_at` only
-  when that capability is held. The apt partial-directory, unlink,
+  `FOWNER`. `DAC_READ_SEARCH` is no longer kept; the apt, unlink,
   and workspace flows from 0.1.7 still work. A job without that
   opt-in still sets no-new-privileges and adds no capabilities.
+- A low-severity hardening batch is included: state files are
+  owner-only, an empty or missing run database fails closed instead
+  of resetting, an unreachable engine is reported as not-ready, a
+  full disk during capture reports storage exhaustion, deeply nested
+  input is refused with a structured error naming the limit, the
+  status page answers under a bounded budget, and the worker service
+  file bounds its start loop with delayed restarts.
+- The package version is 0.1.11. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.10] - 2026-10-19
 
