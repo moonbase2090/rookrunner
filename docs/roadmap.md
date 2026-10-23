@@ -203,6 +203,9 @@ Public publishing is a separate step after the preview artifact is reviewable.
   Reporting results for the owner's own repositories moved to CI-1 on
   2026-10-03. Webhook delivery and runner registration stay here.
 - Resource scheduling across multiple workers and projects.
+  The [scheduling investigation](research/resource-scheduling.md) separates
+  implemented placement and local queues from proposed shared admission,
+  capacity reservations, and fairness policies. No scheduler design is selected.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.
 
