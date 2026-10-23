@@ -484,27 +484,13 @@ def report_dispatch(args):
 def report_reconcile(args):
     """Print one JSON line per candidate. ``--dry-run`` reads only."""
 
-    from pathlib import Path as _Path
-
     from .reconcile import github_statuses, pending_final, reconcile
 
-    candidates = pending_final(_Path(args.state) / "runs.sqlite3", tuple(args.sha))
+    candidates = pending_final(Path(args.state) / "runs.sqlite3", tuple(args.sha))
     token = None
     try:
-        if args.credential_file:
-            token = read_credential(args.credential_file, args.state, args.clone or args.state)
-        elif args.app_key:
-            token = mint_list_token(
-                args.app_key,
-                args.state,
-                args.clone,
-                args.repository,
-                args.api_base,
-                key_dir=args.key_dir,
-            )
-        post = None
-        if not args.dry_run:
-            post = _reconcile_poster(args)
+        token = _reconcile_token(args)
+        post = None if args.dry_run else _reconcile_poster(args)
         actions = reconcile(
             candidates,
             lambda sha: github_statuses(args.api_base, args.repository, sha, token),
@@ -512,12 +498,40 @@ def report_reconcile(args):
             dry_run=args.dry_run,
         )
     finally:
-        if args.app_key and isinstance(token, str):
-            revoke_installation_token(args.api_base, token)
-        token = None
+        _release_reconcile_token(args, token)
+    sys.exit(_print_reconcile_actions(actions))
+
+
+def _reconcile_token(args):
+    """Return the token for GitHub reads: a credential file, a minted app token, or None."""
+
+    if args.credential_file:
+        return read_credential(args.credential_file, args.state, args.clone or args.state)
+    if args.app_key:
+        return mint_list_token(
+            args.app_key,
+            args.state,
+            args.clone,
+            args.repository,
+            args.api_base,
+            key_dir=args.key_dir,
+        )
+    return None
+
+
+def _release_reconcile_token(args, token):
+    """Revoke the token when an app key was given."""
+
+    if args.app_key and isinstance(token, str):
+        revoke_installation_token(args.api_base, token)
+
+
+def _print_reconcile_actions(actions):
+    """Print each action and return the exit status: 1 when any post failed."""
+
     for action in actions:
         print(canonical(action))
-    sys.exit(1 if any(a["action"] == "failed" for a in actions) else 0)
+    return 1 if any(action["action"] == "failed" for action in actions) else 0
 
 
 def _reconcile_poster(args):

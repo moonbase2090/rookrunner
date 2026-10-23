@@ -11,6 +11,12 @@ import unittest
 from pathlib import Path
 from typing import ClassVar
 
+import argparse
+import io
+from contextlib import redirect_stdout
+from unittest import mock
+
+from execution_core import cli
 from execution_core.cli import call, worker_timeout
 from execution_core.poll import Pass, PollError
 from execution_core.reconcile import pending_final, post_with_retry, reconcile
@@ -242,6 +248,104 @@ class PerRunErrorTest(unittest.TestCase):
                 [(e["run_id"], e["kind"]) for e in run.result["errors"]],
                 [("r1", "INVALID_PARAMS"), ("r2", "CLIENT_ERROR")],
             )
+
+
+def _args(state, **overrides):
+    values = {
+        "state": str(state),
+        "repository": "owner/name",
+        "sha": [],
+        "dry_run": True,
+        "credential_file": None,
+        "app_key": None,
+        "key_dir": None,
+        "clone": None,
+        "poll_state": None,
+        "api_base": "https://api.github.com",
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+class ReportReconcileTest(unittest.TestCase):
+    def _run(self, args, github):
+        out = io.StringIO()
+        with (
+            mock.patch("execution_core.reconcile.github_statuses", side_effect=github),
+            redirect_stdout(out),
+            self.assertRaises(SystemExit) as stop,
+        ):
+            cli.report_reconcile(args)
+        return stop.exception.code, [json.loads(line) for line in out.getvalue().splitlines()]
+
+    def test_dry_run_prints_one_line_per_candidate_and_exits_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0), ("bad", "failed", 1)],
+                [("ok", "ci/test", SHA_A, "pending"), ("bad", "ci/gui", SHA_B, "pending")],
+            )
+            seen = []
+
+            def github(api_base, repository, sha, token):
+                seen.append((repository, sha, token))
+                return {"ci/test": "success"} if sha == SHA_A else {}
+
+            code, lines = self._run(_args(directory), github)
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                [(line["run_id"], line["action"]) for line in lines],
+                [("ok", "already_final"), ("bad", "would_post")],
+            )
+            self.assertEqual(seen, [("owner/name", SHA_A, None), ("owner/name", SHA_B, None)])
+
+    def test_a_failed_post_exits_one(self):
+        self.assertEqual(cli._print_reconcile_actions([{"action": "posted"}]), 0)
+        with redirect_stdout(io.StringIO()):
+            code = cli._print_reconcile_actions([{"action": "posted"}, {"action": "failed"}])
+        self.assertEqual(code, 1)
+
+    def test_live_run_needs_the_poll_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(directory, [], [])
+            with self.assertRaises(SystemExit) as stop:
+                cli.report_reconcile(_args(directory, dry_run=False))
+            self.assertIn("--poll-state", str(stop.exception.code))
+
+
+class ReconcileTokenTest(unittest.TestCase):
+    def test_no_credentials_reads_anonymously(self):
+        self.assertIsNone(cli._reconcile_token(_args("/state")))
+
+    def test_credential_file_wins_over_an_app_key(self):
+        args = _args("/state", credential_file="/cred", app_key="/key", clone="/clone")
+        with (
+            mock.patch.object(cli, "read_credential", return_value="file-token") as read,
+            mock.patch.object(cli, "mint_list_token") as mint,
+        ):
+            self.assertEqual(cli._reconcile_token(args), "file-token")
+        read.assert_called_once_with("/cred", "/state", "/clone")
+        mint.assert_not_called()
+
+    def test_credential_file_without_a_clone_uses_the_state(self):
+        with mock.patch.object(cli, "read_credential", return_value="t") as read:
+            cli._reconcile_token(_args("/state", credential_file="/cred"))
+        read.assert_called_once_with("/cred", "/state", "/state")
+
+    def test_app_key_mints_a_list_token(self):
+        args = _args("/state", app_key="/key", key_dir="/keys", clone="/clone")
+        with mock.patch.object(cli, "mint_list_token", return_value="minted") as mint:
+            self.assertEqual(cli._reconcile_token(args), "minted")
+        mint.assert_called_once_with(
+            "/key", "/state", "/clone", "owner/name", "https://api.github.com", key_dir="/keys"
+        )
+
+    def test_only_a_minted_string_token_is_revoked(self):
+        with mock.patch.object(cli, "revoke_installation_token") as revoke:
+            cli._release_reconcile_token(_args("/state", app_key="/key"), "minted")
+            cli._release_reconcile_token(_args("/state", app_key="/key"), None)
+            cli._release_reconcile_token(_args("/state"), "file-token")
+        revoke.assert_called_once_with("https://api.github.com", "minted")
 
 
 if __name__ == "__main__":
