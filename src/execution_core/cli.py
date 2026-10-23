@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
+import os
 from pathlib import Path
 import re
 import socket
@@ -43,14 +44,36 @@ def _parse_worker_reply(raw):
     return reply
 
 
-def call(state, method, params):
+DEFAULT_WORKER_TIMEOUT = 30.0
+MAX_WORKER_TIMEOUT = 600.0
+
+
+def worker_timeout(environ=None):
+    """Seconds to wait on the worker socket. ROOKRUNNER_WORKER_TIMEOUT overrides it.
+
+    A value that is not a number in (0, 600] falls back to the default.
+    """
+
+    raw = (os.environ if environ is None else environ).get("ROOKRUNNER_WORKER_TIMEOUT")
+    if raw is None:
+        return DEFAULT_WORKER_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_WORKER_TIMEOUT
+    if not 0 < value <= MAX_WORKER_TIMEOUT:
+        return DEFAULT_WORKER_TIMEOUT
+    return value
+
+
+def call(state, method, params, timeout=None):
     request = (
         canonical({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n"
     ).encode()
     if len(request) > MAX_MESSAGE:
         raise ValueError("request exceeds 1 MiB")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(5)
+        client.settimeout(worker_timeout() if timeout is None else timeout)
         client.connect(str(Path(state).absolute() / "worker.sock"))
         client.sendall(request)
         with client.makefile("rb") as stream:
@@ -456,6 +479,91 @@ def report_dispatch(args):
         )
         sys.exit(1)
     print(canonical(result))
+
+
+def report_reconcile(args):
+    """Print one JSON line per candidate. ``--dry-run`` reads only."""
+
+    from pathlib import Path as _Path
+
+    from .reconcile import github_statuses, pending_final, reconcile
+
+    candidates = pending_final(_Path(args.state) / "runs.sqlite3", tuple(args.sha))
+    token = None
+    try:
+        if args.credential_file:
+            token = read_credential(args.credential_file, args.state, args.clone or args.state)
+        elif args.app_key:
+            token = mint_list_token(
+                args.app_key,
+                args.state,
+                args.clone,
+                args.repository,
+                args.api_base,
+                key_dir=args.key_dir,
+            )
+        post = None
+        if not args.dry_run:
+            post = _reconcile_poster(args)
+        actions = reconcile(
+            candidates,
+            lambda sha: github_statuses(args.api_base, args.repository, sha, token),
+            post,
+            dry_run=args.dry_run,
+        )
+    finally:
+        if args.app_key and isinstance(token, str):
+            revoke_installation_token(args.api_base, token)
+        token = None
+    for action in actions:
+        print(canonical(action))
+    sys.exit(1 if any(a["action"] == "failed" for a in actions) else 0)
+
+
+def _reconcile_poster(args):
+    """Post through the worker so the post is recorded the same way a pass records it."""
+
+    caller = _worker_caller(args.state)
+    import json as _json
+
+    if not args.poll_state:
+        raise SystemExit("reconcile: --poll-state is required to post")
+    poll_state = _json.loads((Path(args.poll_state) / "poll.json").read_text())
+    tested = {
+        entry["run_id"]: entry["tested_commit"]
+        for entry in poll_state.get("submissions", [])
+        if "run_id" in entry and "tested_commit" in entry
+    }
+
+    def post(candidate):
+        if candidate["run_id"] not in tested:
+            raise StatusError("INVALID_PARAMS", "run has no poll submission to post from")
+        params = {
+            "run_id": candidate["run_id"],
+            "context": candidate["context"],
+            "status_sha": candidate["sha"],
+            "tested_commit": tested[candidate["run_id"]],
+        }
+        decision = caller("run.status", params)
+        if decision.get("action") == "skip":
+            return
+        token = read_credential(args.credential_file, args.state, args.clone or args.state)
+        try:
+            post_status(
+                args.api_base,
+                args.repository,
+                candidate["sha"],
+                candidate["final"],
+                candidate["context"],
+                token,
+            )
+        finally:
+            token = None
+        caller("run.status", {**params, "record": candidate["final"]})
+
+    if not args.credential_file:
+        raise StatusError("INVALID_PARAMS", "a live reconcile posts with --credential-file")
+    return post
 
 
 def report_poll(args):
@@ -879,6 +987,18 @@ def main():
             "Omit it to use the worker --runner-image digest"
         ),
     )
+    rec = commands.add_parser(
+        "reconcile", help="re-post the final status for runs whose last post is pending"
+    )
+    rec.add_argument("--repository", required=True, help="GitHub repository as owner/name")
+    rec.add_argument("--sha", action="append", default=[], help="limit to these commit SHAs")
+    rec.add_argument("--dry-run", action="store_true", help="read only; post nothing")
+    rec.add_argument("--poll-state", help="poller state directory holding poll.json (to post)")
+    rec.add_argument("--app-key", help="GitHub App private key for the read token")
+    rec.add_argument("--key-dir", help="directory holding the GitHub App id files")
+    rec.add_argument("--clone", help="worker clone; needed to mint an app token")
+    rec.add_argument("--credential-file", help="token file for the GitHub reads and posts")
+    rec.add_argument("--api-base", default=DEFAULT_API_BASE)
     poll = commands.add_parser("poll", help="run one poll pass for one owner repository")
     poll.add_argument("--repository", required=True, help="GitHub repository as owner/name")
     poll.add_argument("--clone", required=True, help="dedicated clone; the worker repository")
@@ -1010,6 +1130,9 @@ def main():
             return
         if args.command == "poll":
             report_poll(args)
+            return
+        if args.command == "reconcile":
+            report_reconcile(args)
             return
         if args.command == "call":
             _call_stdio(args.state)

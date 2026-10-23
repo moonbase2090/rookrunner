@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# Example poller entry point. Copy it beside the poller state and fill in the
+# repository, jobs and placement. The engine the poller imports must be the
+# same build the workers run, or the two sides can disagree about the protocol.
+#
+#   ROOKRUNNER_ENGINE          engine checkout whose src/ the poller imports.
+#                              Point it at the same tree the worker unit uses.
+#   ROOKRUNNER_WORKER_TIMEOUT  seconds to wait for one worker answer (default 30).
+#
+# A systemd drop-in can set both, for example:
+#   [Service]
+#   Environment=ROOKRUNNER_ENGINE=/var/lib/rookrunner/engine-<version>
+#   Environment=ROOKRUNNER_WORKER_TIMEOUT=30
+import os
+import sys
+
+engine = os.environ.get("ROOKRUNNER_ENGINE")
+if not engine:
+    sys.exit("ROOKRUNNER_ENGINE is not set; point it at the engine the workers run")
+os.environ["PYTHONPATH"] = os.path.join(engine, "src")
+os.execvp(
+    sys.executable,
+    [
+        sys.executable, "-m", "execution_core",
+        "--state", "/var/lib/rookrunner/<repo>-poll",
+        "poll",
+        "--repository", "<owner>/<repo>",
+        "--clone", "/var/lib/rookrunner/clone.<repo>",
+        "--job", ".github/workflows/<workflow>.yml", "<job>",
+        "--place", '{"name":"<host>","state":"/var/lib/rookrunner/<repo>-state","cap":4}',
+    ],
+)

@@ -320,7 +320,7 @@ def _forward(state, method, params):
     tries = 2 if method == "run.submit" else 1
     for attempt in range(tries):
         try:
-            reply = call(state, method, params)
+            reply = call(state, method, params, timeout=5)
         except TimeoutError:
             if attempt + 1 < tries:
                 continue
