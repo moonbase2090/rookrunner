@@ -1534,6 +1534,64 @@ class PollTests(unittest.TestCase):
         )
         self.assertFalse((self.clone / "feature-9.txt").exists())
 
+    def _merge_commit(self, first, second, message):
+        tree = _git(self.seed, "rev-parse", f"{first}^{{tree}}").stdout.strip()
+        return _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            first,
+            "-p",
+            second,
+            "-m",
+            message,
+        ).stdout.strip()
+
+    def test_a_merge_built_on_a_moved_base_is_used_when_the_listed_base_is_stale(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        (self.seed / "later.txt").write_text("later\n")
+        self._commit_all("later")
+        _git(self.seed, "push", "origin", "main")
+        moved = self._tip()
+        merge = self._merge_commit(moved, head, "merge moved base")
+        _git(self.seed, "push", "--force", "origin", f"{merge}:refs/pull/9/merge")
+        result = self.poll()
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in result["skipped"]]
+        )
+        pulls = [item for item in self.submits if item.get("event_name") == "pull_request"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(self.runs(), 1)
+        self.assertTrue((self.clone / "feature-9.txt").exists())
+
+    def test_a_merge_on_neither_base_is_refused_and_posts_an_error_status(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", _tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        merge = self._merge_commit(side, head, "merge side")
+        _git(self.seed, "push", "--force", "origin", f"{merge}:refs/pull/9/merge")
+        result = self.poll()
+        self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(self.runs(), 0)
+        self.assert_trust_posts(
+            head,
+            [("error", "refused: fetched merge commit does not match the listed head")],
+        )
+
     def test_a_fork_by_a_non_collaborator_is_still_refused_before_any_fetch(self):
         tip = self._tip()
         head = "ab" * 20
@@ -2001,19 +2059,21 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(refused["warnings"][0]["sha"], head)
 
-    def test_a_listed_base_that_is_not_the_merge_parent_is_not_checked_out(self):
+    def test_a_listed_base_that_is_stale_passes_the_merge_check_and_fails_on_its_commits(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")
 
-        _tip, head = self._open_feature(9, mutate, base="ab" * 20)
+        self._open_feature(9, mutate, base="ab" * 20)
         result = self.poll()
-        self._assert_workflow_refused(
-            result,
-            head,
-            "fetched merge commit does not match the listed head",
-            "merge_commit_mismatch",
-            posted=False,
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in result["skipped"]]
         )
+        self.assertEqual(result["skipped"], [{"reason": "untrusted", "number": 9}])
+        self.assertEqual(
+            [item["reason"] for item in result["warnings"]],
+            ["pull request commits are not readable"],
+        )
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
         self.assertFalse((self.clone / "feature-9.txt").exists())
 
     def test_a_pull_request_whose_workflow_diff_is_unavailable_is_refused(self):
