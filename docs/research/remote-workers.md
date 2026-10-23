@@ -1,6 +1,6 @@
 # Private remote workers: requirements and open questions
 
-Status: proposed research, 2026-10-22. Author: rookrunner-redteam. Not reviewed. Still not accepted scope.
+Status: proposed research, subject to owner approval. Not accepted implementation scope.
 
 This note is not accepted scope. It does not change the [roadmap](../roadmap.md), the [PRD](../prd.md), or the [architecture](../design/architecture.md). The roadmap lists "Authenticated workers on private remote machines" under [later investigations](../roadmap.md#later-investigations), and says each investigation needs its own requirements and evidence before it becomes implementation scope. This note sets out those requirements and the questions MB2090 must answer. It does not design the transport.
 
