@@ -46,8 +46,12 @@ documents these GitHub App permissions and endpoints:
 
 | Scope | Registration endpoint | Required permission |
 | --- | --- | --- |
-| Repository | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | Repository Administration write |
-| Organization | `POST /orgs/{org}/actions/runners/registration-token` | Organization Self-hosted runners write |
+| Repository | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | [Repository Administration write](https://docs.github.com/en/rest/actions/self-hosted-runners#fine-grained-access-tokens-for-create-a-registration-token-for-a-repository) |
+| Organization | `POST /orgs/{org}/actions/runners/registration-token` | [Organization Self-hosted runners write](https://docs.github.com/en/rest/actions/self-hosted-runners#fine-grained-access-tokens-for-create-a-registration-token-for-an-organization) |
+
+Both linked permission sections explicitly support GitHub App installation
+access tokens. These permissions authorize the management API call, not the
+job's `GITHUB_TOKEN`.
 
 Registration tokens expire after one hour. Removal tokens also expire after
 one hour. Each scope has `generate-jitconfig`, runner listing, and runner
@@ -79,8 +83,9 @@ consume this service's capacity.
 
 [Webhook best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)
 call for HTTPS, event and action checks, and a 2XX response within 10 seconds.
-`X-GitHub-Delivery` identifies a delivery, and a requested redelivery retains
-the original identifier. GitHub [does not automatically retry failed deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
+The [delivery-header section](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks#use-the-x-github-delivery-header)
+states that `X-GitHub-Delivery` identifies a delivery and that a requested
+redelivery retains the original identifier. GitHub [does not automatically retry failed deliveries](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
 Delivery APIs support inspection and explicit redelivery.
 
 A proposed receiver would validate a bounded payload, authorize its installation
