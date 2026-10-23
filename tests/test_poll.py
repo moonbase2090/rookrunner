@@ -25,6 +25,7 @@ import execution_core.poll as poll_module
 from execution_core.checks import list_token_body
 from execution_core.poll import (
     PollError,
+    _absent_reason,
     allowlist_matches,
     poll_once,
     queue_expired,
@@ -1194,6 +1195,40 @@ class PollTests(unittest.TestCase):
                     "reason": "job_absent",
                     "event": "push",
                     "ref": "refs/heads/older",
+                    "workflow": JOB[0],
+                    "job_id": JOB[1],
+                }
+            ],
+        )
+        self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_branch_whose_planner_rejects_the_job_skips_it_and_the_pass_continues(self):
+        main = self._tip()
+        _git(self.seed, "checkout", "-b", "invalid")
+        (self.seed / ".github/workflows/check.yml").write_text(
+            WORKFLOW.replace(
+                "    runs-on: ubuntu-latest\n",
+                "    if: ${{ secrets.TOKEN != '' }}\n    runs-on: ubuntu-latest\n",
+            )
+        )
+        self._commit_all("reject the job")
+        _git(self.seed, "push", "origin", "invalid")
+        _git(self.seed, "checkout", "main")
+        invalid = self._tip("refs/heads/invalid")
+        self.server.branches = [
+            {"name": "invalid", "commit": {"sha": invalid}},
+            {"name": "main", "commit": {"sha": main}},
+        ]
+        result = self.poll()
+        self.assertFalse(result["stopped"])
+        self.assertEqual(
+            result["skipped"],
+            [
+                {
+                    "reason": "workflow_invalid",
+                    "event": "push",
+                    "ref": "refs/heads/invalid",
                     "workflow": JOB[0],
                     "job_id": JOB[1],
                 }
@@ -2816,6 +2851,18 @@ class PollTests(unittest.TestCase):
         self.assertNotIn("poll_stamp", [item.get("reason") for item in result["skipped"]])
         self.assertIn("worker.describe", calls["image-bad"])
         self.assertIn("worker.describe", calls["image-ok"])
+
+
+class AbsentReasonTests(unittest.TestCase):
+    def test_a_rejection_names_only_the_configured_job(self):
+        named = PollError("INVALID_PARAMS", "jobs.check.if: context is not available: secrets")
+        other = PollError("INVALID_PARAMS", "jobs.other.if: context is not available: secrets")
+        prefix = PollError("INVALID_PARAMS", "jobs.checker.if: context is not available: secrets")
+        refused = PollError("WORKER_ERROR", "jobs.check.if: context is not available: secrets")
+        self.assertEqual(_absent_reason(named, "check"), "workflow_invalid")
+        self.assertIsNone(_absent_reason(other, "check"))
+        self.assertIsNone(_absent_reason(prefix, "check"))
+        self.assertIsNone(_absent_reason(refused, "check"))
 
 
 class AllowlistTests(unittest.TestCase):
