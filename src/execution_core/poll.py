@@ -311,21 +311,27 @@ def _association(value):
     return value
 
 
-def _absent_reason(exc):
-    """Return the skip reason when a configured job cannot exist at this commit.
+def _absent_reason(exc, job_id):
+    """Return the skip reason when a configured job cannot run at this commit.
 
     A workflow file that is not tracked is ``workflow_absent``. A workflow
     whose jobs do not include the configured job, as on a branch that
-    predates that job, is ``job_absent``. Either skips that one job, and
+    predates that job, is ``job_absent``. A job the planner rejects is
+    ``workflow_invalid`` when the rejection names that job by its path,
+    ``jobs.<job_id>.`` or ``jobs.<job_id>:``. Each skips that one job, and
     the pass continues. Any other error is None and still stops the pass.
     """
 
     if exc.kind != "INVALID_PARAMS":
         return None
-    if str(exc) == _WORKFLOW_ABSENT:
+    text = str(exc)
+    if text == _WORKFLOW_ABSENT:
         return "workflow_absent"
-    if str(exc) == _JOB_ABSENT:
+    if text == _JOB_ABSENT:
         return "job_absent"
+    prefix = f"jobs.{job_id}"
+    if text.startswith((prefix + ".", prefix + ":")):
+        return "workflow_invalid"
     return None
 
 
@@ -2404,7 +2410,7 @@ class Pass:
             try:
                 submitted = self.caller("run.submit", params)
             except PollError as exc:
-                absent = _absent_reason(exc)
+                absent = _absent_reason(exc, job_id)
                 if absent is not None:
                     if claimed is not None and "run_id" not in claimed:
                         self._drop_unstarted(claimed)
@@ -2554,7 +2560,7 @@ class Pass:
             try:
                 submitted = self.caller("run.submit", params)
             except PollError as exc:
-                absent = _absent_reason(exc)
+                absent = _absent_reason(exc, job_id)
                 if absent is not None:
                     if "run_id" not in claimed:
                         self._drop_unstarted(claimed)
