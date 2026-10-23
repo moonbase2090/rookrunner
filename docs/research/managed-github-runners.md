@@ -34,24 +34,28 @@ worker subprocess receives the job message. This is upstream design evidence,
 not a stable protocol specification or a live interoperability test.
 
 GitHub's [webhook event reference](https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_job)
-requires Actions repository read permission for an App subscribing to
-`workflow_job`. The [runner reference](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#webhooks-for-autoscaling)
+states under `workflow_job`:
+
+> To subscribe to this event, a GitHub App must have at least read-level access for the "Actions" repository permission.
+
+The [runner reference](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#webhooks-for-autoscaling)
 describes `queued`, `in_progress`, and `completed` notifications for autoscaling.
 A completion notification includes unsuccessful jobs. It is not proof of success.
 
 ### Registration and credential roles
 
 The [runner REST reference](https://docs.github.com/en/rest/actions/self-hosted-runners)
-documents these GitHub App permissions and endpoints:
+documents these administrator and classic-token requirements for registration:
 
-| Scope | Registration endpoint | Required permission |
+| Scope | Registration endpoint | Caller requirements |
 | --- | --- | --- |
-| Repository | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | [Repository Administration write](https://docs.github.com/en/rest/actions/self-hosted-runners#fine-grained-access-tokens-for-create-a-registration-token-for-a-repository) |
-| Organization | `POST /orgs/{org}/actions/runners/registration-token` | [Organization Self-hosted runners write](https://docs.github.com/en/rest/actions/self-hosted-runners#fine-grained-access-tokens-for-create-a-registration-token-for-an-organization) |
+| Repository | `POST /repos/{owner}/{repo}/actions/runners/registration-token` | Repository admin access; classic token requires `repo` |
+| Organization | `POST /orgs/{org}/actions/runners/registration-token` | Organization admin access; classic token requires `admin:org` and also `repo` for private repositories |
 
-Both linked permission sections explicitly support GitHub App installation
-access tokens. These permissions authorize the management API call, not the
-job's `GITHUB_TOKEN`.
+The management App configuration for a proposed integration remains an open
+research question. Resolve its permissions and installation scope in a separate
+design using the [GitHub App permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps).
+No App configuration or authenticated registration was tested here.
 
 Registration tokens expire after one hour. Removal tokens also expire after
 one hour. Each scope has `generate-jitconfig`, runner listing, and runner
