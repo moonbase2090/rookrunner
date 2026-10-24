@@ -13,6 +13,7 @@ import uuid
 
 from execution_core.artifacts import written_files
 from execution_core.cli import call
+from execution_core.disk import usage
 from execution_core.protocol import canonical
 from execution_core.worker import Worker, now
 from schema_support import validate_response, validator
@@ -243,6 +244,7 @@ class ArtifactManifestTests(unittest.TestCase):
             again.execute_queue = lambda: again.stop.wait()
             again.start()
             try:
+                self.assertEqual(again.state_usage.total, usage(state))
                 lost = again.get(record["run_id"])
                 self.assertEqual(lost["state"], "lost")
                 reply = again.response(_request("run.artifacts", {"run_id": record["run_id"]}))

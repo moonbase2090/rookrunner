@@ -816,11 +816,6 @@ class Worker:
             self.worker_id = self.db.execute(
                 "SELECT value FROM metadata WHERE key='worker_id'"
             ).fetchone()[0]
-            self._reconcile_interrupted()
-            if os.path.lexists(self.socket_path):
-                if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
-                    raise ValueError("refusing to replace a non-socket worker.sock")
-                self.socket_path.unlink()
             self.state_usage = StateUsage(self.state)
             self.state_usage.remember_entries(
                 [
@@ -834,6 +829,14 @@ class Worker:
                     )
                 ]
             )
+            self._reconcile_interrupted()
+            if os.path.lexists(self.socket_path):
+                if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
+                    raise ValueError("refusing to replace a non-socket worker.sock")
+                self.state_usage.remove(self.socket_path)
+                self.socket_path.unlink()
+                self.state_usage.sync_parent_directories(self.socket_path)
+            self._sync_state_files()
             self._prune_finished_run_folders(0)
             self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.server.bind(str(self.socket_path))
