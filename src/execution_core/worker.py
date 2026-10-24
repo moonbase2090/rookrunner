@@ -94,6 +94,7 @@ from .disk import (
     DEFAULT_DISK_BUDGET,
     FINISHED_RUN_FOLDER_COUNT,
     FINISHED_RUN_FOLDER_SECONDS,
+    StateUsage,
     usage,
 )
 from .expr import ExprError
@@ -678,6 +679,7 @@ class Worker:
         self.retained = {}
         self._pending_concurrency_cancels = []
         self.socket_path = self.state / "worker.sock"
+        self.state_usage = None
 
     def _refuse_reset_history(self):
         """Fail closed when the run database cannot hold prior history.
@@ -819,9 +821,24 @@ class Worker:
                 if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
                     raise ValueError("refusing to replace a non-socket worker.sock")
                 self.socket_path.unlink()
+            self.state_usage = StateUsage(self.state)
+            self.state_usage.remember_entries(
+                [
+                    self.state / name
+                    for name in (
+                        "runs.sqlite3",
+                        "runs.sqlite3-wal",
+                        "runs.sqlite3-shm",
+                        "runs.sqlite3-journal",
+                        Path("actions") / "pins.json",
+                    )
+                ]
+            )
+            self._prune_finished_run_folders(0)
             self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.server.bind(str(self.socket_path))
             self.owns_socket = True
+            self.state_usage.add(self.socket_path)
             os.chmod(self.socket_path, 0o600)
             self.server.listen(16)
             self.server.settimeout(0.2)
@@ -840,7 +857,9 @@ class Worker:
             self.server.close()
             self.server = None
         if getattr(self, "owns_socket", False):
+            self.state_usage.remove(self.socket_path)
             self.socket_path.unlink(missing_ok=True)
+            self.state_usage.sync_parent_directories(self.socket_path)
             self.owns_socket = False
         if self.db:
             self.db.close()
@@ -873,7 +892,6 @@ class Worker:
                     identity = record.get("attempt_id") or record["run_id"]
                     self.retained[identity] = name
         self._load_retained()
-        self._prune_finished_run_folders(0)
 
     def _release_running(self, record):
         kind = (record.get("input") or {}).get("kind")
@@ -1313,7 +1331,9 @@ class Worker:
             raise RunError("SETUP_FAILED", "attempt directory is not accepted") from exc
         try:
             os.chmod(attempt_root, 0o700)
+            self.state_usage.add(attempt_root)
             materialize_attempt(snapshot, pinned["digest"], workspace)
+            self.state_usage.sync_path(attempt_root)
         except Exception:
             self._remove_workspace(attempt_root)
             raise
@@ -1335,6 +1355,8 @@ class Worker:
                 else "action repository could not be fetched"
             )
             raise RunError("SETUP_FAILED", message) from exc
+        if actions_root is not None:
+            self.state_usage.sync_path(attempt_root)
         event_name = request.get("event_name") if isinstance(request, dict) else None
         # The admission checks above only bound the attempt before it starts.
         # The watch stops the owned container when the state grows past the
@@ -1576,23 +1598,24 @@ class Worker:
             else:
                 keep.append(record)
         self._delete_finished_folders(records, drop_ids)
+        used = self.state_usage.total
         for record in keep:
-            try:
-                used = usage(self.state)
-            except OSError:
-                return
             if used + incoming <= self.disk_budget:
                 return
             drop_ids.add(record["run_id"])
             self._delete_finished_folders(records, drop_ids)
+            used = self.state_usage.total
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
         try:
             if workspace.is_symlink() or workspace.parent != attempts or not workspace.is_dir():
                 return
+            self.state_usage.remove(workspace)
             shutil.rmtree(workspace)
+            self.state_usage.sync_parent_directories(workspace)
         except OSError:
+            self.state_usage.sync_path(workspace)
             return
 
     def _cancel_running_workflow(self, record):
@@ -1848,6 +1871,7 @@ class Worker:
                     self._capture_fault(exc)
             captured = prepared.publish()
             snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+            self.state_usage.add(snapshot)
             return self._accept_planned(
                 p, key, normalized, event_text, snapshot, captured, store, planned
             )
@@ -1959,6 +1983,7 @@ class Worker:
                 raise Fault(
                     "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
                 ) from None
+            self._sync_state_files()
             store.commit()
             self._pending_concurrency_cancels.extend(running_ids)
             return record
@@ -1981,7 +2006,10 @@ class Worker:
     def action_store(self):
         if self._action_store is None:
             self._action_store = ActionStore(
-                self.state, self.action_remote, lambda: self.disk_budget
+                self.state,
+                self.action_remote,
+                lambda: self.disk_budget,
+                usage_tracker=self.state_usage,
             )
         return self._action_store
 
@@ -2003,7 +2031,8 @@ class Worker:
         """
 
         try:
-            used = usage(self.state)
+            self._sync_state_files()
+            used = self.state_usage.total
         except OSError:
             return True
         if used + incoming <= self.disk_budget:
@@ -2011,10 +2040,7 @@ class Worker:
             return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
-        try:
-            used = usage(self.state)
-        except OSError:
-            return True
+        used = self.state_usage.total
         return used + incoming > self.disk_budget
 
     def _runtime_over_budget(self):
@@ -2026,10 +2052,21 @@ class Worker:
         """
 
         try:
-            used = usage(self.state)
+            used = self.state_usage.refresh()
         except OSError:
             return True
         return used > self.disk_budget
+
+    def _sync_state_files(self):
+        self.state_usage.sync_files(
+            self.state / name
+            for name in (
+                "runs.sqlite3",
+                "runs.sqlite3-wal",
+                "runs.sqlite3-shm",
+                "runs.sqlite3-journal",
+            )
+        )
 
     def _publish_artifacts(self, record, selections=None):
         """Record files this attempt wrote. A confirmed terminal run then removes the directory.
@@ -2084,7 +2121,9 @@ class Worker:
         target = Path(self.state) / "snapshots" / snapshot_id
         if target.is_symlink() or not target.is_dir():
             return
+        self.state_usage.remove(target)
         shutil.rmtree(target)
+        self.state_usage.sync_parent_directories(target)
 
     def dispatch(self, method, p):
         if method == "worker.describe":
@@ -2201,6 +2240,7 @@ class Worker:
                     "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
                     (record["run_id"], key, normalized, canonical(record), b""),
                 )
+            self._sync_state_files()
             return record
         if method == "run.get":
             fields(p, ("run_id",))
