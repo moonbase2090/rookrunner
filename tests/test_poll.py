@@ -884,7 +884,7 @@ class PollTests(unittest.TestCase):
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
         run_id = self.poll()["submitted"][0]["run_id"]
         record = self.worker.get(run_id)
-        record["state"] = "lost"
+        record["state"] = "failed"
         record["exit_code"] = None
         with self.worker.guard, self.worker.db:
             self.worker.save(record)

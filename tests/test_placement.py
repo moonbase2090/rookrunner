@@ -463,6 +463,18 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(json.loads(posts[0]["body"])["state"], "error")
         self.assertEqual(self._saved()["submissions"][0]["host"], "alpha")
         self.assertEqual(self._saved()["submissions"][0]["run_id"], run_id)
+        saved = self._saved()
+        self.assertNotIn(saved["submissions"][0]["key"], saved["completed"])
+        third = self._poll([self._place("alpha", alpha), self._place("beta", beta)])
+        self.assertEqual(
+            third["statuses"],
+            [
+                {"run_id": run_id, "state": "error", "action": "skip"},
+            ],
+        )
+        self.assertEqual(self._saved()["submissions"], saved["submissions"])
+        self.assertEqual(self._runs(alpha), 1)
+        self.assertEqual(self._runs(beta), 0)
 
     def test_an_unknown_host_is_left(self):
         alpha = self._worker("alpha")

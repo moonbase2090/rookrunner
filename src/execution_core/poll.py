@@ -135,7 +135,7 @@ from datetime import datetime, timedelta, UTC
 from .checks import post_check_flow
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
-from .protocol import MAX_LIST_PAGE, TERMINAL, Fault, canonical, is_integer, strict_json
+from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
 from .status import (
     StatusError,
     github_state,
@@ -2770,9 +2770,11 @@ class Pass:
         self._checkpoint()
 
     def _post_record(self, entry):
-        """Return true when a terminal run no longer needs status reporting."""
+        """Return whether terminal reporting allows retiring this submission."""
 
         record = self.caller("run.get", {"run_id": entry["run_id"]})
+        # Lost execution still belongs to its original host for reconciliation.
+        can_retire = record["state"] in {"succeeded", "failed", "cancelled"}
         mapped = github_state(record["state"], record["exit_code"])
         if mapped == "pending":
             return False
@@ -2801,13 +2803,13 @@ class Pass:
                     self.result["statuses"].append(
                         {"run_id": entry["run_id"], "state": "error", "action": "posted"}
                     )
-                return record["state"] in TERMINAL
+                return can_retire
             raise
         if decision["action"] == "skip":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
             )
-            return record["state"] in TERMINAL
+            return can_retire
         if decision["action"] == "retry":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "retry"}
@@ -2819,7 +2821,7 @@ class Pass:
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
             )
-            return record["state"] in TERMINAL
+            return can_retire
         return False
 
     def _status_params(self, entry):

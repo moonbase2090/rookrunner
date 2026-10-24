@@ -441,17 +441,19 @@ One invocation is still one repository. The operator runs one invocation
 per repository. Linux hosts still have no poll timer.
 
 The poll state keeps active submissions until terminal reporting completes.
-After a terminal post succeeds, or the worker confirms it was already recorded,
-the poll removes the submission and retains its key in `completed`. That key
-prevents resubmission when the same event is rediscovered, including placement
+After reporting a `succeeded`, `failed`, or `cancelled` run, or after the worker
+confirms that report was already recorded, the poll removes the submission and
+retains its key in `completed`. That key prevents resubmission when the same event is rediscovered, including placement
 on a different worker. Older state files without `completed` start with no
 completed keys and retire their finished submissions during the next pass.
 Queued and running submissions, unreachable placements, and terminal posts that
-fail or hit a rate limit remain active for retry.
+fail or hit a rate limit remain active for retry. Lost runs retain their original
+host assignment for reconciliation, even after their error status is recorded.
 
-A terminal run with an unreadable snapshot cannot produce a verified final
-status. The poll reports `snapshot_unreadable` once and retires the submission.
-With a commit-status credential it first posts an `error` status; a failed post
+A `succeeded`, `failed`, or `cancelled` run with an unreadable snapshot cannot
+produce a verified final status. The poll reports `snapshot_unreadable` once
+and retires the submission. Lost runs remain tracked even with an unreadable
+snapshot. With a commit-status credential it first posts an `error` status; a failed post
 keeps the submission for retry. With App reporting it posts no check or status
 for that unreadable snapshot. Retirement records no success and does not remove
 the worker's run history. Completed keys are retained without expiry.
