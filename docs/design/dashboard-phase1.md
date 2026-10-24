@@ -2,10 +2,12 @@
 
 ## Accepted direction
 
-The owner approved a web dashboard on 2026-10-23, restricted to the local
-network with no public exposure. Start read-only, keep the existing TUI,
-and defer browser cancel and rerun. Present runnable TUI and web options
-over the same Rookrunner-owned data before choosing the visual direction.
+The owner approved a web dashboard on 2026-10-23 and revised the access
+model on 2026-10-24. Remote access uses Cloudflare Tunnel with Cloudflare
+Access sign-in. The tunnel connects outbound; the dashboard listener stays
+bound to loopback on the host. Start read-only, keep the existing TUI, and
+defer browser cancel and rerun. Present runnable TUI and web options over
+the same Rookrunner-owned data before choosing the visual direction.
 Web visual work is assigned separately from the data and TUI preparation.
 
 This acceptance supersedes the pending surface/listener decision described
@@ -76,15 +78,20 @@ text nodes for logs, and refuse browser mutations.
 
 ## Access decisions and proof still required
 
-Use loopback for runnable web preview while concrete LAN binding and access
-policy remain unresolved. Local-network-only is not an authentication policy.
-Before enabling a private interface, choose the exact bind/interface and
-allowed clients, authentication/session policy, Host/Origin checks, transport
-security, and deployment constraints. Do not bind wildcard or public addresses
-by interpreting the direction as unrestricted serving permission.
+Keep the runnable web preview and deployed dashboard listener bound to
+loopback. Do not bind LAN, wildcard, or public interfaces. The owner configures
+the outbound Cloudflare Tunnel and Access sign-in separately. Authentication
+and tunnel implementation are outside this preparation slice. This accepted
+deployment direction does not claim that either service is configured or
+validated.
+
+Listener checks must prove that non-loopback binds are refused. Deployment
+proof must separately establish that remote access requires Access sign-in
+and reaches the loopback listener through the tunnel. That deployment proof
+remains pending with the owner.
 
 Visual selection follows runnable comparison. Runtime changes require focused
 behavior checks and clean macOS VM/live proof in the PR before exact-head
 review. Listener exposure, safe log rendering, unavailable/stale observation,
 cursor navigation, terminal restoration, and success semantics need direct
-evidence. No public deployment or browser controls are authorized by this prep.
+evidence. This preparation does not deploy the tunnel or enable browser controls.
