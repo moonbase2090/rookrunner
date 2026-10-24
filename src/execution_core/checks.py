@@ -525,7 +525,8 @@ def _post_check(
     summary = mask_prefixes(summary)
     output = {"title": context, "summary": summary}
     if isinstance(check_text, str) and check_text:
-        output["text"] = mask_prefixes(check_text)[-MAX_CHECK_TEXT_BYTES:]
+        encoded_text = mask_prefixes(check_text).encode("utf-8", "replace")
+        output["text"] = encoded_text[-MAX_CHECK_TEXT_BYTES:].decode("utf-8", "ignore")
     payload = {
         "name": context,
         "external_id": run_id,

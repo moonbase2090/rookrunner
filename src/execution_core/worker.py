@@ -2725,7 +2725,7 @@ class Worker:
                 (-MAX_CHECK_TEXT_BYTES, record["run_id"]),
             ).fetchone()
             if log_row is not None and log_row[0]:
-                check_text = bytes(log_row[0]).decode("utf-8", "replace")
+                check_text = bytes(log_row[0]).decode("utf-8", "ignore")
                 if check_text:
                     result["check_text"] = check_text
         if check_conclusion is not None:

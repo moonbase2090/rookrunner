@@ -467,7 +467,7 @@ class CliCheckTests(unittest.TestCase):
 
     def test_failed_check_posts_the_stored_log_tail_as_output_text(self):
         run = self._insert(state="failed", exit_code=1)
-        log = b"old output must be trimmed\n" + b"x" * 5000 + b"\nTraceback: assertion failed\n"
+        log = b"old output must be trimmed\n" + ("€" * 1400).encode("utf-8")
         with sqlite3.connect(self.state / "runs.sqlite3") as connection:
             connection.execute("UPDATE runs SET log=? WHERE id=?", (log, run["run_id"]))
 
@@ -477,7 +477,8 @@ class CliCheckTests(unittest.TestCase):
         check = json.loads(self.server.requests[1]["body"])
         self.assertEqual(check["output"]["summary"], "failed exit_code 1")
         self.assertLessEqual(len(check["output"]["text"].encode("utf-8")), 4096)
-        self.assertTrue(check["output"]["text"].endswith("Traceback: assertion failed\n"))
+        self.assertNotIn("\ufffd", check["output"]["text"])
+        self.assertTrue(check["output"]["text"].endswith("€"))
         self.assertNotIn("old output must be trimmed", check["output"]["text"])
         validate_response("run.status", json.loads(result.stdout))
 
