@@ -34,6 +34,7 @@ from .status import (
     StatusError,
     _rate_limited,
     api_origin,
+    is_setup_failure,
     post_status,
     require_repository,
     require_sha,
@@ -76,7 +77,7 @@ class _AppKey:
         self.installation_id = None
 
 
-def check_mapping(run_state, exit_code):
+def check_mapping(run_state, exit_code, error=None):
     """Map a run to a check status and conclusion. Only exit 0 is success."""
 
     if run_state == "queued":
@@ -85,14 +86,18 @@ def check_mapping(run_state, exit_code):
         return "in_progress", None
     if run_state == "succeeded" and exit_code == 0:
         return "completed", "success"
+    if run_state == "failed" and is_setup_failure(error):
+        return "completed", "neutral"
     if run_state == "cancelled":
         return "completed", "cancelled"
     return "completed", "failure"
 
 
-def check_summary(run_state, exit_code):
+def check_summary(run_state, exit_code, error=None):
     """The check output summary: the run state and, when present, the exit code."""
 
+    if is_setup_failure(error):
+        return "setup error"
     if not isinstance(run_state, str) or run_state == "" or len(run_state) > 64:
         text = "unknown"
     elif exit_code is None:

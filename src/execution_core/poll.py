@@ -2792,7 +2792,10 @@ class Pass:
                 check_summary_text=decision["check_summary"],
                 check_run_id=decision.get("check_run_id"),
                 status_state=state,
-                post_status_request=decision.get("status_recorded") is not True,
+                post_status_request=(
+                    decision.get("status_recorded") is not True
+                    and decision.get("check_conclusion") != "neutral"
+                ),
                 app_key=self.app_key,
                 state_dir=self.state_dir,
                 repository_root=self._credential_repository(described),

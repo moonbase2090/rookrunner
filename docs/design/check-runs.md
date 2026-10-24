@@ -135,12 +135,15 @@ actions, and no `details_url`. Step logs are not uploaded.
 | `queued` | `status` `queued`. No conclusion |
 | `running` | `status` `in_progress`. No conclusion. `started_at` is the post time |
 | `succeeded` with exit code 0 | `status` `completed`, `conclusion` `success` |
-| `failed` | `status` `completed`, `conclusion` `failure` |
+| `failed` with `error.kind` `SETUP_FAILED` | `status` `completed`, `conclusion` `neutral` |
+| Other `failed` runs | `status` `completed`, `conclusion` `failure` |
 | `cancelled` | `status` `completed`, `conclusion` `cancelled` |
 | `lost`, or any other state | `status` `completed`, `conclusion` `failure` |
 
-Nothing else is `success`. The Checks API has no `error` conclusion.
-`neutral` is not used, because it is not a failure. `waiting`,
+Nothing else is `success`. Setup errors use `neutral` because they do
+not represent failed workflow steps. For a neutral setup check, no
+commit status is posted because the commit-status API has no neutral
+state. The Checks API has no `error` conclusion. `waiting`,
 `pending`, and `requested` are not sent. GitHub reserves those for
 GitHub Actions.
 

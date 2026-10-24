@@ -2085,7 +2085,8 @@
           "enum": [
             "success",
             "failure",
-            "cancelled"
+            "cancelled",
+            "neutral"
           ]
         },
         "check_run_id": {
@@ -2170,7 +2171,8 @@
               "enum": [
                 "success",
                 "failure",
-                "cancelled"
+                "cancelled",
+                "neutral"
               ]
             }
           },

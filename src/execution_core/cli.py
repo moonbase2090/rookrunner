@@ -544,7 +544,10 @@ def _report_app_status(args, decision, repository_root):
             check_summary_text=decision["check_summary"],
             check_run_id=decision.get("check_run_id"),
             status_state=decision["state"],
-            post_status_request=decision.get("status_recorded") is not True,
+            post_status_request=(
+                decision.get("status_recorded") is not True
+                and decision.get("check_conclusion") != "neutral"
+            ),
             app_key=args.app_key,
             state_dir=args.state,
             repository_root=repository_root,
