@@ -145,7 +145,7 @@ from .protocol import (
     valid_id,
 )
 from .snapshot import CaptureError, SourceCapture
-from .checks import check_mapping, check_summary
+from .checks import MAX_CHECK_TEXT_BYTES, check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .oidc_endpoint import OidcRun, OidcSettings
 from .oidc_keys import OidcError, load_key_set
@@ -2719,6 +2719,15 @@ class Worker:
             "check_status": check_status,
             "check_summary": check_summary(record["state"], record["exit_code"], error),
         }
+        if check_conclusion == "failure":
+            log_row = self.db.execute(
+                "SELECT substr(log, ?) FROM runs WHERE id=?",
+                (-MAX_CHECK_TEXT_BYTES, record["run_id"]),
+            ).fetchone()
+            if log_row is not None and log_row[0]:
+                check_text = bytes(log_row[0]).decode("utf-8", "replace")
+                if check_text:
+                    result["check_text"] = check_text
         if check_conclusion is not None:
             result["check_conclusion"] = check_conclusion
         if row is not None:

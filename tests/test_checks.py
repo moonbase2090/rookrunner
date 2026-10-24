@@ -465,6 +465,22 @@ class CliCheckTests(unittest.TestCase):
         self.assertIsNone(recorded_status)
         validate_response("run.status", json.loads(result.stdout))
 
+    def test_failed_check_posts_the_stored_log_tail_as_output_text(self):
+        run = self._insert(state="failed", exit_code=1)
+        log = b"old output must be trimmed\n" + b"x" * 5000 + b"\nTraceback: assertion failed\n"
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            connection.execute("UPDATE runs SET log=? WHERE id=?", (log, run["run_id"]))
+
+        result = self._cli(run["run_id"])
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        check = json.loads(self.server.requests[1]["body"])
+        self.assertEqual(check["output"]["summary"], "failed exit_code 1")
+        self.assertLessEqual(len(check["output"]["text"].encode("utf-8")), 4096)
+        self.assertTrue(check["output"]["text"].endswith("Traceback: assertion failed\n"))
+        self.assertNotIn("old output must be trimmed", check["output"]["text"])
+        validate_response("run.status", json.loads(result.stdout))
+
     def test_a_queued_check_omits_conclusion_and_uses_the_clock(self):
         moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
         previous = os.environ.get("HOME")
@@ -525,6 +541,7 @@ class CliCheckTests(unittest.TestCase):
                 check_status="completed",
                 check_conclusion="success",
                 check_summary_text=summary,
+                check_text=summary,
                 check_run_id=None,
                 status_state="success",
                 post_status_request=False,
@@ -547,6 +564,8 @@ class CliCheckTests(unittest.TestCase):
         body = json.loads(raw)
         self.assertIn("***", body["output"]["summary"])
         self.assertNotIn(fixture, body["output"]["summary"])
+        self.assertIn("***", body["output"]["text"])
+        self.assertNotIn("github_pat_", body["output"]["text"])
 
     def test_a_later_post_patches_the_stored_id(self):
         # A queued row is claimed by the worker scheduler. `running` is not.
