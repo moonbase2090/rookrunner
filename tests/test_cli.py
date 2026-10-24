@@ -1,14 +1,19 @@
 # SPDX-License-Identifier: MIT
 
 import base64
+import contextlib
 import hashlib
 import json
+import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from execution_core.cli import call
 from execution_core.protocol import canonical
@@ -35,6 +40,53 @@ def run_cli(state, *args, timeout=30):
         text=True,
         timeout=timeout,
     )
+
+
+def delayed_worker(state, delay):
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(Path(state) / "worker.sock"))
+    server.listen(1)
+
+    def serve():
+        try:
+            connection, _ = server.accept()
+            with connection:
+                with connection.makefile("rb") as request:
+                    request.readline()
+                time.sleep(delay)
+                with contextlib.suppress(OSError):
+                    connection.sendall(b'{"jsonrpc":"2.0","id":1,"result":{"answer":"ready"}}\n')
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return thread
+
+
+class WorkerSocketTimeoutTests(unittest.TestCase):
+    def test_default_timeout_accepts_a_worker_reply_after_five_seconds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = delayed_worker(directory, 5.5)
+            try:
+                reply = call(directory, "worker.describe", {})
+                self.assertEqual(reply["result"], {"answer": "ready"})
+            finally:
+                worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+
+    def test_environment_timeout_applies_to_a_real_worker_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = delayed_worker(directory, 0.5)
+            try:
+                with (
+                    patch.dict(os.environ, {"ROOKRUNNER_WORKER_TIMEOUT": "0.1"}),
+                    self.assertRaises(TimeoutError),
+                ):
+                    call(directory, "worker.describe", {})
+            finally:
+                worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
 
 
 class CliUsageTests(unittest.TestCase):

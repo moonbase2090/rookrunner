@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
+import os
 from pathlib import Path
 import re
 import socket
@@ -22,6 +23,8 @@ POLL_SECONDS = 0.2
 # The remote client uses the same socket bound. This covers the ssh process.
 _SSH_CALL_SECONDS = 5
 _SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+DEFAULT_WORKER_TIMEOUT = 30.0
+MAX_WORKER_TIMEOUT = 600.0
 
 
 def _parse_worker_reply(raw):
@@ -43,14 +46,29 @@ def _parse_worker_reply(raw):
     return reply
 
 
-def call(state, method, params):
+def worker_timeout(environ=None):
+    """Return the worker socket timeout, using the default for invalid values."""
+
+    raw = (os.environ if environ is None else environ).get("ROOKRUNNER_WORKER_TIMEOUT")
+    if raw is None:
+        return DEFAULT_WORKER_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_WORKER_TIMEOUT
+    if not 0 < value <= MAX_WORKER_TIMEOUT:
+        return DEFAULT_WORKER_TIMEOUT
+    return value
+
+
+def call(state, method, params, timeout=None):
     request = (
         canonical({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}) + "\n"
     ).encode()
     if len(request) > MAX_MESSAGE:
         raise ValueError("request exceeds 1 MiB")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(5)
+        client.settimeout(worker_timeout() if timeout is None else timeout)
         client.connect(str(Path(state).absolute() / "worker.sock"))
         client.sendall(request)
         with client.makefile("rb") as stream:
