@@ -70,6 +70,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "agent": self.headers.get("User-Agent"),
             }
         )
+        if getattr(self.server, "before_reply", None) is not None:
+            self.server.before_reply(kind)
         code, extra, payload = self.server.routes.get(kind, (201, [], b"{}"))
         self.send_response(code)
         for key, value in extra:
@@ -581,6 +583,60 @@ class CliCheckTests(unittest.TestCase):
             self.assertEqual(self.server.requests, [])
         finally:
             os.chmod(self.key, 0o600)
+
+    def test_fast_failure_retains_check_id_when_pending_status_post_fails(self):
+        run = self._insert(state="running", exit_code=None)
+
+        def finish_on_check(kind):
+            if kind != "check":
+                return
+            with sqlite3.connect(self.state / "runs.sqlite3", timeout=5) as connection:
+                record = json.loads(
+                    connection.execute(
+                        "SELECT record FROM runs WHERE id=?", (run["run_id"],)
+                    ).fetchone()[0]
+                )
+                record["state"] = "failed"
+                record["exit_code"] = 1
+                connection.execute(
+                    "UPDATE runs SET record=? WHERE id=?", (canonical(record), run["run_id"])
+                )
+
+        self.server.before_reply = finish_on_check
+        self.server.routes = _routes(status_code=500)
+        first = self._cli(run["run_id"])
+        self.assertEqual(first.returncode, 1, first.stdout)
+        self.assertEqual(json.loads(first.stderr)["error"]["kind"], "STATUS_REJECTED")
+        self.assertEqual(
+            json.loads(first.stdout)["result"], {"action": "recorded", "state": "failure"}
+        )
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            row = connection.execute(
+                "SELECT check_run_id, status, conclusion FROM check_posts WHERE run_id=?",
+                (run["run_id"],),
+            ).fetchone()
+            self.assertEqual(row, (CHECK_ID, "in_progress", None))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT state FROM status_posts WHERE run_id=?", (run["run_id"],)
+                ).fetchall(),
+                [],
+            )
+        self.server.before_reply = None
+        self.server.routes = _routes()
+        self.server.requests.clear()
+        second = self._cli(run["run_id"])
+        self.assertEqual(second.returncode, 0, second.stdout)
+        check = self.server.requests[1]
+        self.assertEqual(check["method"], "PATCH")
+        self.assertEqual(check["path"], f"/repos/moonbase2090/rookrunner/check-runs/{CHECK_ID}")
+        self.assertEqual(json.loads(check["body"])["conclusion"], "failure")
+        self.assertEqual(json.loads(self.server.requests[2]["body"])["state"], "failure")
+        self.server.requests.clear()
+        repeated = self._cli(run["run_id"])
+        self.assertEqual(repeated.returncode, 0, repeated.stdout)
+        self.assertEqual(json.loads(repeated.stdout)["result"]["action"], "skip")
+        self.assertEqual(self.server.requests, [])
 
     def test_a_gate_failure_reads_no_key_and_sends_nothing(self):
         os.chmod(self.key, 0o000)

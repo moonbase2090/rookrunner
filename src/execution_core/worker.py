@@ -2586,9 +2586,7 @@ class Worker:
         ):
             invalid("recorded state does not match the run")
         if recording_check:
-            self._accept_check_record(
-                p, check_status, check_conclusion, pending_moved_on=pending_moved_on
-            )
+            self._accept_check_record(p, check_status, check_conclusion)
         with self.db:
             if recording_check:
                 self.db.execute(
@@ -2618,19 +2616,16 @@ class Worker:
                 )
         return {"action": "recorded", "state": state}
 
-    def _accept_check_record(self, p, check_status, check_conclusion, *, pending_moved_on=False):
+    def _accept_check_record(self, p, check_status, check_conclusion):
         identifier = integer(p["check_run_id"], 1, 2**63 - 1, "check_run_id")
         p["check_run_id"] = identifier
         if p["check_status"] not in {"queued", "in_progress", "completed"}:
             invalid("recorded check does not match the run")
-        # The pending decision's check is queued or in progress and has no
-        # conclusion. Keep that posted check when the run has since finished.
-        # A completed check still has to match the run.
-        stale_pending_check = (
-            pending_moved_on
-            and check_conclusion is not None
-            and p["check_status"] in {"queued", "in_progress"}
-            and "check_conclusion" not in p
+        # Check and commit-status posts can succeed independently. Preserve an
+        # earlier check even if the run advanced while GitHub was responding.
+        stale_pending_check = "check_conclusion" not in p and (
+            (p["check_status"] == "queued" and check_status in {"in_progress", "completed"})
+            or (p["check_status"] == "in_progress" and check_status == "completed")
         )
         if p["check_status"] != check_status and not stale_pending_check:
             invalid("recorded check does not match the run")
