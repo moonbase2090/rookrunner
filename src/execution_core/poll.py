@@ -135,7 +135,7 @@ from datetime import datetime, timedelta, UTC
 from .checks import post_check_flow
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
-from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
+from .protocol import MAX_LIST_PAGE, TERMINAL, Fault, canonical, is_integer, strict_json
 from .status import (
     StatusError,
     github_state,
@@ -1120,6 +1120,7 @@ class Pass:
             else:
                 self._probe_places()
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
+            self.completed = set(self.state.get("completed", []))
             if self.places is None:
                 self._expire_queued()
             else:
@@ -1368,7 +1369,8 @@ class Pass:
                 return
             if self._placed_caller(entry) is None or "run_id" not in entry:
                 continue
-            self._post_record(entry)
+            if self._post_record(entry):
+                self._retire_submission(entry)
 
     def _placed_caller(self, entry):
         place = self._place_for(entry.get("host"))
@@ -2451,6 +2453,8 @@ class Pass:
             key = self._submission_key(
                 submission_key(self.repository, event_name, tested, workflow, job_id, tick)
             )
+            if key in self.completed:
+                continue
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2579,6 +2583,8 @@ class Pass:
             key = self._submission_key(
                 submission_key(self.repository, event_name, tested, workflow, job_id, tick)
             )
+            if key in self.completed:
+                continue
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2750,13 +2756,26 @@ class Pass:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
-            self._post_record(entry)
+            if self._post_record(entry):
+                self._retire_submission(entry)
+
+    def _retire_submission(self, entry):
+        key = entry["key"]
+        if key not in self.completed:
+            self.state.setdefault("completed", []).append(key)
+            self.completed.add(key)
+        self.state["submissions"] = [
+            item for item in self.state["submissions"] if item is not entry
+        ]
+        self._checkpoint()
 
     def _post_record(self, entry):
+        """Return true when a terminal run no longer needs status reporting."""
+
         record = self.caller("run.get", {"run_id": entry["run_id"]})
         mapped = github_state(record["state"], record["exit_code"])
         if mapped == "pending":
-            return
+            return False
         params = {
             "run_id": entry["run_id"],
             "tested_commit": entry["tested_commit"],
@@ -2765,8 +2784,8 @@ class Pass:
         }
         if self.app_key:
             params["checks"] = True
-        # A removed snapshot cannot be posted. Keep the submission and
-        # continue so a later run still posts. A later pass tries again.
+        # A removed snapshot cannot produce a verified terminal post. Report
+        # it once and retire its key so retention does not cause endless retries.
         try:
             decision = self.caller("run.status", params)
         except PollError as exc:
@@ -2774,30 +2793,34 @@ class Pass:
                 self.result["skipped"].append(
                     {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
                 )
-                if not self.app_key and self._post(
-                    entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
-                ):
+                if not self.app_key:
+                    if not self._post(
+                        entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
+                    ):
+                        return False
                     self.result["statuses"].append(
                         {"run_id": entry["run_id"], "state": "error", "action": "posted"}
                     )
-                return
+                return record["state"] in TERMINAL
             raise
         if decision["action"] == "skip":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
             )
-            return
+            return record["state"] in TERMINAL
         if decision["action"] == "retry":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "retry"}
             )
-            return
+            return False
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
         if self._post(entry, decision["state"], decision if self.app_key else None):
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
             )
+            return record["state"] in TERMINAL
+        return False
 
     def _status_params(self, entry):
         return {
@@ -2932,6 +2955,7 @@ def _empty_state(repository):
         "tips": {},
         "pulls": {},
         "submissions": [],
+        "completed": [],
         "forks": [],
         "merge_absent": [],
     }

@@ -440,6 +440,22 @@ that place. `--place` is not combined with `--ssh-host` or
 One invocation is still one repository. The operator runs one invocation
 per repository. Linux hosts still have no poll timer.
 
+The poll state keeps active submissions until terminal reporting completes.
+After a terminal post succeeds, or the worker confirms it was already recorded,
+the poll removes the submission and retains its key in `completed`. That key
+prevents resubmission when the same event is rediscovered, including placement
+on a different worker. Older state files without `completed` start with no
+completed keys and retire their finished submissions during the next pass.
+Queued and running submissions, unreachable placements, and terminal posts that
+fail or hit a rate limit remain active for retry.
+
+A terminal run with an unreadable snapshot cannot produce a verified final
+status. The poll reports `snapshot_unreadable` once and retires the submission.
+With a commit-status credential it first posts an `error` status; a failed post
+keeps the submission for retry. With App reporting it posts no check or status
+for that unreadable snapshot. Retirement records no success and does not remove
+the worker's run history. Completed keys are retained without expiry.
+
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
