@@ -663,6 +663,24 @@ def _resolve_image(docker, reference, digest, deadline, pull=True):
     return digest, _runner_arch(info.get("Os"), info.get("Architecture"))
 
 
+def runner_image_readiness(image):
+    """Return a readiness error if the configured pin cannot be used locally."""
+
+    if image is None:
+        return None
+    try:
+        reference, digest = _pinned(image)
+        docker = _docker_binary("docker")
+        _resolve_image(docker, reference, digest, time.monotonic() + 2, pull=False)
+    except RunError as error:
+        return "runner image unavailable: " + str(error)
+    except (_Timeout, _JobDeadline):
+        return "runner image inspection timed out"
+    except OSError:
+        return "runner image inspection failed"
+    return None
+
+
 def _inspect(docker, reference, deadline):
     code, stdout, stderr = _invoke_within(
         docker, ["image", "inspect", "--format", _INSPECT, reference], 60, deadline

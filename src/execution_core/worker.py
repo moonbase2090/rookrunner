@@ -120,6 +120,7 @@ from .run import (
     owned_container_present,
     release_owned_container,
     run_job,
+    runner_image_readiness,
 )
 from .protocol import (
     MAX_CURSOR,
@@ -673,6 +674,7 @@ class Worker:
         self.server = None
         self.scheduler = None
         self.execution_error = None
+        self.runner_image_error = None
         self.live = {}
         self.unresolved = {}
         self.retained = {}
@@ -815,6 +817,7 @@ class Worker:
                 "SELECT value FROM metadata WHERE key='worker_id'"
             ).fetchone()[0]
             self._reconcile_interrupted()
+            self.runner_image_error = runner_image_readiness(self.runner_image)
             if os.path.lexists(self.socket_path):
                 if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
                     raise ValueError("refusing to replace a non-socket worker.sock")
@@ -1778,8 +1781,8 @@ class Worker:
             )
         # This process refuses every new workflow attempt while its unresolved
         # map is non-empty. The same key still returns its original run above.
-        # Development fixtures do not use this gate, and describe.ready stays
-        # the scheduler flag. Restart does not keep this map. It blocks only an
+        # Development fixtures do not use this gate. Restart does not keep
+        # this map. It blocks only an
         # attempt that would reuse a retained container name or workspace.
         if conflicts_with_unresolved(self.unresolved):
             raise Fault(
@@ -2089,13 +2092,15 @@ class Worker:
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
+            self.runner_image_error = runner_image_readiness(self.runner_image)
+            readiness_error = self.execution_error or self.runner_image_error
             described = {
                 "protocol_versions": [0, 1],
                 "worker_id": self.worker_id,
                 "repository": self.repository,
                 "version": __version__,
-                "ready": not self.stop.is_set() and self.execution_error is None,
-                "readiness_error": self.execution_error,
+                "ready": not self.stop.is_set() and readiness_error is None,
+                "readiness_error": readiness_error,
                 "methods": METHODS,
                 "capabilities": [
                     "development.fixture",

@@ -69,7 +69,7 @@ if "development.fixture" not in result["capabilities"]:
 PY
 ```
 
-A doctor failure means this instance is not worth driving. Do not point the same commands at another worker.
+A doctor failure means this instance is not worth driving. Do not point the same commands at another worker. A worker configured with `--runner-image` also checks local image availability. For that negative readiness branch, use [configured image readiness](features/describe-worker.md#configured-image-readiness) with a separate worker and state directory.
 
 ## Drive
 
