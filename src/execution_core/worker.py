@@ -154,7 +154,13 @@ from .socket_lock import (
     pin_docker_context,
     resolve_docker_context,
 )
-from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
+from .status import (
+    DEFAULT_API_BASE,
+    MAX_CONTEXT_LENGTH,
+    TERMINAL_STATUS,
+    github_state,
+    is_setup_failure,
+)
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
@@ -2572,6 +2578,8 @@ class Worker:
                 return self._check_decision(
                     record, context, status_sha, state, check_status, check_conclusion, error
                 )
+            if is_setup_failure(error):
+                return {"action": "retry", "state": state}
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):

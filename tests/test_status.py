@@ -241,6 +241,10 @@ class WorkerStatusTests(unittest.TestCase):
             exit_code=None,
             error={"kind": "SETUP_FAILED", "message": "image digest will not resolve"},
         )
+        self.assertEqual(
+            self._reply(_params(setup["run_id"]))["result"],
+            {"action": "retry", "state": "error"},
+        )
         setup_result = self._reply({**_params(setup["run_id"]), "checks": True})["result"]
         self.assertEqual(
             setup_result,

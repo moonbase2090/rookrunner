@@ -502,8 +502,11 @@ def report_status(args):
     if decision["action"] == "skip":
         print(canonical(reply))
         return
+    if decision["action"] == "retry":
+        print(canonical(reply))
+        return
     if decision["action"] != "post":
-        raise ValueError("worker status decision was not post or skip")
+        raise ValueError("worker status decision was not post, skip, or retry")
     described = call(args.state, "worker.describe", {})
     if "error" in described:
         print(canonical(described))

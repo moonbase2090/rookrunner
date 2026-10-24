@@ -2063,7 +2063,8 @@
           "enum": [
             "post",
             "skip",
-            "recorded"
+            "recorded",
+            "retry"
           ]
         },
         "state": {

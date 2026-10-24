@@ -147,6 +147,10 @@ state. The Checks API has no `error` conclusion. `waiting`,
 `pending`, and `requested` are not sent. GitHub reserves those for
 GitHub Actions.
 
+When only the commit-status API is configured, `run.status` returns
+`retry` for a setup failure and posts nothing. The poller leaves it
+unrecorded so a later pass can try again.
+
 A completed check sends `completed_at` as the post time. One create
 and one later update stay under GitHub's limit of 1,000 check runs
 with the same name. A rate-limit response is not retried in the same

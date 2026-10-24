@@ -2708,8 +2708,13 @@ class Pass:
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
             )
             return
+        if decision["action"] == "retry":
+            self.result["statuses"].append(
+                {"run_id": entry["run_id"], "state": decision["state"], "action": "retry"}
+            )
+            return
         if decision["action"] != "post":
-            raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
+            raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
         if self._post(entry, decision["state"], decision if self.app_key else None):
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
