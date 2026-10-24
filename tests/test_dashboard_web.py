@@ -99,6 +99,12 @@ const bundle = {
       reply: ok({ data_base64: b64("one "), next_cursor: "c2", end_of_stream: false }) },
     { method: "run.logs", params: { cursor: "c2", run_id: "a" },
       reply: ok({ data_base64: b64("two"), next_cursor: "c3", end_of_stream: true }) },
+    { method: "run.logs", params: { run_id: "u" },
+      reply: ok({ data_base64: Buffer.from([0x63, 0x61, 0x66, 0xc3]).toString("base64"), next_cursor: "u2", end_of_stream: false }) },
+    { method: "run.logs", params: { run_id: "u", cursor: "u2" },
+      reply: ok({ data_base64: Buffer.from([0xa9]).toString("base64"), next_cursor: null, end_of_stream: true }) },
+    { method: "run.logs", params: { run_id: "bad" },
+      reply: ok({ data_base64: Buffer.from([0x63, 0xc3]).toString("base64"), next_cursor: null, end_of_stream: true }) },
     { method: "run.logs", params: { run_id: "r" },
       reply: ok({ data_base64: "", next_cursor: "r2", end_of_stream: false }) },
     { method: "run.logs", params: { run_id: "r", cursor: "r2" },
@@ -107,7 +113,7 @@ const bundle = {
 };
 const v = (record) => { const x = m.verdict(record); return [x.key, x.success, x.text]; };
 const logs = (id) => { const x = m.logPages(bundle, id);
-  return [x.pages.length, x.ended, x.pages.map((p) => m.decodeBase64(p.data_base64)).join("")]; };
+  return [x.pages.length, x.ended, m.pagesText(x.pages)]; };
 console.log(JSON.stringify({
   verdicts: [
     v({ state: "succeeded", exit_code: 0 }),
@@ -131,6 +137,7 @@ console.log(JSON.stringify({
     m.errorText(m.call(bundle, "run.get", { run_id: "gone" }).error),
   ],
   logs: [logs("a"), logs("r"), logs("absent")],
+  split: [logs("u"), m.countMatches(m.pagesText(m.logPages(bundle, "u").pages), "\u00e9"), logs("bad")],
   terminal: [
     m.terminalRuns("\x1b[1;31mbad\x1b[0m ok"),
     m.terminalRuns("a\x1b[2Jb\x07c\r\nd\re"),
@@ -187,6 +194,14 @@ class ModelRulesTest(unittest.TestCase):
         # repeated cursor stops the walk instead of looping.
         self.assertEqual(empty_running, [2, False, ""])
         self.assertEqual(absent, [0, False, ""])
+
+    def test_character_split_across_pages_decodes_once(self):
+        # Page one ends with the first byte of U+00E9, page two holds the second.
+        text, matches, truncated = self.probe["split"]
+        self.assertEqual(text, [2, True, "caf\u00e9"])
+        self.assertEqual(matches, 1)
+        # A stream that ends inside a character shows one replacement mark.
+        self.assertEqual(truncated, [1, True, "c\ufffd"])
 
     def test_terminal_bytes_cannot_control_the_view(self):
         styled, controls = self.probe["terminal"]

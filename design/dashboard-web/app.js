@@ -3,7 +3,7 @@
 // textContent or a class name; nothing from the bundle is parsed as markup.
 
 import {
-  call, collectRuns, countMatches, decodeBase64, errorText, logPages, observation,
+  call, collectRuns, countMatches, errorText, logPages, pagesText, observation,
   terminalRuns, time, verdict,
 } from "./model.js";
 
@@ -372,7 +372,7 @@ function renderLog(runId, record) {
   const end = $("log-end");
   out.replaceChildren();
   const result = logPages(bundle, runId);
-  logText = result.pages.map((p) => decodeBase64(p.data_base64)).join("");
+  logText = pagesText(result.pages);
   for (const piece of terminalRuns(logText)) {
     const s = el("span", [piece.fg ? `fg-${piece.fg}` : "", piece.bold ? "bold" : ""].join(" ").trim() || null, piece.text);
     out.append(s);

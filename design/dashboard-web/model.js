@@ -153,11 +153,24 @@ export function logPages(bundle, runId) {
   }
 }
 
-export function decodeBase64(text) {
-  if (typeof text !== "string") return "";
+function base64Bytes(text) {
+  if (typeof text !== "string") return new Uint8Array(0);
   const bin = typeof atob === "function" ? atob(text) : Buffer.from(text, "base64").toString("binary");
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+export function decodeBase64(text) {
+  return new TextDecoder("utf-8", { fatal: false }).decode(base64Bytes(text));
+}
+
+// Pages split the stored bytes at arbitrary offsets, so a UTF-8 character
+// can straddle two pages. Join the bytes first and decode once.
+export function pagesText(pages) {
+  const parts = pages.map((p) => base64Bytes(p && p.data_base64));
+  const joined = new Uint8Array(parts.reduce((n, b) => n + b.length, 0));
+  let at = 0;
+  for (const b of parts) { joined.set(b, at); at += b.length; }
+  return new TextDecoder("utf-8", { fatal: false }).decode(joined);
 }
 
 // Split terminal text into styled runs. SGR colour codes become class
