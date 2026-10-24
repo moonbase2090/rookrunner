@@ -211,5 +211,8 @@ Public publishing is a separate step after the preview artifact is reviewable.
   capacity reservations, and fairness policies. No scheduler design is selected.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.
+  The [private capacity investigation](research/managed-capacity.md) compares
+  proposed pool and scheduling ownership choices. Provider selection,
+  credentials, lifecycle, and cost policy remain unresolved.
 
 Each investigation needs its own requirements and evidence before becoming implementation scope.
