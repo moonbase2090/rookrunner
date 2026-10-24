@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rookrunner runs</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="masthead">
+  <div class="worker" id="worker" aria-live="polite"></div>
+  <div class="observed" id="observed"></div>
+</header>
+<div class="notice" id="notice" role="status" hidden></div>
+<main>
+  <section class="ledger" aria-labelledby="ledger-title">
+    <div class="ledger-head">
+      <h1 id="ledger-title">Runs</h1>
+      <p class="ledger-scope" id="scope"></p>
+    </div>
+    <div class="axis" id="axis" aria-hidden="true"></div>
+    <ol class="runs" id="runs" role="listbox" aria-labelledby="ledger-title" tabindex="0"></ol>
+    <div class="queue" id="queue"></div>
+  </section>
+  <section class="detail" id="detail" aria-label="Selected run" hidden>
+    <div class="evidence">
+      <h2 id="detail-title"></h2>
+      <p class="verdict-line" id="detail-verdict"></p>
+      <dl id="facts"></dl>
+      <h3>Artifacts</h3>
+      <div id="artifacts"></div>
+    </div>
+    <div class="logs">
+      <div class="log-bar">
+        <h3>Stored output</h3>
+        <label class="find">Find in loaded text
+          <input id="find" type="search" autocomplete="off" spellcheck="false">
+        </label>
+        <span class="find-count" id="find-count" aria-live="polite"></span>
+      </div>
+      <pre class="log" id="log" tabindex="0"></pre>
+      <p class="log-end" id="log-end"></p>
+    </div>
+  </section>
+</main>
+<footer class="foot">
+  <p>Read-only preview from a fixture bundle. Cancel and rerun are not available here.</p>
+  <p class="keys">Up and down move between runs. Escape closes the run.</p>
+</footer>
+</body>
+</html>
