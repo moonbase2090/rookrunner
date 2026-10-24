@@ -206,6 +206,9 @@ Public publishing is a separate step after the preview artifact is reviewable.
   records upstream requirements and proposed options, without selecting an
   integration or changing the accepted local-worker design.
 - Resource scheduling across multiple workers and projects.
+  The [scheduling investigation](research/resource-scheduling.md) separates
+  implemented placement and local queues from proposed shared admission,
+  capacity reservations, and fairness policies. No scheduler design is selected.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.
 
