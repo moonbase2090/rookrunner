@@ -18,6 +18,13 @@ class StoredDisplayTests(unittest.TestCase):
         self.assertNotIn("\x1b", _display_stored("\x1b[0m"))
         self.assertNotIn("\x07", _display_stored("\x07"))
 
+    def test_c1_controls_become_caret_text(self):
+        # CSI (U+009B) and other C1 bytes must use caret form, not "?".
+        self.assertEqual(_display_stored("x\x9b[2Jy\x80z\x9f"), "x^[[2Jy^@z^_")
+        self.assertNotIn("\x9b", _display_stored("\x9b"))
+        self.assertNotIn("\x80", _display_stored("\x80"))
+        self.assertNotIn("?", _display_stored("\x9b\x80\x9f"))
+
     def test_tab_lf_and_unicode_stay(self):
         text = "café\t日本語\n"
         self.assertEqual(_display_stored(text), text)

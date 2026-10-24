@@ -532,12 +532,11 @@ def _display_stored(text):
 
 def _caret_control(match):
     code = ord(match.group(0))
-    if code == 0x1B:
-        return "^["
     if code == 0x7F:
         return "^?"
-    if code < 0x20:
-        return "^" + chr(code + 64)
+    # C0 and C1 share caret form: low five bits map to ^@…^_
+    if code <= 0x1F or 0x80 <= code <= 0x9F:
+        return "^" + chr((code & 0x1F) + 0x40)
     return "?"
 
 
