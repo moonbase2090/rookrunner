@@ -1,7 +1,7 @@
 # CI dashboard design
 
-Status: proposed, 2026-10-23. Owner decision required before implementation.
-This document adds no runtime behavior, listener, API or visual selection.
+Status: proposed, updated 2026-10-24 with the accepted network and access
+direction. Runtime behavior, API and visual selection remain proposed.
 Wireframes below are design text. Future UI work must present runnable options
 before the owner chooses its visual direction.
 
@@ -14,7 +14,8 @@ An optional outbound source/PR link is navigation, not evidence of run success.
 
 ## Recorded direction and the decision being reopened
 
-The dated record is more specific than the current M3 plan's proposed header:
+The dated records establish the earlier client choice and the current access
+decision:
 
 | Record | What it establishes |
 | --- | --- |
@@ -22,14 +23,14 @@ The dated record is more specific than the current M3 plan's proposed header:
 | [Options PR #77](https://github.com/moonbase2090/rookrunner/pull/77), commit `50c6fe4` | Two socket clients: terminal and a static HTML writer. The HTML writer exits; its file cannot refresh or send controls. Neither option binds a port. |
 | [Inspect PR #78](https://github.com/moonbase2090/rookrunner/pull/78), commit `e15c1c2` | The PR explicitly records the terminal choice and removes `dashboard-html`. This is direct historical evidence of selection, not an inference from today's code. |
 | [Cancel PR #79](https://github.com/moonbase2090/rookrunner/pull/79) | Adds cancel and reconnect behavior to the terminal client. |
-| [Status page, October 9](status-page.md) | Separately accepted read-only loopback HTTP page. The worker still has no network listener. This does not authorize an interactive browser control plane. |
+| Owner decision, October 24 | The dashboard is read-only and may be reached remotely through Cloudflare Tunnel and Cloudflare Access backed by Microsoft Entra ID. Use organization work accounts, with optional group restriction. Moonbase operates the Tunnel and identity setup. No inbound ports are opened. Cancel and rerun remain deferred pending security review. |
+| [Status page, October 9](status-page.md) | A separate read-only HTTP status page. The worker still has no network listener. The October 24 dashboard access decision above applies to this design. |
 
 The requested Graphite-style comparison is inspiration for this proposal.
 The original October 6 record establishing that specific style was not located;
-it must not be presented as a verified historical web-UI decision. Owner review
-should clarify whether it means compact run lists, PR-oriented navigation,
-another interaction, or a specific visual reference. The proven choice above
-is terminal access after runnable options.
+it must not be presented as a verified historical web-UI decision. Visual
+direction remains open until the owner compares runnable options. The earlier
+selection was terminal access after runnable options.
 
 ## Implemented data and gaps
 
@@ -58,29 +59,30 @@ not be relabeled as rerunning historical inputs.
 | Option | Strength | Cost and reopened decisions |
 | --- | --- | --- |
 | Extend TUI only | Preserves the selected no-listener client model; keyboard operation fits the existing program. | Limited room for long logs and trends; text selection/search and continuous refresh need work. Does not supply browser navigation. |
-| Web only | Room for run lists, job trees, log search and history; linkable local views. | Replaces the selected terminal direction and needs a listener, browser access policy, safe rendering and write authorization. Static HTML cannot provide these controls. |
-| Web primary, retain a small TUI | Web handles inspection/history; TUI remains a compact local queue/detail/cancel surface using the same contracts. | Two clients need parity tests. Still requires explicit approval of the new listener/control boundary and an agreed limit on TUI scope. |
+| Web only | Room for run lists, job trees, log search and history; linkable views. | Replaces the selected terminal direction and needs remote access setup and safe rendering. Browser writes remain deferred. Static HTML cannot provide these controls. |
+| Web primary, retain a small TUI | Web handles inspection/history; TUI remains a compact local queue/detail/cancel surface using the same contracts. | Two clients need parity tests and an agreed limit on TUI scope. The accepted remote access direction is recorded below. |
 
 Recommend the third option for owner decision, with a read-only web phase
-before browser writes. Retain the existing TUI and plan its rendering fix;
+before any browser writes. Retain the existing TUI and plan its rendering fix;
 do not build two full competing products. Compare runnable TUI and web options
-with the same representative data before visual selection. This recommendation
-does not supersede the recorded terminal choice until approved.
+with the same representative data before visual selection. The owner has
+accepted the remote read-only access direction above. The terminal choice
+remains recorded history; the visual direction still awaits runnable
+comparison and owner selection.
 
-A web adapter would call allowlisted worker socket methods. Reusing the
-read-only status page is not permission to add POST, serve raw files, or bind
-beyond loopback. A control UI reopens M3's no-listener boundary for the dashboard,
-its prohibition on dashboard submission, and its same-OS-user access model.
-It also reopens the status page's GET/HEAD-only and restrictive content policy.
-The worker itself would continue to expose only its existing local transport.
+A web adapter would call allowlisted worker socket methods. Cloudflare Tunnel
+provides outbound connectivity for remote viewing, with Cloudflare Access
+authenticating organization work accounts through Microsoft Entra ID and an
+optional group restriction. Moonbase handles that service setup. The worker
+continues to expose only its existing local transport, and no inbound ports
+are opened. The dashboard remains read-only. Cancel and rerun stay deferred
+pending security review.
 
-Before writes, approve a browser threat model covering local authentication,
-session lifecycle, exact Host/Origin checks, DNS rebinding, CSRF, cross-origin
-requests and body limits. Loopback alone is not authentication. Commands must
-be explicit authenticated POST operations, never GET links. Escape all labels
-and log content, render terminal control bytes safely, and never render workflow
-HTML as trusted content. Keep credentials, absolute checkout paths and raw
-events out of responses. Remote transport and unrelated customers remain
+The read-only web path still needs safe rendering and bounded responses. Escape
+all labels and log content, render terminal control bytes safely, and never
+render workflow HTML as trusted content. Keep credentials, absolute checkout
+paths and raw events out of responses. Browser writes require a separate
+security review. Remote worker transport and unrelated customers remain
 separate milestones.
 
 ## Proposed views
@@ -233,17 +235,17 @@ no terminal escape codes or CRs are introduced, plus one visual capture in the
 approved clean environment at the fix's exact head. Render-only string tests
 cannot reproduce this mode mismatch. No renderer code changes in this PR.
 
-## Bounded phases and owner decisions
+## Bounded phases and resolved owner decision
 
 | Phase | Boundary and acceptance before proceeding |
 | --- | --- |
-| 0. Owner design decision | Confirm primary surface/TUI scope, Graphite reference, listener and browser-write threat model. Approve any changes to M3 constraints. This document alone does not authorize code. |
+| 0. Owner design decision | Network and read-only access direction accepted: Cloudflare Tunnel and Access with Microsoft Entra ID, organization work accounts and optional group restriction. Moonbase owns setup. Visual selection and browser writes remain open; this document alone does not authorize code. |
 | 1. Contracts and terminal repair | Specify schemas, unknown/provenance fields, grouping, health and retention policies. Deliver the isolated raw-mode fix with failing-before/passing-after PTY and clean-environment proof. |
-| 2. Read-only runnable options | Compare TUI and web using the same queued/running/failed/lost/stale examples. Owner selects visuals after running both. If web approved, prove local-only authenticated access and escaped logs; no browser writes. |
+| 2. Read-only runnable options | Compare TUI and web using the same queued/running/failed/lost/stale examples. Owner selects visuals after running both. Prove authenticated remote viewing and escaped logs; no browser writes. |
 | 3. Engine progress and inspection | Show real job/step transitions and elapsed time before completion; reconnect across paged logs without duplicates/gaps, search masked bytes across page boundaries, and preserve selection. CLI/MCP/UI agree on one recorded snapshot/outcome. |
 | 4. Controls and trends | Exercise queued/running/finish-before-cancel, unresolved cleanup, uncertain replies, duplicate reruns and missing snapshots. Show new run IDs and original input identities. Verify trends against fixed literal counts, including zero denominator and retry chains. |
 
 Each behavior change requires focused checks and clean-environment proof in
 its PR before reviewer SHIP. Only the current design-text PR is exempt from
-runtime/VM proof. Keep phases independently reviewable; remote serving and
-unrelated customers are not implicit follow-ups within these phases.
+runtime/VM proof. Keep phases independently reviewable; remote worker transport
+and unrelated customers are not implicit follow-ups within these phases.
