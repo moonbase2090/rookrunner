@@ -565,7 +565,7 @@ def _interact(board):
         pending = b""
         while not board.quit:
             sys.stdout.write("\x1b[2J\x1b[H")
-            sys.stdout.write(board.render())
+            sys.stdout.write(board.render().replace("\n", "\r\n"))
             sys.stdout.flush()
             chunk = os.read(fd, 64)
             if chunk == b"":
