@@ -44,3 +44,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Read run logs](./read-logs.md) covers the fixture text returned by `logs`.
 - [Cancel a run](./cancel-run.md) covers cancelling a queued or running fixture.
 - [List runs](./list-runs.md) covers the run list and a state filter.
+
+- [Retry a failed poll submission](./poll-retry.md) uses isolated local fixtures and the real CLI to verify explicit retry identity and current trust checks.

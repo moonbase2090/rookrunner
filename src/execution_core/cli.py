@@ -431,6 +431,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
             allow_pr_workflow=getattr(args, "allow_pr_workflow", ()) or (),
             key_dir=getattr(args, "key_dir", None),
+            retry_failed=getattr(args, "retry_failed", None),
         )
     finally:
         if isinstance(token, str):
@@ -925,6 +926,11 @@ def main():
             "cap, and image, and an optional ssh. Repeat for each worker. "
             "Omit it to keep one local socket or one --ssh-host."
         ),
+    )
+    poll.add_argument(
+        "--retry-failed",
+        metavar="KEY",
+        help="retry one failed poll submission at the current push/PR commit; current trust gates apply",
     )
     poll.add_argument(
         "--allow-untrusted",
