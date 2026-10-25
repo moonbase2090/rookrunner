@@ -788,7 +788,7 @@ class PollTests(unittest.TestCase):
         self.assertTrue(limited["stopped"])
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual([entry["run_id"] for entry in saved["submissions"]], [run_id])
-        self.assertEqual(saved.get("completed", []), [])
+        self.assertEqual(saved.get("completed", {}), {})
         self.server.post_status = 201
         retried = self.poll()
         self.assertEqual(
@@ -835,7 +835,8 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.posts(), [])
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual(saved["submissions"], [])
-        self.assertEqual(saved["completed"], [entry["key"]])
+        self.assertEqual(list(saved["completed"]), [entry["key"]])
+        self.assertEqual(saved["completed"][entry["key"]]["run_id"], run_id)
 
     def test_finished_submissions_are_pruned_without_resubmitting_an_old_tip(self):
         tip = self._tip()

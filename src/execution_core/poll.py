@@ -1120,7 +1120,10 @@ class Pass:
             else:
                 self._probe_places()
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
-            self.completed = set(self.state.get("completed", []))
+            completed = self.state.get("completed", {})
+            if isinstance(completed, list):
+                completed = {key: {} for key in completed}
+            self.completed = self.state["completed"] = completed
             if self.places is None:
                 self._expire_queued()
             else:
@@ -1157,6 +1160,10 @@ class Pass:
         entry = next(
             (row for row in self.state["submissions"] if row.get("key") == self.retry_failed), None
         )
+        retired = False
+        if entry is None and self.completed.get(self.retry_failed):
+            entry = {"key": self.retry_failed, **self.completed[self.retry_failed]}
+            retired = True
         if (
             entry is None
             or "run_id" not in entry
@@ -1164,6 +1171,9 @@ class Pass:
         ):
             raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
         if self.places is not None:
+            place = self._place_for(entry.get("host"))
+            if retired and place is not None and not place["connected"]:
+                self._classify(place, force_connect=True)
             if self._placed_caller(entry) is None:
                 raise PollError("WORKER_ERROR", "retry worker is unavailable")
         elif not self._claims_this_host(entry):
@@ -1173,7 +1183,8 @@ class Pass:
             raise PollError("INVALID_PARAMS", "only a failed run can be retried")
         self.retry_entry = entry
         self.retry_key = "poll-" + hashlib.sha256(("retry\0" + entry["key"]).encode()).hexdigest()
-        self._post_record(entry)
+        if not retired:
+            self._post_record(entry)
 
     def _retry_matches(self, event, sha):
         return (
@@ -2761,9 +2772,12 @@ class Pass:
 
     def _retire_submission(self, entry):
         key = entry["key"]
-        if key not in self.completed:
-            self.state.setdefault("completed", []).append(key)
-            self.completed.add(key)
+        retry_fields = ("run_id", "event", "status_sha", "host", "retry_base")
+        self.completed[key] = (
+            {field: entry[field] for field in retry_fields if field in entry}
+            if entry.get("event") in {"push", "pull_request"}
+            else {}
+        )
         self.state["submissions"] = [
             item for item in self.state["submissions"] if item is not entry
         ]
@@ -2957,7 +2971,7 @@ def _empty_state(repository):
         "tips": {},
         "pulls": {},
         "submissions": [],
-        "completed": [],
+        "completed": {},
         "forks": [],
         "merge_absent": [],
     }

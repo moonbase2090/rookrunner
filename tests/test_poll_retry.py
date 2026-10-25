@@ -50,12 +50,26 @@ class PollRetryTests(unittest.TestCase):
         self.assertEqual(self.host.worker.get(new_id)["state"], "queued")
         self.assertEqual(json.loads(self.host.posts()[-1]["body"])["state"], "pending")
         rows = self._saved()["submissions"]
-        self.assertEqual(rows[0]["key"], key)
-        self.assertEqual(rows[1]["retry_of"], key)
-        self.assertNotEqual(rows[1]["key"], key)
+        self.assertEqual(self._saved()["completed"][key]["run_id"], old_id)
+        self.assertEqual(rows[0]["retry_of"], key)
+        self.assertNotEqual(rows[0]["key"], key)
         self.host.poll(retry_failed=key)
         self.assertEqual(self.host.runs(), 2)
         self._finish(new_id, "succeeded", 0)
+        self.host.poll(retry_failed=key)
+        self.assertEqual(self.host.runs(), 2)
+
+    def test_a_pruned_failure_can_be_retried_after_an_ordinary_pass(self):
+        _tip, old_id, key = self._push()
+        self.host.poll()
+        saved = self._saved()
+        self.assertEqual(saved["submissions"], [])
+        self.host.poll()
+        self.assertEqual(self.host.runs(), 1)
+        result = self.host.poll(retry_failed=key)
+        self.assertEqual(self.host.runs(), 2)
+        self.assertNotEqual(result["submitted"][0]["run_id"], old_id)
+        self.assertEqual(self.host.worker.get(old_id)["state"], "failed")
         self.host.poll(retry_failed=key)
         self.assertEqual(self.host.runs(), 2)
 
@@ -140,7 +154,7 @@ class PollRetryTests(unittest.TestCase):
         self.assertEqual(self.host.runs(), 2)
         self.assertEqual(len(recovered["submitted"]), 1)
         self.assertEqual(
-            self._saved()["submissions"][1]["run_id"], recovered["submitted"][0]["run_id"]
+            self._saved()["submissions"][0]["run_id"], recovered["submitted"][0]["run_id"]
         )
 
     def test_a_trusted_failed_pull_can_run_again(self):
@@ -165,7 +179,7 @@ class PollRetryTests(unittest.TestCase):
         _tip, _old_id, key = self._push()
         second = self.host.poll(retry_failed=key)
         self._finish(second["submitted"][0]["run_id"])
-        next_key = self._saved()["submissions"][1]["key"]
+        next_key = self._saved()["submissions"][0]["key"]
         third = self.host.poll(retry_failed=next_key)
         self.assertEqual(self.host.runs(), 3)
         self.assertEqual(len(third["submitted"]), 1)
