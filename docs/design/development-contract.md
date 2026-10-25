@@ -168,8 +168,8 @@ after the container and its service containers are gone. If one is still
 present, the run is `lost`, with `cancel_requested` true, error kind
 `WORKER_INTERRUPTED`, and cleanup `unresolved`. A new workflow submission
 then returns `WORKER_NOT_READY` and a queued workflow job is not started.
-Development fixtures still run, and `worker.describe` `ready` stays the
-scheduler flag. That block is in memory and ends when this process stops.
+Development fixtures still run. This cleanup block does not itself change
+`worker.describe` readiness. That block is in memory and ends when this process stops.
 Restart removes a container recorded for the attempt, service containers
 labeled for it, and their network, or records the attempt `lost` with
 cleanup `unresolved` and `cancel_requested` false. The same submission key
@@ -262,8 +262,14 @@ A scheduler failure makes `ready=false`
 with a `readiness_error`; new submissions then return `WORKER_NOT_READY`.
 Existing idempotent submissions can still retrieve their original record.
 Inspect records and restart to reconcile interrupted attempts before submitting
-new work. This readiness check describes the synthetic backend only; owned-engine/container
-doctor diagnostics belong to M2.
+new work. When `--runner-image` is configured, startup and each
+`worker.describe` also inspect that pin in the worker's Docker context without
+pulling. A missing image, unavailable Docker engine/client, unresolved pin, or
+inspection timeout makes `ready=false` with a `readiness_error`. Each inspection
+is bounded to 2 seconds. A later describe can report ready after the image or
+engine recovers, provided the scheduler is healthy. Without `--runner-image`,
+readiness does not probe Docker. This check does not execute a job or prove that
+a workflow will succeed; submission and run results retain their existing rules.
 
 The fixture object permits only:
 

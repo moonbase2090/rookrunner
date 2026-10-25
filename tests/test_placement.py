@@ -93,6 +93,14 @@ class PlacementTests(unittest.TestCase):
         ssh = bindir / "ssh"
         ssh.write_text(SSH)
         ssh.chmod(0o755)
+        docker = bindir / "docker"
+        docker.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "if sys.argv[1:3] != ['image', 'inspect']: sys.exit(2)\n"
+            f"print(json.dumps({{'Id': {X86!r}, 'RepoDigests': [], 'Os': 'linux', 'Architecture': 'amd64'}}))\n"
+        )
+        docker.chmod(0o755)
         os.environ["PATH"] = str(bindir) + os.pathsep + self.old_path
         self.remote = self.root / "origin.git"
         subprocess.run(
@@ -394,6 +402,14 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(self._runs(arm), 0)
         self.assertEqual(self._runs(x86), 1)
         self.assertIn({"reason": "image", "host": "arm"}, result["skipped"])
+
+    def test_a_missing_runner_image_is_skipped_before_submission(self):
+        worker = self._worker("fixture", runner_image=X86)
+        (self.root / "bin" / "docker").write_text("#!/bin/sh\nexit 1\n")
+        result = self._poll([self._place("fixture", worker)], image=None)
+        self.assertEqual(result["submitted"], [])
+        self.assertEqual(self._runs(worker), 0)
+        self.assertIn({"reason": "not_ready", "host": "fixture"}, result["skipped"])
 
     def test_a_name_at_digest_matches_the_place_image(self):
         worker = self._worker("mac")
