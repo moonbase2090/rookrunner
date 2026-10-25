@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, UTC
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from execution_core.disk import (
     DEFAULT_DISK_BUDGET,
     FINISHED_RUN_FOLDER_COUNT,
     FINISHED_RUN_FOLDER_SECONDS,
+    StateUsage,
     usage,
 )
 from execution_core.protocol import canonical
@@ -85,6 +87,27 @@ class DiskUsageTests(unittest.TestCase):
             measured = usage(root)
             self.assertLess(measured, 50000)
             self.assertGreaterEqual(measured, link.lstat().st_size + dir_link.lstat().st_size)
+
+    def test_state_usage_tracks_additions_removals_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "snapshots" / "one"
+            payload.mkdir(parents=True)
+            (payload / "data").write_bytes(b"snapshot bytes")
+            tracked.add(payload)
+            self.assertEqual(tracked.total, usage(root))
+
+            (payload / "data").write_bytes(b"larger snapshot bytes")
+            tracked.sync_path(payload)
+            self.assertEqual(tracked.total, usage(root))
+
+            tracked.remove(payload)
+            shutil.rmtree(payload)
+            tracked.sync_parent_directories(payload)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertEqual(StateUsage(root).total, usage(root))
 
     def test_budget_rejects_a_bool_and_a_negative_count(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -158,11 +181,52 @@ class DiskBudgetTests(unittest.TestCase):
             worker.execute_queue = lambda: worker.stop.wait()
             worker.start()
             try:
-                with patch("execution_core.worker.usage", side_effect=OSError("stat failed")):
+                with patch.object(
+                    worker.state_usage,
+                    "sync_files",
+                    side_effect=OSError("stat failed"),
+                ):
                     refused = _submit(worker, "stat")
                 self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
                 self.assertNotIn("stat failed", json.dumps(refused))
                 self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
+            finally:
+                worker.close()
+
+    def test_fixture_submit_uses_tracked_usage_after_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                with patch("execution_core.worker.usage", side_effect=OSError("full walk")):
+                    accepted = _submit(worker, "tracked-submit")
+                self.assertEqual(accepted["result"]["state"], "queued")
+                self.assertEqual(worker.state_usage.total, usage(state))
+            finally:
+                worker.close()
+
+    def test_workflow_submit_avoids_a_state_tree_walk_after_startup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, state = root / "repo", root / "state"
+            self._git_workflow(repo)
+            worker = Worker(repo, state)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            measure = usage
+
+            def reject_state_walk(path):
+                if Path(path) == state:
+                    raise OSError("full state walk")
+                return measure(path)
+
+            try:
+                with patch("execution_core.worker.usage", side_effect=reject_state_walk):
+                    accepted = self._workflow(worker, "workflow-tracked")
+                self.assertEqual(accepted["result"]["state"], "queued")
+                self.assertEqual(worker.state_usage.total, usage(state))
             finally:
                 worker.close()
 
@@ -193,6 +257,7 @@ class DiskBudgetTests(unittest.TestCase):
                 kept.parent.mkdir(mode=0o700)
                 os.chmod(kept.parent, 0o700)
                 kept.write_bytes(b"keep")
+                worker.state_usage.refresh()
                 accepted = self._workflow(worker, "wf-a")
                 self.assertEqual(accepted["result"]["state"], "queued")
                 snapshot_id = accepted["result"]["input"]["snapshot_id"]
@@ -702,6 +767,7 @@ class DiskBudgetTests(unittest.TestCase):
                 before = usage(state)
                 (home / "blob").write_bytes(b"h" * 8192)
                 self.assertGreaterEqual(usage(state) - before, 8192)
+                worker.state_usage.refresh()
                 worker.disk_budget = before
                 refused = self._workflow(worker, "wf-b")
                 self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
@@ -789,6 +855,7 @@ class DiskBudgetTests(unittest.TestCase):
                 evidence = state / "snapshots" / "kept-snap"
                 evidence.parent.mkdir(mode=0o700, exist_ok=True)
                 evidence.write_bytes(b"evidence")
+                worker.state_usage.refresh()
                 worker.disk_budget = usage(state) - 1
                 nxt = _submit(worker, "next")
                 self.assertNotIn("error", nxt)
@@ -839,6 +906,7 @@ class DiskBudgetTests(unittest.TestCase):
                 )
                 with worker.db:
                     worker.save(record)
+                worker.state_usage.refresh()
                 worker.disk_budget = usage(state) - 1
                 refused = _submit(worker, "next")
                 self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
@@ -1072,6 +1140,31 @@ class FinishedFolderTests(unittest.TestCase):
                 if worker.db is not None:
                     worker.close()
 
+    def test_usage_total_matches_after_prune_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            name, path = _snapshot(state, b"old snapshot")
+            worker.state_usage.add(path)
+            _store(
+                worker,
+                "old-usage",
+                "succeeded",
+                name,
+                _stamp(FINISHED_RUN_FOLDER_SECONDS + 1),
+                "confirmed_no_external_resources",
+            )
+            worker._sync_state_files()
+            worker._prune_finished_run_folders(0)
+            self.assertFalse(path.exists())
+            self.assertEqual(worker.state_usage.total, usage(state))
+            worker.close()
+
+            restarted, _ = self._worker(directory)
+            try:
+                self.assertEqual(restarted.state_usage.total, usage(state))
+            finally:
+                restarted.close()
+
     def test_an_unposted_workflow_folder_past_ninety_days_is_kept_until_its_status_is_posted(self):
         limit = 90 * 24 * 60 * 60
         with tempfile.TemporaryDirectory() as directory:
@@ -1204,6 +1297,7 @@ class FinishedFolderTests(unittest.TestCase):
                     "confirmed_no_external_resources",
                 )
                 _store(worker, "running", "running", run_name, None, "not_started")
+                worker.state_usage.refresh()
                 worker.disk_budget = usage(state) - 1000
                 self.assertFalse(worker._over_budget(0))
                 self.assertFalse(old_path.exists())
