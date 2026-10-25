@@ -175,7 +175,9 @@ class TerminalDashboardTests(unittest.TestCase):
                 "backend": "development",
                 "fixture": {
                     "exit_code": 0,
-                    "output": "keep-café\r\n\x1b[2Jbare\rline\x07\x1b[0m\n",
+                    # Include C1 CSI (U+009B) and PAD (U+0080) so caret-form
+                    # rendering is exercised on a real raw detail frame.
+                    "output": "keep-café\r\n\x1b[2Jbare\rline\x07\x1b[0m\x9b[H\x80\n",
                 },
             },
         )
@@ -197,9 +199,11 @@ class TerminalDashboardTests(unittest.TestCase):
             self.assertNotRegex(body, rb"(?<!\r)\n")
             self.assertNotIn(b"\r\r", body)
             self.assertIn("keep-café\r\n".encode(), body)
-            self.assertIn(b"^[[2Jbare\r\nline^G^[[0m\r\n", body)
-            # Framework clear/home appear once per frame; stored ESC must not.
+            self.assertIn(b"^[[2Jbare\r\nline^G^[[0m^[[H^@\r\n", body)
+            # Framework clear/home appear once per frame; stored ESC/C1 must not.
             self.assertEqual(body.count(b"\x1b"), 0)
+            self.assertNotIn(bytes([0x9B]), body)
+            self.assertNotIn(bytes([0x80]), body)
             os.write(master, b"q")
             self.read_until(master, b"\x1b[?1000l\x1b[?1006l")
             process.wait(timeout=5)

@@ -535,9 +535,8 @@ def _caret_control(match):
     if code == 0x7F:
         return "^?"
     # C0 and C1 share caret form: low five bits map to ^@…^_
-    if code <= 0x1F or 0x80 <= code <= 0x9F:
-        return "^" + chr((code & 0x1F) + 0x40)
-    return "?"
+    # (_STORED_CONTROL only matches those ranges, so no "?" fallback.)
+    return "^" + chr((code & 0x1F) + 0x40)
 
 
 def _nth(rows, line, name):
