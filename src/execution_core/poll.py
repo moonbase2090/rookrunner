@@ -2264,8 +2264,11 @@ class Pass:
     def _post_context(self, context, run_id, sha, state, description, stored, describe=True):
         """Post one status that has no worker run. Return ``(posted, check_id)``."""
 
-        described = self.caller("worker.describe", {})
-        root = self._credential_repository(described)
+        if self.places is not None:
+            root = str(self.clone)
+        else:
+            described = self.caller("worker.describe", {})
+            root = self._credential_repository(described)
         if self.app_key:
             check_run_id = None
             if isinstance(stored, dict) and is_integer(stored.get("check_run_id")):

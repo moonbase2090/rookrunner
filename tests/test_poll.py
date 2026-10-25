@@ -1569,6 +1569,35 @@ class PollTests(unittest.TestCase):
         )
         self.assertFalse((self.clone / "feature-9.txt").exists())
 
+    def test_a_refused_pull_posts_without_a_bound_placement_caller(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate, association="NONE")
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        result = poll_once(
+            repository="acme/demo",
+            clone=self.clone,
+            jobs=[JOB],
+            image=IMAGE,
+            credential_file=self.credential,
+            api_base=self.base,
+            state=self.state,
+            caller=None,
+            places=[self._place("fixture", self.worker, self.caller, image=OTHER)],
+        )
+        self.assertEqual(self.runs(), 0)
+        self.assertEqual(result["submitted"], [])
+        self.assert_trust_posts(
+            head,
+            [("failure", "refused: untrusted code: commit author cannot write to the repository")],
+        )
+        self.assertIn({"reason": "untrusted", "number": 9}, result["skipped"])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["trust_statuses"]["9"]["state"], "failure")
+        self.assertEqual(saved["trust_statuses"]["9"]["head"], head)
+
     def _merge_commit(self, first, second, message):
         tree = _git(self.seed, "rev-parse", f"{first}^{{tree}}").stdout.strip()
         return _git(
