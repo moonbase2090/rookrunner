@@ -443,3 +443,34 @@ per repository. Linux hosts still have no poll timer.
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
+
+## Explicit retry of a failed poll submission
+
+`poll --retry-failed KEY` requests one successor to a failed push or
+pull-request submission recorded in that poll state. Obtain `KEY` from the
+failed worker run's `submission_key`. Keep the same poll state and repository.
+The command still performs a normal poll pass. The requested source must be a
+current push tip or open pull request at the same tested commit and configured
+workflow/job. Otherwise `skipped` includes `retry_not_submitted` and no retry is
+created. Historical commits and schedule submissions are not supported by this
+flag.
+
+Only `failed` is eligible. `succeeded`, queued, running, lost, and cancelled
+runs are refused. The worker holding the failed run must be reachable to verify
+its state. Current commit permissions, fork checks, workflow-edit authorization,
+and merge-parent checks run again. Repeat any explicit trust/workflow override
+needed for this pass; an earlier override is not inherited.
+
+The successor uses a deterministic new submission key derived from the failed
+key. The old run and submission remain intact. The new poll entry stores
+`retry_of` and `retry_base`. Repeating the same flag resumes that one successor,
+including after a lost submit reply, and never creates another run because the
+successor subsequently failed or succeeded. To retry a failed successor, name
+that successor's key explicitly.
+
+The retry captures the same source commit with a freshly evaluated event.
+A push retry treats changed paths as unavailable so an empty diff against the
+already-polled tip does not silently drop the requested job. Current event and
+workflow filters still apply. This is not a replay of retained event input or a
+browser rerun operation. Success still requires terminal `succeeded` and
+`exit_code=0` for the identified input snapshot.

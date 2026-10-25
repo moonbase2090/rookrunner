@@ -1043,6 +1043,7 @@ class Pass:
         allow_untrusted=(),
         allow_pr_workflow=(),
         key_dir=None,
+        retry_failed=None,
     ):
         self.repository = _repository_name(repository)
         self.clone = Path(clone)
@@ -1059,6 +1060,10 @@ class Pass:
         self.ssh_host = ssh_host
         self.unplaced = False
         self.places = places
+        self.retry_failed = retry_failed
+        self.retry_entry = None
+        self.retry_key = None
+        self.retry_applied = False
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
         self.hold_branches = False
@@ -1121,6 +1126,7 @@ class Pass:
                 self._note_unknown_hosts()
                 self._connect_claimed()
                 self._expire_placed()
+            self._prepare_retry()
             self._branches()
             self._pulls()
             self._schedules()
@@ -1129,11 +1135,64 @@ class Pass:
             else:
                 self._post_placed()
             self.result["stopped"] = self.budget.stopped
+            if self.retry_entry is not None and not self.retry_applied:
+                self.result["skipped"].append(
+                    {"reason": "retry_not_submitted", "key": self.retry_failed}
+                )
             self._record_polls()
             _save_state(self.state_dir / "poll.json", self.state)
             return self.result
         finally:
             self._unlock()
+
+    def _prepare_retry(self):
+        if self.retry_failed is None:
+            return
+        if (
+            not isinstance(self.retry_failed, str)
+            or re.fullmatch(r"poll-[0-9a-f]{64}", self.retry_failed) is None
+        ):
+            raise PollError("INVALID_PARAMS", "retry key must be a poll submission key")
+        entry = next(
+            (row for row in self.state["submissions"] if row.get("key") == self.retry_failed), None
+        )
+        if (
+            entry is None
+            or "run_id" not in entry
+            or entry.get("event") not in {"push", "pull_request"}
+        ):
+            raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
+        if self.places is not None:
+            if self._placed_caller(entry) is None:
+                raise PollError("WORKER_ERROR", "retry worker is unavailable")
+        elif not self._claims_this_host(entry):
+            raise PollError("INVALID_PARAMS", "retry key belongs to another worker")
+        record = self.caller("run.get", {"run_id": entry["run_id"]})
+        if record.get("state") != "failed":
+            raise PollError("INVALID_PARAMS", "only a failed run can be retried")
+        self.retry_entry = entry
+        self.retry_key = "poll-" + hashlib.sha256(("retry\0" + entry["key"]).encode()).hexdigest()
+        self._post_record(entry)
+
+    def _retry_matches(self, event, sha):
+        return (
+            self.retry_entry is not None
+            and self.retry_entry["event"] == event
+            and self.retry_entry["status_sha"] == sha
+        )
+
+    def _submission_key(self, base):
+        entry = self.retry_entry
+        if entry is None or base != entry.get("retry_base", entry["key"]):
+            return base
+        self.retry_applied = True
+        return self.retry_key
+
+    def _retry_metadata(self, key):
+        entry = self.retry_entry
+        if entry is None or key != self.retry_key:
+            return {}
+        return {"retry_of": entry["key"], "retry_base": entry.get("retry_base", entry["key"])}
 
     def _lock(self):
         path = self.state_dir / "poll.lock"
@@ -1594,7 +1653,12 @@ class Pass:
 
         if self.budget.stopped:
             return None
-        listed = _get_json(self.api_base, path, self.state["etags"].get(kind), self.list_token)
+        listed = _get_json(
+            self.api_base,
+            path,
+            None if self.retry_entry is not None else self.state["etags"].get(kind),
+            self.list_token,
+        )
         self.budget.observe(listed["remaining"])
         if listed.get("exhausted") or (listed["modified"] and self.budget.stopped):
             self.budget.stopped = True
@@ -1826,7 +1890,7 @@ class Pass:
 
     def _push(self, ref, sha):
         previous = self.state["tips"].get(ref)
-        if previous == sha:
+        if previous == sha and not self._retry_matches("push", sha):
             return True
         fetched = _fetch_sha(self.clone, ref)
         if fetched != sha:
@@ -1865,7 +1929,7 @@ class Pass:
             event,
             None,
             changed,
-            previous is None,
+            previous is None or self._retry_matches("push", sha),
             override=reason,
         ):
             return False
@@ -1912,7 +1976,12 @@ class Pass:
             self.result["warnings"].append(self._warning(number, head_sha, reason, True))
             override = reason
         seen = self.state["pulls"].get(str(number))
-        if isinstance(seen, dict) and seen.get("head") == head_sha and seen.get("base") == base_sha:
+        if (
+            isinstance(seen, dict)
+            and seen.get("head") == head_sha
+            and seen.get("base") == base_sha
+            and not self._retry_matches("pull_request", head_sha)
+        ):
             return self._seen_pull(number, base_sha, head_sha, item, override, seen)
         ref = f"refs/pull/{number}/merge"
         merge = self._fetch_pull_merge(number, base_sha, head_sha, base_ref)
@@ -2379,7 +2448,9 @@ class Pass:
             )
         jobs = self.jobs if only is None else [item for item in self.jobs if item[0] == only]
         for workflow, job_id in jobs:
-            key = submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            key = self._submission_key(
+                submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            )
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2424,6 +2495,7 @@ class Pass:
             if claimed is None and self.ssh_host is not None:
                 claimed = {
                     "key": key,
+                    **self._retry_metadata(key),
                     "host": self.ssh_host,
                     "event": event_name,
                     "tested_commit": tested,
@@ -2463,6 +2535,7 @@ class Pass:
             if claimed is None:
                 claimed = {
                     "key": key,
+                    **self._retry_metadata(key),
                     "run_id": submitted["run_id"],
                     "event": event_name,
                     "tested_commit": tested,
@@ -2503,7 +2576,9 @@ class Pass:
 
         jobs = self.jobs if only is None else [item for item in self.jobs if item[0] == only]
         for workflow, job_id in jobs:
-            key = submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            key = self._submission_key(
+                submission_key(self.repository, event_name, tested, workflow, job_id, tick)
+            )
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2550,6 +2625,7 @@ class Pass:
                     continue
                 claimed = {
                     "key": key,
+                    **self._retry_metadata(key),
                     "host": place["name"],
                     "event": event_name,
                     "tested_commit": tested,
@@ -2916,6 +2992,7 @@ def poll_once(
     allow_untrusted=(),
     allow_pr_workflow=(),
     key_dir=None,
+    retry_failed=None,
 ):
     """Run one pass and return its summary. The caller talks to the worker."""
 
@@ -2938,6 +3015,7 @@ def poll_once(
         allow_untrusted=allow_untrusted,
         allow_pr_workflow=allow_pr_workflow,
         key_dir=key_dir,
+        retry_failed=retry_failed,
     ).run()
 
 
