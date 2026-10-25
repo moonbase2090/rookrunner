@@ -774,6 +774,54 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.submits[0]["event"]["before"], tip)
         self.assertEqual(self.submits[0]["event"]["after"], new)
 
+    def test_adjacent_terminal_runs_are_both_posted_locally(self):
+        self._assert_adjacent_terminal_posts(placed=False)
+
+    def test_adjacent_terminal_runs_are_both_posted_on_their_place(self):
+        self._assert_adjacent_terminal_posts(placed=True)
+
+    def _assert_adjacent_terminal_posts(self, *, placed):
+        self._write(
+            WORKFLOW + "\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo lint\n"
+        )
+        _git(self.seed, "push", "origin", "main")
+        self.server.branches = [{"name": "main", "commit": {"sha": self._tip()}}]
+        worker = self._place_worker("adjacent") if placed else self.worker
+        extra = {}
+        if placed:
+            place = self._place("adjacent", worker, self._bound(worker, []))
+            place["cap"] = 2
+            extra["places"] = [place]
+        jobs = [JOB, (JOB[0], "lint")]
+        first = self.poll(jobs=jobs, **extra)
+        self.assertEqual(len(first["submitted"]), 2)
+        left, right = [entry["run_id"] for entry in first["submitted"]]
+        for run_id in (left, right):
+            record = worker.get(run_id)
+            record.update(state="failed", exit_code=1)
+            with worker.guard, worker.db:
+                worker.save(record)
+        self.server.requests.clear()
+        # Each pass receives fresh placement dictionaries, just like CLI invocations.
+        if placed:
+            place = self._place("adjacent", worker, self._bound(worker, []))
+            place["cap"] = 2
+            extra["places"] = [place]
+        finished = self.poll(jobs=jobs, **extra)
+        self.assertEqual(
+            finished["statuses"],
+            [
+                {"run_id": left, "state": "failure", "action": "posted"},
+                {"run_id": right, "state": "failure", "action": "posted"},
+            ],
+        )
+        self.assertEqual(
+            [json.loads(row["body"])["state"] for row in self.posts()], ["failure", "failure"]
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 2)
+
     def test_a_rate_limited_terminal_post_keeps_the_submission_for_retry(self):
         tip = self._tip()
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]

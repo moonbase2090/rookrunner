@@ -1375,7 +1375,7 @@ class Pass:
                 self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
 
     def _post_placed(self):
-        for entry in self.state["submissions"]:
+        for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
             if self._placed_caller(entry) is None or "run_id" not in entry:
@@ -2762,7 +2762,7 @@ class Pass:
                 self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
 
     def _post_terminal(self):
-        for entry in self.state["submissions"]:
+        for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
