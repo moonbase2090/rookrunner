@@ -40,7 +40,11 @@ class StatusError(Exception):
         self.retryable = retryable
 
 
-def github_state(run_state, exit_code):
+def is_setup_failure(error):
+    return isinstance(error, dict) and error.get("kind") == "SETUP_FAILED"
+
+
+def github_state(run_state, exit_code, error=None):
     """Map a run to one commit-status state. Only succeeded with exit 0 is success."""
 
     if run_state in {"queued", "running"}:
@@ -48,7 +52,7 @@ def github_state(run_state, exit_code):
     if run_state == "succeeded" and exit_code == 0:
         return "success"
     if run_state == "failed":
-        return "failure"
+        return "error" if is_setup_failure(error) else "failure"
     return "error"
 
 

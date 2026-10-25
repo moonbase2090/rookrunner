@@ -156,7 +156,13 @@ from .socket_lock import (
     pin_docker_context,
     resolve_docker_context,
 )
-from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
+from .status import (
+    DEFAULT_API_BASE,
+    MAX_CONTEXT_LENGTH,
+    TERMINAL_STATUS,
+    github_state,
+    is_setup_failure,
+)
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
@@ -2611,14 +2617,17 @@ class Worker:
             raise Fault("STATUS_REFUSED", "snapshot includes files")
         if manifest["base_commit"] != tested:
             raise Fault("STATUS_REFUSED", "base_commit does not equal the tested commit")
-        state = github_state(record["state"], record["exit_code"])
-        check_status, check_conclusion = check_mapping(record["state"], record["exit_code"])
+        error = record.get("error")
+        state = github_state(record["state"], record["exit_code"], error)
+        check_status, check_conclusion = check_mapping(record["state"], record["exit_code"], error)
         posted = p.get("record")
         if posted is None and not recording_check:
             if p.get("checks"):
                 return self._check_decision(
-                    record, context, status_sha, state, check_status, check_conclusion
+                    record, context, status_sha, state, check_status, check_conclusion, error
                 )
+            if is_setup_failure(error):
+                return {"action": "retry", "state": state}
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):
@@ -2687,16 +2696,19 @@ class Worker:
             "success",
             "failure",
             "cancelled",
+            "neutral",
         }:
             invalid("recorded check does not match the run")
 
-    def _check_decision(self, record, context, status_sha, state, check_status, check_conclusion):
+    def _check_decision(
+        self, record, context, status_sha, state, check_status, check_conclusion, error
+    ):
         row = self.db.execute(
             "SELECT check_run_id, conclusion FROM check_posts WHERE run_id=? AND context=? AND sha=?",
             (record["run_id"], context, status_sha),
         ).fetchone()
         if (
-            check_conclusion in {"success", "failure", "cancelled"}
+            check_conclusion in {"success", "failure", "cancelled", "neutral"}
             and row is not None
             and row["conclusion"] == check_conclusion
         ):
@@ -2705,7 +2717,7 @@ class Worker:
             "action": "post",
             "state": state,
             "check_status": check_status,
-            "check_summary": check_summary(record["state"], record["exit_code"]),
+            "check_summary": check_summary(record["state"], record["exit_code"], error),
         }
         if check_conclusion is not None:
             result["check_conclusion"] = check_conclusion

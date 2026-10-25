@@ -74,7 +74,9 @@ def _snapshot(state, *, dirty=False, included=None, base=COMMIT):
     return snapshot_id, hashlib.sha256(encoded).hexdigest()
 
 
-def _record(worker, snapshot_id, digest, *, state="succeeded", exit_code=0, kind="workflow_job"):
+def _record(
+    worker, snapshot_id, digest, *, state="succeeded", exit_code=0, kind="workflow_job", error=None
+):
     run_id = str(uuid.uuid4())
     record = {
         "run_id": run_id,
@@ -104,7 +106,7 @@ def _record(worker, snapshot_id, digest, *, state="succeeded", exit_code=0, kind
         "finished_at": "2026-10-04T00:00:02.000000+00:00",
         "attempt_id": str(uuid.uuid4()),
         "cancel_requested": False,
-        "error": None,
+        "error": error,
         "cleanup": "confirmed_no_external_resources",
     }
     with worker.guard, worker.db:
@@ -228,6 +230,50 @@ class WorkerStatusTests(unittest.TestCase):
             self.worker, cancelled_id, cancelled_digest, state="cancelled", exit_code=None
         )
         self.assertEqual(self._reply(_params(cancelled["run_id"]))["result"]["state"], "error")
+
+    def test_setup_failure_is_neutral_but_a_workflow_failure_stays_failure(self):
+        snapshot_id, digest = _snapshot(self.state)
+        setup = _record(
+            self.worker,
+            snapshot_id,
+            digest,
+            state="failed",
+            exit_code=None,
+            error={"kind": "SETUP_FAILED", "message": "image digest will not resolve"},
+        )
+        self.assertEqual(
+            self._reply(_params(setup["run_id"]))["result"],
+            {"action": "retry", "state": "error"},
+        )
+        setup_result = self._reply({**_params(setup["run_id"]), "checks": True})["result"]
+        self.assertEqual(
+            setup_result,
+            {
+                "action": "post",
+                "state": "error",
+                "check_status": "completed",
+                "check_summary": "setup error",
+                "check_conclusion": "neutral",
+            },
+        )
+        posted = _params(setup["run_id"], record="error")
+        posted.update(
+            check_run_id=424244,
+            check_status="completed",
+            check_conclusion="neutral",
+        )
+        self.assertEqual(
+            self._reply(posted)["result"],
+            {"action": "recorded", "state": "error"},
+        )
+        again = self._reply({**_params(setup["run_id"]), "checks": True})["result"]
+        self.assertEqual(again, {"action": "skip", "state": "error"})
+
+        failed_id, failed_digest = _snapshot(self.state)
+        failed = _record(self.worker, failed_id, failed_digest, state="failed", exit_code=1)
+        failed_result = self._reply({**_params(failed["run_id"]), "checks": True})["result"]
+        self.assertEqual(failed_result["state"], "failure")
+        self.assertEqual(failed_result["check_conclusion"], "failure")
 
     def test_recorded_state_must_match_the_run(self):
         snapshot_id, digest = _snapshot(self.state)

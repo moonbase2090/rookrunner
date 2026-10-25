@@ -303,6 +303,7 @@ class CliCheckTests(unittest.TestCase):
             "error": None,
             "cleanup": "confirmed_no_external_resources",
         }
+        record["error"] = record_kwargs.get("error")
         record["submission_key"] = record["run_id"]
         with sqlite3.connect(self.state / "runs.sqlite3", timeout=5) as connection:
             connection.execute(
@@ -441,6 +442,28 @@ class CliCheckTests(unittest.TestCase):
         self.assertEqual(stored_id, (CHECK_ID, "completed", "success"))
         validate_response("run.status", json.loads(result.stdout))
         self._assert_secret_absent(result, jwt)
+
+    def test_setup_failure_posts_a_neutral_check_without_failed_status(self):
+        run = self._insert(
+            state="failed",
+            exit_code=None,
+            error={"kind": "SETUP_FAILED", "message": "image digest will not resolve"},
+        )
+        result = self._cli(run["run_id"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        check = json.loads(self.server.requests[1]["body"])
+        self.assertEqual(check["status"], "completed")
+        self.assertEqual(check["conclusion"], "neutral")
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            recorded_check = connection.execute(
+                "SELECT check_run_id, status, conclusion FROM check_posts"
+            ).fetchone()
+        self.assertEqual(recorded_check, (CHECK_ID, "completed", "neutral"))
+        self.assertEqual(len(self.server.requests), 2)
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            recorded_status = connection.execute("SELECT state FROM status_posts").fetchone()
+        self.assertIsNone(recorded_status)
+        validate_response("run.status", json.loads(result.stdout))
 
     def test_a_queued_check_omits_conclusion_and_uses_the_clock(self):
         moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)

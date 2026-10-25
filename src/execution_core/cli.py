@@ -521,8 +521,11 @@ def report_status(args):
     if decision["action"] == "skip":
         print(canonical(reply))
         return
+    if decision["action"] == "retry":
+        print(canonical(reply))
+        return
     if decision["action"] != "post":
-        raise ValueError("worker status decision was not post or skip")
+        raise ValueError("worker status decision was not post, skip, or retry")
     described = call(args.state, "worker.describe", {})
     if "error" in described:
         print(canonical(described))
@@ -563,7 +566,10 @@ def _report_app_status(args, decision, repository_root):
             check_summary_text=decision["check_summary"],
             check_run_id=decision.get("check_run_id"),
             status_state=decision["state"],
-            post_status_request=decision.get("status_recorded") is not True,
+            post_status_request=(
+                decision.get("status_recorded") is not True
+                and decision.get("check_conclusion") != "neutral"
+            ),
             app_key=args.app_key,
             state_dir=args.state,
             repository_root=repository_root,
