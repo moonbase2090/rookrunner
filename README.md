@@ -165,6 +165,12 @@ Successful submission only means acceptance. Stop the worker with Ctrl-C.
 State remains on disk for restart. It contains synthetic fixture input and output;
 do not place credentials in fixtures or commit state directories.
 
+Worker socket requests wait up to 30 seconds by default. Set
+`ROOKRUNNER_WORKER_TIMEOUT` to a number of seconds greater than 0 and no more
+than 600 to change that limit. An invalid value uses the 30-second default.
+This controls how long a client waits for a worker response; it does not change
+run outcomes or the success rule.
+
 Install the pinned development-only tools and run contract/integration checks
 (requires `uv`; the worker itself still has no third-party runtime dependencies):
 
