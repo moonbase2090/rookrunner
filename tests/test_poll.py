@@ -39,6 +39,10 @@ from execution_core.worker import Worker
 IMAGE = "sha256:" + "cd" * 32
 OTHER = "sha256:" + "ab" * 32
 TOKEN = "token-ns42-secret-value"
+APP_CLIENT = "Iv1.fixtureclient"
+APP_INSTALLATION = "424242"
+APP_TOKEN = "ghs_fixture_installation_token"
+APP_CHECK_ID = 901
 WORKFLOW = """\
 name: check
 on:
@@ -224,17 +228,32 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, b"", None, remaining)
 
     def do_POST(self):
+        self._accept_write("POST")
+
+    def do_PATCH(self):
+        self._accept_write("PATCH")
+
+    def _accept_write(self, method):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         self.server.requests.append(
             {
-                "method": "POST",
+                "method": method,
                 "path": self.path,
                 "authorization": self.headers.get("Authorization"),
                 "body": body,
             }
         )
-        self._send(201, b"{}", None)
+        if self.path.endswith("/access_tokens"):
+            code = 201
+            response = json.dumps({"token": APP_TOKEN}).encode()
+        elif "/check-runs" in self.path:
+            code = 201 if method == "POST" else 200
+            response = json.dumps({"id": APP_CHECK_ID}).encode()
+        else:
+            code = 201
+            response = b"{}"
+        self._send(code, response, None)
 
     def _send(self, code, body, etag, remaining=None):
         if remaining is None:
@@ -676,6 +695,50 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual(self.posts(), [])
         self.assertEqual(self.runs(), 2)
+
+    def test_a_failed_worker_check_text_reaches_the_check_run(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+
+        key_dir = (self.root / "app-key").resolve()
+        key_dir.mkdir(mode=0o700)
+        key_path = key_dir / "private-key.pem"
+        subprocess.run(
+            ["openssl", "genrsa", "-out", str(key_path), "2048"],
+            check=True,
+            capture_output=True,
+        )
+        os.chmod(key_path, 0o600)
+        (key_dir / "client-id").write_text(APP_CLIENT + "\n")
+        os.chmod(key_dir / "client-id", 0o600)
+        (key_dir / "installation-id").write_text(APP_INSTALLATION + "\n")
+        os.chmod(key_dir / "installation-id", 0o600)
+
+        self.credential = None
+        first = self.poll(app_key=str(key_path), key_dir=str(key_dir))
+        self.assertEqual(len(first["submitted"]), 1)
+        run_id = first["submitted"][0]["run_id"]
+
+        record = self.worker.get(run_id)
+        record["state"] = "failed"
+        record["exit_code"] = 1
+        log = "failure output: €\n".encode()
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+            self.worker.db.execute("UPDATE runs SET log=? WHERE id=?", (log, run_id))
+
+        self.server.requests.clear()
+        second = self.poll(app_key=str(key_path), key_dir=str(key_dir))
+
+        self.assertEqual(second["statuses"][0]["state"], "failure")
+        updates = [
+            request
+            for request in self.server.requests
+            if request["method"] == "PATCH" and "/check-runs/" in request["path"]
+        ]
+        self.assertEqual(len(updates), 1)
+        check = json.loads(updates[0]["body"])
+        self.assertEqual(check["output"]["text"], "failure output: €\n")
 
     def test_a_newer_push_keeps_the_older_run_and_supplies_the_diff(self):
         tip = self._tip()
