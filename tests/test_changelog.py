@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -83,14 +83,21 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_11_is_the_current_version_and_unreleased_is_empty(self):
-        self.assertIn("The current package version is 0.1.11.", TEXT)
-        self.assertIn("## [0.1.11] - 2026-10-19", TEXT)
-        section = TEXT.split("## [0.1.11] - 2026-10-19", 1)[1].split("## [0.1.10]", 1)[0]
+    def test_0_1_12_is_the_current_version_and_unreleased_is_empty(self):
+        self.assertIn("The current package version is 0.1.12.", TEXT)
+        self.assertIn("## [0.1.12] - 2026-10-26", TEXT)
+        section = TEXT.split("## [0.1.12] - 2026-10-26", 1)[1].split("## [0.1.11]", 1)[0]
         prose = " ".join(section.split())
-        self.assertIn("The package version is 0.1.11.", prose)
+        self.assertIn("The package version is 0.1.12.", prose)
         self.assertIn("This change does not create a tag.", prose)
-        self.assertIn("## [Unreleased]\n\n## [0.1.11] - 2026-10-19", TEXT)
+        self.assertIn("## [Unreleased]\n\n## [0.1.12] - 2026-10-26", TEXT)
+
+    def test_0_1_12_records_the_refusal_and_dashboard_fixes(self):
+        section = TEXT.split("## [0.1.12] - 2026-10-26", 1)[1].split("## [0.1.11]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("Refused pull request runs post their refusal status before a worker", prose)
+        self.assertIn("stored run logs display as terminal data", prose)
+        self.assertIn("carriage returns and control bytes no longer drive the terminal", prose)
 
     def test_0_1_11_records_the_hardening_batch(self):
         section = TEXT.split("## [0.1.11] - 2026-10-19", 1)[1].split("## [0.1.10]", 1)[0]
