@@ -1,11 +1,40 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.11. A published release section
+The current package version is 0.1.12. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.12] - 2026-10-26
+
+- Refused pull request runs post their refusal status before a worker
+  is selected, so a refusal no longer depends on worker availability.
+- Worker readiness reports an unavailable runner image as not ready
+  instead of ready.
+- The worker socket timeout is configurable instead of a fixed value.
+- Check records written before a run's progress are accepted, so a
+  run that finishes quickly still reports its check.
+- Poll state tracks disk usage incrementally rather than walking the
+  whole state directory on every submit and prune.
+- Failed poll submissions retry with a distinct idempotent key, so a
+  retry does not collide with the original submission.
+- Setup failures map to neutral checks instead of failing the check
+  run as a CI failure.
+- A merge refused because the base branch moved posts an error
+  status, and a merge is built on the moved base.
+- Writers may change workflows under the PR workflow flag.
+- A configured job that the workflow at a commit does not define is
+  skipped instead of failing the run.
+- The terminal dashboard keeps raw rows aligned, and stored run logs
+  display as terminal data: carriage returns and control bytes no
+  longer drive the terminal.
+- Design and investigation documents for managed runners, scheduling,
+  shared caches, capacity, and the CI dashboard are added. They
+  describe proposals, not shipped behavior.
+- The package version is 0.1.12. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.11] - 2026-10-19
 
