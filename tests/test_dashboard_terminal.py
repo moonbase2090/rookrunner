@@ -164,3 +164,48 @@ class TerminalDashboardTests(unittest.TestCase):
         self.assertIn(f"> [run] {self.run_id} succeeded result succeeded\n".encode(), output)
         self.assertNotIn(b"\r", output)
         self.assertNotIn(b"\x1b", output)
+
+    def test_stored_log_controls_are_data_on_a_raw_detail_frame(self):
+        reply = call(
+            self.state,
+            "run.submit",
+            {
+                "version": 0,
+                "submission_key": "stored-controls",
+                "backend": "development",
+                "fixture": {
+                    "exit_code": 0,
+                    # Include C1 CSI (U+009B) and PAD (U+0080) so caret-form
+                    # rendering is exercised on a real raw detail frame.
+                    "output": "keep-café\r\n\x1b[2Jbare\rline\x07\x1b[0m\x9b[H\x80\n",
+                },
+            },
+        )
+        run_id = reply["result"]["run_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            record = call(self.state, "run.get", {"run_id": run_id})["result"]
+            if record["state"] == "succeeded":
+                break
+            time.sleep(0.01)
+        self.assertEqual((record["state"], record["exit_code"]), ("succeeded", 0))
+        with self.terminal() as (process, master, slave, previous):
+            self.frame(master)
+            os.write(master, b"j")
+            self.frame(master)
+            os.write(master, b"\r")
+            detail = self.read_until(master, b"keep-caf")
+            body = detail.split(b"\x1b[2J\x1b[H", 1)[1]
+            self.assertNotRegex(body, rb"(?<!\r)\n")
+            self.assertNotIn(b"\r\r", body)
+            self.assertIn("keep-café\r\n".encode(), body)
+            self.assertIn(b"^[[2Jbare\r\nline^G^[[0m^[[H^@\r\n", body)
+            # Framework clear/home appear once per frame; stored ESC/C1 must not.
+            self.assertEqual(body.count(b"\x1b"), 0)
+            self.assertNotIn(bytes([0x9B]), body)
+            self.assertNotIn(bytes([0x80]), body)
+            os.write(master, b"q")
+            self.read_until(master, b"\x1b[?1000l\x1b[?1006l")
+            process.wait(timeout=5)
+            self.assertEqual(process.returncode, 0)
+            self.assert_restored(slave, previous)
