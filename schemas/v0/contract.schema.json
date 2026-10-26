@@ -2100,6 +2100,11 @@
           "minLength": 1,
           "maxLength": 256
         },
+        "check_text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
         "status_recorded": {
           "type": "boolean"
         }

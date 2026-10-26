@@ -5,9 +5,11 @@ commit status with the installation token. Omitting `--app-key` keeps
 the NS-40 token file. The capability version stays 12. A version 11
 plan is not migrated. No plan field and no capability entry are added.
 The plan schema is unchanged. `run.status` accepts optional check
-fields because that schema rejects unknown properties. Those fields
-are not on `run.get`. `.github/workflows/check.yml` is unchanged. This
-is not a GitHub-equivalence claim. P7 designs secrets,
+fields because that schema rejects unknown properties. Failure
+decisions may include `check_text`, the bounded run-log tail used in
+Check Run output. It is not stored on `run.get` or in `check_posts`.
+`.github/workflows/check.yml` is unchanged. This is not a
+GitHub-equivalence claim. P7 designs secrets,
 `GITHUB_TOKEN`, and `write` permissions and does not change this
 post ([secrets](secrets.md)). MB2090 accepted the amended answers
 on 2026-10-05.
@@ -127,8 +129,10 @@ The name is the NS-40 context: `rookrunner/` plus the workflow file
 name plus `/` plus the job id. `head_sha` is the status SHA.
 `external_id` is the run id. `output.title` is the name.
 `output.summary` is the run state and, when the run has one, the exit
-code. There is no `output.text`, no annotations, no images, no
-actions, and no `details_url`. Step logs are not uploaded.
+code. A failed check includes up to the last 4096 bytes of the stored,
+masked run log in `output.text` when any log is available. The full log
+is not uploaded. There are no annotations, images, actions, or
+`details_url`.
 
 | Run | Check |
 | --- | --- |
@@ -191,8 +195,10 @@ unchanged. `run.status` gains optional check fields because that
 schema rejects unknown properties. The worker stores the integer
 check-run id and the mapped status and conclusion in `check_posts`,
 the same way NS-40 stores a posted commit-status state in
-`status_posts`. `run.get` does not gain those fields. A plan does not
-gain a credential, a key path, a client id, or an installation id.
+`status_posts`. `check_text` is derived from the stored log for a
+failed check decision and is not stored. `run.get` does not gain these
+fields. A plan does not gain a credential, a key path, a client id,
+or an installation id.
 
 That stored row does not include the private key, the PEM text, the
 JWT, the installation token, the client id, the installation id, the

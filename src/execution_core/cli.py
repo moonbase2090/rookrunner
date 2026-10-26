@@ -564,6 +564,7 @@ def _report_app_status(args, decision, repository_root):
             check_status=decision["check_status"],
             check_conclusion=decision.get("check_conclusion"),
             check_summary_text=decision["check_summary"],
+            check_text=decision.get("check_text"),
             check_run_id=decision.get("check_run_id"),
             status_state=decision["state"],
             post_status_request=(

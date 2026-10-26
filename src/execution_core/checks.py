@@ -44,6 +44,7 @@ from .status import (
 _MAX_PEM = 65536
 _MAX_ID_FILE = 256
 _MAX_RESPONSE = 65536
+MAX_CHECK_TEXT_BYTES = 4096
 _CLIENT_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})")
 _INSTALLATION_ID = re.compile(r"[1-9][0-9]{0,18}")
 _DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
@@ -514,6 +515,7 @@ def _post_check(
     check_run_id,
     token,
     moment,
+    check_text=None,
 ):
     origin = api_origin(api_base)
     require_repository(repository)
@@ -521,11 +523,15 @@ def _post_check(
     if not isinstance(summary, str):
         summary = ""
     summary = mask_prefixes(summary)
+    output = {"title": context, "summary": summary}
+    if isinstance(check_text, str) and check_text:
+        encoded_text = mask_prefixes(check_text).encode("utf-8", "replace")
+        output["text"] = encoded_text[-MAX_CHECK_TEXT_BYTES:].decode("utf-8", "ignore")
     payload = {
         "name": context,
         "external_id": run_id,
         "status": check_status,
-        "output": {"title": context, "summary": summary},
+        "output": output,
     }
     if check_run_id is None:
         payload["head_sha"] = sha
@@ -635,6 +641,7 @@ def post_check_flow(
     repository_root,
     clock=None,
     key_dir=None,
+    check_text=None,
 ):
     """Mint a token, post the check, then the commit status. Discard the token."""
 
@@ -669,6 +676,7 @@ def post_check_flow(
                 check_run_id,
                 token,
                 clock,
+                check_text,
             )
         except StatusError as error:
             if error.retryable or error.kind != "CHECK_REJECTED":
