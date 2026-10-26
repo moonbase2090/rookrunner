@@ -277,7 +277,7 @@ does not create the label.
 `docs/conventions.md` is a later pull request. It records one
 way for each row. A row marked CI has a mechanical check in the
 pull request that introduces it, or it is marked CI (planned)
-until that check exists. Review rows are Muse's until a check
+until that check exists. Review rows belong to the designated reviewer until a check
 exists. Routing around a row is a failed review. Changing a row
 is a pull request that touches `docs/conventions.md` and needs
 sign-off.
