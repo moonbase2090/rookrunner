@@ -99,7 +99,7 @@ omitted action input whose default is that alias. An omitted
 permissions key grants Contents read. `permissions: {}` mints
 nothing. `_prepare_job_token` does not call `allowlist_matches`.
 The mint is one installation access token for Rookrunner-App, App
-ID 5201333, with Contents read on the repository named at mint
+ID (kept outside this repository), with Contents read on the repository named at mint
 time. The run record stores the revocation attempt and does not
 store the token. The check-run post token is a different mint. It
 is used by `poll` and `status`, and it requests Checks write and
@@ -122,7 +122,7 @@ The fork gate is unchanged. A pull request whose head and base
 repository ids differ, and a pull request with a null head
 repository, runs nothing.
 
-The operator named installation `168290590` for this plan. That
+The operator named the installation for this plan, outside this repository. That
 number is not read from disk. The mint reads `installation-id`
 and does not compare the file to this number. [Secrets](secrets.md)
 and [check runs](check-runs.md) still say the installation and
@@ -324,7 +324,7 @@ run are that snapshot. A local Docker run is not a sandbox for
 hostile code. Forks run nothing. `pull_request_target` is not
 evaluated. `write` stays rejected. The job token's permission is
 Contents read for the installation named in `installation-id`.
-The operator names that installation as `168290590`. The mint
+The operator names that installation outside this repository. The mint
 reads the file. The code does not compare the file to that
 number. The post token stays on the `poll` and `status` path.
 
@@ -347,7 +347,7 @@ only `check.yml`. An agent that can edit the bound checkout and
 submit can add a step that needs a token. On a worker started
 with `--app-key`, that submit mints a Contents-read token for
 the installation named in `installation-id` (the operator names
-it as `168290590`). Omitting `--app-key` on one worker is not a
+it outside this repository). Omitting `--app-key` on one worker is not a
 boundary: the same uid can open any socket that uid owns. M3
 accepts this risk and leaves the P7 mint gates in place. A dirty
 snapshot still does not post. `run.status` refuses it with
@@ -461,7 +461,7 @@ that cites it.
    - Recommendation: A. The project rule is to show runnable
      options before the visual direction is chosen.
 
-6. **Where is installation `168290590` written down?**
+6. **Where is the installation's name written down?**
    - A. This document records the operator's name for the
      installation, and it says the mint reads `installation-id`
      without comparing that file to the number. `secrets.md` and
@@ -695,7 +695,7 @@ artifact tests still pass. Ruff still passes.
    test. The live container race stays a worker test.
 8. **m3-install-note.** Depends on question 6 staying A. Docs
    only. Update `secrets.md` and `check-runs.md` so they say the
-   operator names the installation as `168290590`, the mint reads
+   operator names the installation outside this repository, the mint reads
    `installation-id`, and the code does not compare the file to
    that number. The private key stays out of the repository.
    This slice does not read the configured key directory and does not change code.
@@ -721,7 +721,7 @@ mode `0700`. The protocol method list stays the list
 `worker.describe` already returns. The capability version stays
 12. `check.yml` stays unchanged. `write` stays rejected. The job
 token stays Contents read for the installation named in
-`installation-id` (the operator names it as `168290590`), minted
+`installation-id` (the operator names it outside this repository), minted
 only under the P7 gates, revoked when the job ends, and absent
 from the run record. A dirty snapshot still does not post. File secrets still follow
 `allowlist_matches`. `artifact.read` still returns unmasked bytes.

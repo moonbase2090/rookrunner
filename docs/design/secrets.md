@@ -42,8 +42,8 @@ Deploy workflows and macOS jobs stay deferred until the implementation
 plan below has landed.
 
 The Rookrunner GitHub App exists. Its name is Rookrunner-App. Its
-App ID is 5201333. It is not the moonbase2090-agents App. The
-operator names the installation as `168290590`. The mint reads
+App ID is not recorded in this repository. It is not the pull-request bot App. The
+operator names the installation outside this repository. The mint reads
 `installation-id` and the code does not compare the file to that
 number. The private key stays out of the repository. This document
 does not install the App, does not start a sign-in, and does not
@@ -665,8 +665,7 @@ token request contract only, behind `worker --oidc-issuer`; see
 - Scanning artifact bytes for a secret value.
 - Refreshing the job token, and writing it to disk.
 - Creating the secret directory, minting a token, installing the
-  App, starting a sign-in, or reading a key. The App ID is
-  5201333. The operator names the installation as `168290590`.
+  App, starting a sign-in, or reading a key. The App ID is not recorded in this repository. The operator names the installation outside this repository.
   The mint reads `installation-id` and the code does not compare
   the file to that number. The private key stays out of the
   repository.
@@ -878,9 +877,9 @@ p7-secret-run, and p7-job-token change the engine as the plan names.
 No secret directory is created by this document. No sign-in is
 started. No file under
 `~/.config/rookrunner/keys/` is read by this document.
-The App is not installed by this document. Its App ID is 5201333.
+The App is not installed by this document. Its App ID is not recorded in this repository.
 No App permission is added. The operator names the installation as
-`168290590`. The mint reads `installation-id` and the code does not
+the installation named outside this repository. The mint reads `installation-id` and the code does not
 compare the file to that number. The private key stays out of the
 repository. `write` stays rejected. A job token is minted only
 when `--app-key` is set, permissions allow Contents read, and a
