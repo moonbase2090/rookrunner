@@ -127,12 +127,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
+from .reconcile import post_with_retry
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
 from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
@@ -1070,6 +1073,7 @@ class Pass:
         self.hold_pulls = False
         self.remote_repository = None
         self.budget = _Budget()
+        self.sleep = time.sleep
         self.state = None
         self.lock_fd = None
         self.repository_body = None
@@ -1368,7 +1372,7 @@ class Pass:
                 return
             if self._placed_caller(entry) is None or "run_id" not in entry:
                 continue
-            self._post_record(entry)
+            self._post_record_guarded(entry)
 
     def _placed_caller(self, entry):
         place = self._place_for(entry.get("host"))
@@ -2751,7 +2755,20 @@ class Pass:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
+            self._post_record_guarded(entry)
+
+    def _post_record_guarded(self, entry):
+        """Post one run; a failure is logged with its run id and the pass goes on."""
+
+        try:
             self._post_record(entry)
+        except (PollError, StatusError, OSError, ValueError) as exc:
+            kind = getattr(exc, "kind", None) or (
+                "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
+            )
+            failure = {"run_id": entry["run_id"], "kind": kind, "message": str(exc)}
+            self.result.setdefault("errors", []).append(failure)
+            print(canonical({"run_error": failure}), file=sys.stderr)  # noqa: T201  run id on stderr
 
     def _post_record(self, entry):
         record = self.caller("run.get", {"run_id": entry["run_id"]})
@@ -2795,7 +2812,10 @@ class Pass:
             return
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
-        if self._post(entry, decision["state"], decision if self.app_key else None):
+        if post_with_retry(
+            lambda: self._post(entry, decision["state"], decision if self.app_key else None),
+            sleep=self.sleep,
+        ):
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
             )
