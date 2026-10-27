@@ -74,13 +74,18 @@ def pending_final(db_path, shas=()):
     for run_id, context, sha, posted, run_state, exit_code in rows:
         if shas and not any(sha.startswith(prefix) for prefix in shas):
             continue
-        if not shas and set(posted.split(",")) != {"pending"}:
-            continue
-        final = github_state(run_state, exit_code)
-        if final == "pending":
-            continue
-        newest[(context, sha)] = {"run_id": run_id, "context": context, "sha": sha, "final": final}
-    return list(newest.values())
+        newest[(context, sha)] = {
+            "run_id": run_id,
+            "context": context,
+            "sha": sha,
+            "posted": set(posted.split(",")),
+            "final": github_state(run_state, exit_code),
+        }
+    return [
+        {key: value for key, value in item.items() if key != "posted"}
+        for item in newest.values()
+        if item["final"] != "pending" and (shas or item["posted"] == {"pending"})
+    ]
 
 
 def github_statuses(api_base, repository, sha, token, opener=None):
