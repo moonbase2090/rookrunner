@@ -23,6 +23,8 @@ POLL_SECONDS = 0.2
 # The remote client uses the same socket bound. This covers the ssh process.
 _SSH_CALL_SECONDS = 5
 _SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+DEFAULT_WORKER_TIMEOUT = 30.0
+MAX_WORKER_TIMEOUT = 600.0
 
 
 def _parse_worker_reply(raw):
@@ -44,15 +46,8 @@ def _parse_worker_reply(raw):
     return reply
 
 
-DEFAULT_WORKER_TIMEOUT = 30.0
-MAX_WORKER_TIMEOUT = 600.0
-
-
 def worker_timeout(environ=None):
-    """Seconds to wait on the worker socket. ROOKRUNNER_WORKER_TIMEOUT overrides it.
-
-    A value that is not a number in (0, 600] falls back to the default.
-    """
+    """Return the worker socket timeout, using the default for invalid values."""
 
     raw = (os.environ if environ is None else environ).get("ROOKRUNNER_WORKER_TIMEOUT")
     if raw is None:
@@ -454,6 +449,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
             allow_pr_workflow=getattr(args, "allow_pr_workflow", ()) or (),
             key_dir=getattr(args, "key_dir", None),
+            retry_failed=getattr(args, "retry_failed", None),
         )
     finally:
         if isinstance(token, str):
@@ -624,8 +620,11 @@ def report_status(args):
     if decision["action"] == "skip":
         print(canonical(reply))
         return
+    if decision["action"] == "retry":
+        print(canonical(reply))
+        return
     if decision["action"] != "post":
-        raise ValueError("worker status decision was not post or skip")
+        raise ValueError("worker status decision was not post, skip, or retry")
     described = call(args.state, "worker.describe", {})
     if "error" in described:
         print(canonical(described))
@@ -664,9 +663,13 @@ def _report_app_status(args, decision, repository_root):
             check_status=decision["check_status"],
             check_conclusion=decision.get("check_conclusion"),
             check_summary_text=decision["check_summary"],
+            check_text=decision.get("check_text"),
             check_run_id=decision.get("check_run_id"),
             status_state=decision["state"],
-            post_status_request=decision.get("status_recorded") is not True,
+            post_status_request=(
+                decision.get("status_recorded") is not True
+                and decision.get("check_conclusion") != "neutral"
+            ),
             app_key=args.app_key,
             state_dir=args.state,
             repository_root=repository_root,
@@ -1059,6 +1062,11 @@ def main():
             "cap, and image, and an optional ssh. Repeat for each worker. "
             "Omit it to keep one local socket or one --ssh-host."
         ),
+    )
+    poll.add_argument(
+        "--retry-failed",
+        metavar="KEY",
+        help="retry one failed poll submission at the current push/PR commit; current trust gates apply",
     )
     poll.add_argument(
         "--allow-untrusted",

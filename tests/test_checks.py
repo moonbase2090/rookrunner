@@ -70,6 +70,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "agent": self.headers.get("User-Agent"),
             }
         )
+        if getattr(self.server, "before_reply", None) is not None:
+            self.server.before_reply(kind)
         code, extra, payload = self.server.routes.get(kind, (201, [], b"{}"))
         self.send_response(code)
         for key, value in extra:
@@ -301,6 +303,7 @@ class CliCheckTests(unittest.TestCase):
             "error": None,
             "cleanup": "confirmed_no_external_resources",
         }
+        record["error"] = record_kwargs.get("error")
         record["submission_key"] = record["run_id"]
         with sqlite3.connect(self.state / "runs.sqlite3", timeout=5) as connection:
             connection.execute(
@@ -440,6 +443,45 @@ class CliCheckTests(unittest.TestCase):
         validate_response("run.status", json.loads(result.stdout))
         self._assert_secret_absent(result, jwt)
 
+    def test_setup_failure_posts_a_neutral_check_without_failed_status(self):
+        run = self._insert(
+            state="failed",
+            exit_code=None,
+            error={"kind": "SETUP_FAILED", "message": "image digest will not resolve"},
+        )
+        result = self._cli(run["run_id"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        check = json.loads(self.server.requests[1]["body"])
+        self.assertEqual(check["status"], "completed")
+        self.assertEqual(check["conclusion"], "neutral")
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            recorded_check = connection.execute(
+                "SELECT check_run_id, status, conclusion FROM check_posts"
+            ).fetchone()
+        self.assertEqual(recorded_check, (CHECK_ID, "completed", "neutral"))
+        self.assertEqual(len(self.server.requests), 2)
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            recorded_status = connection.execute("SELECT state FROM status_posts").fetchone()
+        self.assertIsNone(recorded_status)
+        validate_response("run.status", json.loads(result.stdout))
+
+    def test_failed_check_posts_the_stored_log_tail_as_output_text(self):
+        run = self._insert(state="failed", exit_code=1)
+        log = b"old output must be trimmed\n" + ("€" * 1400).encode("utf-8")
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            connection.execute("UPDATE runs SET log=? WHERE id=?", (log, run["run_id"]))
+
+        result = self._cli(run["run_id"])
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        check = json.loads(self.server.requests[1]["body"])
+        self.assertEqual(check["output"]["summary"], "failed exit_code 1")
+        self.assertLessEqual(len(check["output"]["text"].encode("utf-8")), 4096)
+        self.assertNotIn("\ufffd", check["output"]["text"])
+        self.assertTrue(check["output"]["text"].endswith("€"))
+        self.assertNotIn("old output must be trimmed", check["output"]["text"])
+        validate_response("run.status", json.loads(result.stdout))
+
     def test_a_queued_check_omits_conclusion_and_uses_the_clock(self):
         moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
         previous = os.environ.get("HOME")
@@ -500,6 +542,7 @@ class CliCheckTests(unittest.TestCase):
                 check_status="completed",
                 check_conclusion="success",
                 check_summary_text=summary,
+                check_text=summary,
                 check_run_id=None,
                 status_state="success",
                 post_status_request=False,
@@ -522,6 +565,8 @@ class CliCheckTests(unittest.TestCase):
         body = json.loads(raw)
         self.assertIn("***", body["output"]["summary"])
         self.assertNotIn(fixture, body["output"]["summary"])
+        self.assertIn("***", body["output"]["text"])
+        self.assertNotIn("github_pat_", body["output"]["text"])
 
     def test_a_later_post_patches_the_stored_id(self):
         # A queued row is claimed by the worker scheduler. `running` is not.
@@ -581,6 +626,60 @@ class CliCheckTests(unittest.TestCase):
             self.assertEqual(self.server.requests, [])
         finally:
             os.chmod(self.key, 0o600)
+
+    def test_fast_failure_retains_check_id_when_pending_status_post_fails(self):
+        run = self._insert(state="running", exit_code=None)
+
+        def finish_on_check(kind):
+            if kind != "check":
+                return
+            with sqlite3.connect(self.state / "runs.sqlite3", timeout=5) as connection:
+                record = json.loads(
+                    connection.execute(
+                        "SELECT record FROM runs WHERE id=?", (run["run_id"],)
+                    ).fetchone()[0]
+                )
+                record["state"] = "failed"
+                record["exit_code"] = 1
+                connection.execute(
+                    "UPDATE runs SET record=? WHERE id=?", (canonical(record), run["run_id"])
+                )
+
+        self.server.before_reply = finish_on_check
+        self.server.routes = _routes(status_code=500)
+        first = self._cli(run["run_id"])
+        self.assertEqual(first.returncode, 1, first.stdout)
+        self.assertEqual(json.loads(first.stderr)["error"]["kind"], "STATUS_REJECTED")
+        self.assertEqual(
+            json.loads(first.stdout)["result"], {"action": "recorded", "state": "failure"}
+        )
+        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
+            row = connection.execute(
+                "SELECT check_run_id, status, conclusion FROM check_posts WHERE run_id=?",
+                (run["run_id"],),
+            ).fetchone()
+            self.assertEqual(row, (CHECK_ID, "in_progress", None))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT state FROM status_posts WHERE run_id=?", (run["run_id"],)
+                ).fetchall(),
+                [],
+            )
+        self.server.before_reply = None
+        self.server.routes = _routes()
+        self.server.requests.clear()
+        second = self._cli(run["run_id"])
+        self.assertEqual(second.returncode, 0, second.stdout)
+        check = self.server.requests[1]
+        self.assertEqual(check["method"], "PATCH")
+        self.assertEqual(check["path"], f"/repos/moonbase2090/rookrunner/check-runs/{CHECK_ID}")
+        self.assertEqual(json.loads(check["body"])["conclusion"], "failure")
+        self.assertEqual(json.loads(self.server.requests[2]["body"])["state"], "failure")
+        self.server.requests.clear()
+        repeated = self._cli(run["run_id"])
+        self.assertEqual(repeated.returncode, 0, repeated.stdout)
+        self.assertEqual(json.loads(repeated.stdout)["result"]["action"], "skip")
+        self.assertEqual(self.server.requests, [])
 
     def test_a_gate_failure_reads_no_key_and_sends_nothing(self):
         os.chmod(self.key, 0o000)

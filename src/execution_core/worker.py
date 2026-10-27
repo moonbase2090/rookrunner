@@ -94,6 +94,7 @@ from .disk import (
     DEFAULT_DISK_BUDGET,
     FINISHED_RUN_FOLDER_COUNT,
     FINISHED_RUN_FOLDER_SECONDS,
+    StateUsage,
     usage,
 )
 from .expr import ExprError
@@ -120,6 +121,7 @@ from .run import (
     owned_container_present,
     release_owned_container,
     run_job,
+    runner_image_readiness,
 )
 from .protocol import (
     MAX_CURSOR,
@@ -143,7 +145,7 @@ from .protocol import (
     valid_id,
 )
 from .snapshot import CaptureError, SourceCapture
-from .checks import check_mapping, check_summary
+from .checks import MAX_CHECK_TEXT_BYTES, check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .oidc_endpoint import OidcRun, OidcSettings
 from .oidc_keys import OidcError, load_key_set
@@ -154,7 +156,13 @@ from .socket_lock import (
     pin_docker_context,
     resolve_docker_context,
 )
-from .status import DEFAULT_API_BASE, MAX_CONTEXT_LENGTH, TERMINAL_STATUS, github_state
+from .status import (
+    DEFAULT_API_BASE,
+    MAX_CONTEXT_LENGTH,
+    TERMINAL_STATUS,
+    github_state,
+    is_setup_failure,
+)
 from .verify import VerifyError, verify_snapshot
 
 _STORAGE_FULL = "worker storage is full; free space before retrying"
@@ -673,11 +681,13 @@ class Worker:
         self.server = None
         self.scheduler = None
         self.execution_error = None
+        self.runner_image_error = None
         self.live = {}
         self.unresolved = {}
         self.retained = {}
         self._pending_concurrency_cancels = []
         self.socket_path = self.state / "worker.sock"
+        self.state_usage = None
 
     def _refuse_reset_history(self):
         """Fail closed when the run database cannot hold prior history.
@@ -814,14 +824,33 @@ class Worker:
             self.worker_id = self.db.execute(
                 "SELECT value FROM metadata WHERE key='worker_id'"
             ).fetchone()[0]
+            self.state_usage = StateUsage(self.state)
+            self.state_usage.remember_entries(
+                [
+                    self.state / name
+                    for name in (
+                        "runs.sqlite3",
+                        "runs.sqlite3-wal",
+                        "runs.sqlite3-shm",
+                        "runs.sqlite3-journal",
+                        Path("actions") / "pins.json",
+                    )
+                ]
+            )
             self._reconcile_interrupted()
+            self.runner_image_error = runner_image_readiness(self.runner_image)
             if os.path.lexists(self.socket_path):
                 if not stat.S_ISSOCK(self.socket_path.lstat().st_mode):
                     raise ValueError("refusing to replace a non-socket worker.sock")
+                self.state_usage.remove(self.socket_path)
                 self.socket_path.unlink()
+                self.state_usage.sync_parent_directories(self.socket_path)
+            self._sync_state_files()
+            self._prune_finished_run_folders(0)
             self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self.server.bind(str(self.socket_path))
             self.owns_socket = True
+            self.state_usage.add(self.socket_path)
             os.chmod(self.socket_path, 0o600)
             self.server.listen(16)
             self.server.settimeout(0.2)
@@ -840,7 +869,9 @@ class Worker:
             self.server.close()
             self.server = None
         if getattr(self, "owns_socket", False):
+            self.state_usage.remove(self.socket_path)
             self.socket_path.unlink(missing_ok=True)
+            self.state_usage.sync_parent_directories(self.socket_path)
             self.owns_socket = False
         if self.db:
             self.db.close()
@@ -873,7 +904,6 @@ class Worker:
                     identity = record.get("attempt_id") or record["run_id"]
                     self.retained[identity] = name
         self._load_retained()
-        self._prune_finished_run_folders(0)
 
     def _release_running(self, record):
         kind = (record.get("input") or {}).get("kind")
@@ -1313,7 +1343,9 @@ class Worker:
             raise RunError("SETUP_FAILED", "attempt directory is not accepted") from exc
         try:
             os.chmod(attempt_root, 0o700)
+            self.state_usage.add(attempt_root)
             materialize_attempt(snapshot, pinned["digest"], workspace)
+            self.state_usage.sync_path(attempt_root)
         except Exception:
             self._remove_workspace(attempt_root)
             raise
@@ -1335,6 +1367,8 @@ class Worker:
                 else "action repository could not be fetched"
             )
             raise RunError("SETUP_FAILED", message) from exc
+        if actions_root is not None:
+            self.state_usage.sync_path(attempt_root)
         event_name = request.get("event_name") if isinstance(request, dict) else None
         # The admission checks above only bound the attempt before it starts.
         # The watch stops the owned container when the state grows past the
@@ -1576,23 +1610,24 @@ class Worker:
             else:
                 keep.append(record)
         self._delete_finished_folders(records, drop_ids)
+        used = self.state_usage.total
         for record in keep:
-            try:
-                used = usage(self.state)
-            except OSError:
-                return
             if used + incoming <= self.disk_budget:
                 return
             drop_ids.add(record["run_id"])
             self._delete_finished_folders(records, drop_ids)
+            used = self.state_usage.total
 
     def _remove_workspace(self, workspace):
         attempts = Path(self.state) / "attempts"
         try:
             if workspace.is_symlink() or workspace.parent != attempts or not workspace.is_dir():
                 return
+            self.state_usage.remove(workspace)
             shutil.rmtree(workspace)
+            self.state_usage.sync_parent_directories(workspace)
         except OSError:
+            self.state_usage.sync_path(workspace)
             return
 
     def _cancel_running_workflow(self, record):
@@ -1778,8 +1813,8 @@ class Worker:
             )
         # This process refuses every new workflow attempt while its unresolved
         # map is non-empty. The same key still returns its original run above.
-        # Development fixtures do not use this gate, and describe.ready stays
-        # the scheduler flag. Restart does not keep this map. It blocks only an
+        # Development fixtures do not use this gate. Restart does not keep
+        # this map. It blocks only an
         # attempt that would reuse a retained container name or workspace.
         if conflicts_with_unresolved(self.unresolved):
             raise Fault(
@@ -1848,6 +1883,7 @@ class Worker:
                     self._capture_fault(exc)
             captured = prepared.publish()
             snapshot = Path(self.state) / "snapshots" / captured["snapshot_id"]
+            self.state_usage.add(snapshot)
             return self._accept_planned(
                 p, key, normalized, event_text, snapshot, captured, store, planned
             )
@@ -1959,6 +1995,7 @@ class Worker:
                 raise Fault(
                     "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
                 ) from None
+            self._sync_state_files()
             store.commit()
             self._pending_concurrency_cancels.extend(running_ids)
             return record
@@ -1981,7 +2018,10 @@ class Worker:
     def action_store(self):
         if self._action_store is None:
             self._action_store = ActionStore(
-                self.state, self.action_remote, lambda: self.disk_budget
+                self.state,
+                self.action_remote,
+                lambda: self.disk_budget,
+                usage_tracker=self.state_usage,
             )
         return self._action_store
 
@@ -2003,7 +2043,8 @@ class Worker:
         """
 
         try:
-            used = usage(self.state)
+            self._sync_state_files()
+            used = self.state_usage.total
         except OSError:
             return True
         if used + incoming <= self.disk_budget:
@@ -2011,10 +2052,7 @@ class Worker:
             return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
-        try:
-            used = usage(self.state)
-        except OSError:
-            return True
+        used = self.state_usage.total
         return used + incoming > self.disk_budget
 
     def _runtime_over_budget(self):
@@ -2026,10 +2064,21 @@ class Worker:
         """
 
         try:
-            used = usage(self.state)
+            used = self.state_usage.refresh()
         except OSError:
             return True
         return used > self.disk_budget
+
+    def _sync_state_files(self):
+        self.state_usage.sync_files(
+            self.state / name
+            for name in (
+                "runs.sqlite3",
+                "runs.sqlite3-wal",
+                "runs.sqlite3-shm",
+                "runs.sqlite3-journal",
+            )
+        )
 
     def _publish_artifacts(self, record, selections=None):
         """Record files this attempt wrote. A confirmed terminal run then removes the directory.
@@ -2084,18 +2133,22 @@ class Worker:
         target = Path(self.state) / "snapshots" / snapshot_id
         if target.is_symlink() or not target.is_dir():
             return
+        self.state_usage.remove(target)
         shutil.rmtree(target)
+        self.state_usage.sync_parent_directories(target)
 
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
+            self.runner_image_error = runner_image_readiness(self.runner_image)
+            readiness_error = self.execution_error or self.runner_image_error
             described = {
                 "protocol_versions": [0, 1],
                 "worker_id": self.worker_id,
                 "repository": self.repository,
                 "version": __version__,
-                "ready": not self.stop.is_set() and self.execution_error is None,
-                "readiness_error": self.execution_error,
+                "ready": not self.stop.is_set() and readiness_error is None,
+                "readiness_error": readiness_error,
                 "methods": METHODS,
                 "capabilities": [
                     "development.fixture",
@@ -2201,6 +2254,7 @@ class Worker:
                     "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
                     (record["run_id"], key, normalized, canonical(record), b""),
                 )
+            self._sync_state_files()
             return record
         if method == "run.get":
             fields(p, ("run_id",))
@@ -2563,14 +2617,17 @@ class Worker:
             raise Fault("STATUS_REFUSED", "snapshot includes files")
         if manifest["base_commit"] != tested:
             raise Fault("STATUS_REFUSED", "base_commit does not equal the tested commit")
-        state = github_state(record["state"], record["exit_code"])
-        check_status, check_conclusion = check_mapping(record["state"], record["exit_code"])
+        error = record.get("error")
+        state = github_state(record["state"], record["exit_code"], error)
+        check_status, check_conclusion = check_mapping(record["state"], record["exit_code"], error)
         posted = p.get("record")
         if posted is None and not recording_check:
             if p.get("checks"):
                 return self._check_decision(
-                    record, context, status_sha, state, check_status, check_conclusion
+                    record, context, status_sha, state, check_status, check_conclusion, error
                 )
+            if is_setup_failure(error):
+                return {"action": "retry", "state": state}
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):
@@ -2586,9 +2643,7 @@ class Worker:
         ):
             invalid("recorded state does not match the run")
         if recording_check:
-            self._accept_check_record(
-                p, check_status, check_conclusion, pending_moved_on=pending_moved_on
-            )
+            self._accept_check_record(p, check_status, check_conclusion)
         with self.db:
             if recording_check:
                 self.db.execute(
@@ -2618,19 +2673,16 @@ class Worker:
                 )
         return {"action": "recorded", "state": state}
 
-    def _accept_check_record(self, p, check_status, check_conclusion, *, pending_moved_on=False):
+    def _accept_check_record(self, p, check_status, check_conclusion):
         identifier = integer(p["check_run_id"], 1, 2**63 - 1, "check_run_id")
         p["check_run_id"] = identifier
         if p["check_status"] not in {"queued", "in_progress", "completed"}:
             invalid("recorded check does not match the run")
-        # The pending decision's check is queued or in progress and has no
-        # conclusion. Keep that posted check when the run has since finished.
-        # A completed check still has to match the run.
-        stale_pending_check = (
-            pending_moved_on
-            and check_conclusion is not None
-            and p["check_status"] in {"queued", "in_progress"}
-            and "check_conclusion" not in p
+        # Check and commit-status posts can succeed independently. Preserve an
+        # earlier check even if the run advanced while GitHub was responding.
+        stale_pending_check = "check_conclusion" not in p and (
+            (p["check_status"] == "queued" and check_status in {"in_progress", "completed"})
+            or (p["check_status"] == "in_progress" and check_status == "completed")
         )
         if p["check_status"] != check_status and not stale_pending_check:
             invalid("recorded check does not match the run")
@@ -2644,16 +2696,19 @@ class Worker:
             "success",
             "failure",
             "cancelled",
+            "neutral",
         }:
             invalid("recorded check does not match the run")
 
-    def _check_decision(self, record, context, status_sha, state, check_status, check_conclusion):
+    def _check_decision(
+        self, record, context, status_sha, state, check_status, check_conclusion, error
+    ):
         row = self.db.execute(
             "SELECT check_run_id, conclusion FROM check_posts WHERE run_id=? AND context=? AND sha=?",
             (record["run_id"], context, status_sha),
         ).fetchone()
         if (
-            check_conclusion in {"success", "failure", "cancelled"}
+            check_conclusion in {"success", "failure", "cancelled", "neutral"}
             and row is not None
             and row["conclusion"] == check_conclusion
         ):
@@ -2662,8 +2717,17 @@ class Worker:
             "action": "post",
             "state": state,
             "check_status": check_status,
-            "check_summary": check_summary(record["state"], record["exit_code"]),
+            "check_summary": check_summary(record["state"], record["exit_code"], error),
         }
+        if check_conclusion == "failure":
+            log_row = self.db.execute(
+                "SELECT substr(log, ?) FROM runs WHERE id=?",
+                (-MAX_CHECK_TEXT_BYTES, record["run_id"]),
+            ).fetchone()
+            if log_row is not None and log_row[0]:
+                check_text = bytes(log_row[0]).decode("utf-8", "ignore")
+                if check_text:
+                    result["check_text"] = check_text
         if check_conclusion is not None:
             result["check_conclusion"] = check_conclusion
         if row is not None:

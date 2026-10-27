@@ -5,17 +5,19 @@ commit status with the installation token. Omitting `--app-key` keeps
 the NS-40 token file. The capability version stays 12. A version 11
 plan is not migrated. No plan field and no capability entry are added.
 The plan schema is unchanged. `run.status` accepts optional check
-fields because that schema rejects unknown properties. Those fields
-are not on `run.get`. `.github/workflows/check.yml` is unchanged. This
-is not a GitHub-equivalence claim. P7 designs secrets,
+fields because that schema rejects unknown properties. Failure
+decisions may include `check_text`, the bounded run-log tail used in
+Check Run output. It is not stored on `run.get` or in `check_posts`.
+`.github/workflows/check.yml` is unchanged. This is not a
+GitHub-equivalence claim. P7 designs secrets,
 `GITHUB_TOKEN`, and `write` permissions and does not change this
 post ([secrets](secrets.md)). MB2090 accepted the amended answers
 on 2026-10-05.
 
 The owner chose the credential on 2026-10-05. It is a new GitHub App.
-Its name is Rookrunner-App. It is not the moonbase2090-agents App.
-The App exists. Its App ID is 5201333. The operator names the
-installation as `168290590`. The mint reads `installation-id` and
+Its name is Rookrunner-App. It is not the pull-request bot App.
+The App exists. Its App ID is not recorded in this repository. The operator names the
+installation outside this repository. The mint reads `installation-id` and
 the code does not compare the file to that number. The private key
 stays out of the repository. This document does not install the
 App, does not start a sign-in, and does not read a key. It contains
@@ -62,7 +64,7 @@ not include the path, the key, or file bytes.
 The private key stays out of the repository. The key, the client
 id, and the `installation-id` file never enter this repository,
 `.github/workflows/check.yml`, a job container, a log, or a run
-record. The operator names the installation as `168290590`. The
+record. The operator names the installation outside this repository. The
 mint reads `installation-id` and the code does not compare the file
 to that number. Tests point `HOME` at a temporary directory and generate
 a fixture key there. No test reads `~/.config/rookrunner/keys/`
@@ -127,22 +129,31 @@ The name is the NS-40 context: `rookrunner/` plus the workflow file
 name plus `/` plus the job id. `head_sha` is the status SHA.
 `external_id` is the run id. `output.title` is the name.
 `output.summary` is the run state and, when the run has one, the exit
-code. There is no `output.text`, no annotations, no images, no
-actions, and no `details_url`. Step logs are not uploaded.
+code. A failed check includes up to the last 4096 bytes of the stored,
+masked run log in `output.text` when any log is available. The full log
+is not uploaded. There are no annotations, images, actions, or
+`details_url`.
 
 | Run | Check |
 | --- | --- |
 | `queued` | `status` `queued`. No conclusion |
 | `running` | `status` `in_progress`. No conclusion. `started_at` is the post time |
 | `succeeded` with exit code 0 | `status` `completed`, `conclusion` `success` |
-| `failed` | `status` `completed`, `conclusion` `failure` |
+| `failed` with `error.kind` `SETUP_FAILED` | `status` `completed`, `conclusion` `neutral` |
+| Other `failed` runs | `status` `completed`, `conclusion` `failure` |
 | `cancelled` | `status` `completed`, `conclusion` `cancelled` |
 | `lost`, or any other state | `status` `completed`, `conclusion` `failure` |
 
-Nothing else is `success`. The Checks API has no `error` conclusion.
-`neutral` is not used, because it is not a failure. `waiting`,
+Nothing else is `success`. Setup errors use `neutral` because they do
+not represent failed workflow steps. For a neutral setup check, no
+commit status is posted because the commit-status API has no neutral
+state. The Checks API has no `error` conclusion. `waiting`,
 `pending`, and `requested` are not sent. GitHub reserves those for
 GitHub Actions.
+
+When only the commit-status API is configured, `run.status` returns
+`retry` for a setup failure and posts nothing. The poller leaves it
+unrecorded so a later pass can try again.
 
 A completed check sends `completed_at` as the post time. One create
 and one later update stay under GitHub's limit of 1,000 check runs
@@ -184,8 +195,10 @@ unchanged. `run.status` gains optional check fields because that
 schema rejects unknown properties. The worker stores the integer
 check-run id and the mapped status and conclusion in `check_posts`,
 the same way NS-40 stores a posted commit-status state in
-`status_posts`. `run.get` does not gain those fields. A plan does not
-gain a credential, a key path, a client id, or an installation id.
+`status_posts`. `check_text` is derived from the stored log for a
+failed check decision and is not stored. `run.get` does not gain these
+fields. A plan does not gain a credential, a key path, a client id,
+or an installation id.
 
 That stored row does not include the private key, the PEM text, the
 JWT, the installation token, the client id, the installation id, the
@@ -228,8 +241,7 @@ does not remove that warning.
 
 ## What this implementation does not do
 
-The App exists. Its name is Rookrunner-App and its App ID is
-5201333. The operator names the installation as `168290590`. The
+The App exists. Its name is Rookrunner-App and its App ID is not recorded in this repository. The operator names the installation outside this repository. The
 mint reads `installation-id` and the code does not compare the file
 to that number. The private key stays out of the repository.
 No sign-in is started. No file under

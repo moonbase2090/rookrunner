@@ -202,8 +202,17 @@ Public publishing is a separate step after the preview artifact is reviewable.
 - Managed GitHub runners using GitHub's official runner application.
   Reporting results for the owner's own repositories moved to CI-1 on
   2026-10-03. Webhook delivery and runner registration stay here.
+  The [registration and webhook investigation](research/managed-github-runners.md)
+  records upstream requirements and proposed options, without selecting an
+  integration or changing the accepted local-worker design.
 - Resource scheduling across multiple workers and projects.
+  The [scheduling investigation](research/resource-scheduling.md) separates
+  implemented placement and local queues from proposed shared admission,
+  capacity reservations, and fairness policies. No scheduler design is selected.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.
+  The [private capacity investigation](research/managed-capacity.md) compares
+  proposed pool and scheduling ownership choices. Provider selection,
+  credentials, lifecycle, and cost policy remain unresolved.
 
 Each investigation needs its own requirements and evidence before becoming implementation scope.

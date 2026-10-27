@@ -14,6 +14,7 @@ from . import __version__
 from .protocol import MAX_CURSOR, MAX_MESSAGE, canonical, strict_json, utf8_string
 
 PROTOCOL_VERSION = "2025-11-25"
+WORKER_TIMEOUT_SECONDS = 5.0
 
 # run.status, fixtures, poll, and the App key stay on the CLI.
 _TOOLS = (
@@ -320,7 +321,7 @@ def _forward(state, method, params):
     tries = 2 if method == "run.submit" else 1
     for attempt in range(tries):
         try:
-            reply = call(state, method, params, timeout=5)
+            reply = call(state, method, params, timeout=WORKER_TIMEOUT_SECONDS)
         except TimeoutError:
             if attempt + 1 < tries:
                 continue

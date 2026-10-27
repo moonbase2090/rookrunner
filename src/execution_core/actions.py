@@ -276,10 +276,11 @@ def _copy_tree(source, destination):
 class ActionStore:
     """Content-addressed action trees under ``state/actions``."""
 
-    def __init__(self, state, remote, budget):
+    def __init__(self, state, remote, budget, *, usage_tracker=None):
         self.state = Path(state)
         self.remote = remote
         self._budget = budget
+        self._usage_tracker = usage_tracker
         self.root = self.state / "actions"
         self.objects = self.root / "objects"
         self.index_path = self.root / "pins.json"
@@ -323,14 +324,19 @@ class ActionStore:
         for path in reversed(self._created):
             if path.is_symlink() or not path.is_dir():
                 continue
+            if self._usage_tracker is not None:
+                self._usage_tracker.remove(path)
             shutil.rmtree(path)
+            self._sync_store_usage(path)
         self._created = []
         if not self._index_existed:
             if self.index_path.is_file() and not self.index_path.is_symlink():
                 self.index_path.unlink()
+            self._sync_store_usage(self.index_path)
             return
         self.index_path.write_bytes(self._index_before)
         os.chmod(self.index_path, 0o600)
+        self._sync_index_usage()
 
     def resolve(self, owner, repository, path, commit):
         with self.guard:
@@ -414,6 +420,7 @@ class ActionStore:
         temporary.write_bytes(payload)
         os.chmod(temporary, 0o600)
         os.replace(temporary, self.index_path)
+        self._sync_index_usage()
 
     def _cached(self, owner, repository, path, commit):
         for item in self._pins():
@@ -437,10 +444,16 @@ class ActionStore:
         try:
             actual = tree_digest(dest)
         except ActionUnavailable:
+            if self._usage_tracker is not None:
+                self._usage_tracker.remove(dest)
             shutil.rmtree(dest)
+            self._sync_store_usage(dest)
             return None
         if actual != digest:
+            if self._usage_tracker is not None:
+                self._usage_tracker.remove(dest)
             shutil.rmtree(dest)
+            self._sync_store_usage(dest)
             return None
         return StoredAction(dest, digest)
 
@@ -453,13 +466,18 @@ class ActionStore:
             raise ActionUnavailable("action store is not accepted")
         if dest.is_dir():
             if tree_digest(dest) != digest:
+                if self._usage_tracker is not None:
+                    self._usage_tracker.remove(dest)
                 shutil.rmtree(dest)
+                self._sync_store_usage(dest)
             else:
                 self._remember(owner, repository, path, commit, digest)
                 return StoredAction(dest, digest)
         incoming = usage(tree)
         try:
-            used = usage(self.state)
+            used = (
+                self._usage_tracker.total if self._usage_tracker is not None else usage(self.state)
+            )
         except OSError as exc:
             raise ActionStorageFull() from exc
         if used + incoming > self.budget:
@@ -477,6 +495,9 @@ class ActionStore:
                 shutil.rmtree(temporary)
             raise
         os.chmod(dest, 0o700)
+        if self._usage_tracker is not None:
+            self._usage_tracker.add(dest)
+        self._sync_store_usage(dest)
         if self._open:
             self._created.append(dest)
         self._remember(owner, repository, path, commit, digest)
@@ -506,6 +527,14 @@ class ActionStore:
             key=lambda item: (item["owner"], item["repository"], item["path"], item["commit"])
         )
         self._write_pins(pins)
+
+    def _sync_index_usage(self):
+        if self._usage_tracker is not None:
+            self._usage_tracker.sync_files([self.index_path])
+
+    def _sync_store_usage(self, path):
+        if self._usage_tracker is not None:
+            self._usage_tracker.sync_parent_directories(path)
 
 
 def _node24_steps(job, found):

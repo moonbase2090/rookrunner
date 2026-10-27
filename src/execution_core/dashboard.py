@@ -32,6 +32,9 @@ BINDINGS = (
 )
 
 _TARGET = re.compile(r"\[(log-next|log-prev|previous|next|open|quit|back|cancel|run|artifact)\]")
+# C0/C1 controls that must not drive a raw terminal when shown as data.
+# TAB and LF stay so stored lines and indentation remain readable.
+_STORED_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _KEY_LABEL = {
     "previous": "k or up",
     "next": "j or down",
@@ -511,7 +514,29 @@ def _decode_b64(value):
         raw = base64.b64decode(value)
     except (ValueError, TypeError):
         return ""
-    return raw.decode("utf-8", "replace")
+    return _display_stored(raw.decode("utf-8", "replace"))
+
+
+def _display_stored(text):
+    """Show stored log or artifact bytes as data, not terminal commands.
+
+    CRLF and lone CR become LF so interactive CRLF conversion does not
+    double carriage returns. ESC and other controls become caret text.
+    """
+
+    if not isinstance(text, str) or text == "":
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _STORED_CONTROL.sub(_caret_control, text)
+
+
+def _caret_control(match):
+    code = ord(match.group(0))
+    if code == 0x7F:
+        return "^?"
+    # C0 and C1 share caret form: low five bits map to ^@…^_
+    # (_STORED_CONTROL only matches those ranges, so no "?" fallback.)
+    return "^" + chr((code & 0x1F) + 0x40)
 
 
 def _nth(rows, line, name):
@@ -565,7 +590,7 @@ def _interact(board):
         pending = b""
         while not board.quit:
             sys.stdout.write("\x1b[2J\x1b[H")
-            sys.stdout.write(board.render())
+            sys.stdout.write(board.render().replace("\n", "\r\n"))
             sys.stdout.flush()
             chunk = os.read(fd, 64)
             if chunk == b"":

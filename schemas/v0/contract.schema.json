@@ -2063,7 +2063,8 @@
           "enum": [
             "post",
             "skip",
-            "recorded"
+            "recorded",
+            "retry"
           ]
         },
         "state": {
@@ -2085,7 +2086,8 @@
           "enum": [
             "success",
             "failure",
-            "cancelled"
+            "cancelled",
+            "neutral"
           ]
         },
         "check_run_id": {
@@ -2097,6 +2099,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256
+        },
+        "check_text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
         },
         "status_recorded": {
           "type": "boolean"
@@ -2170,7 +2177,8 @@
               "enum": [
                 "success",
                 "failure",
-                "cancelled"
+                "cancelled",
+                "neutral"
               ]
             }
           },
