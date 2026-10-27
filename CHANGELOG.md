@@ -1,11 +1,24 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.13. A published release section
+The current package version is 0.1.14. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.14] - 2026-10-27
+
+- A poll pass records an error for one run and carries on with the
+  other runs, instead of stopping at the first bad run.
+- Final commit-status posts are retried with backoff (1, 2, and 4
+  seconds). Rate limits are not retried.
+- A new `reconcile` subcommand finds final runs whose status may still
+  show pending, skips any context GitHub already shows as final, and
+  re-posts the recorded result. The newest run for each context and
+  commit decides whether a run is final.
+- The package version is 0.1.14. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.13] - 2026-10-27
 
