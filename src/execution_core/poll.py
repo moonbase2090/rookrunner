@@ -2360,6 +2360,7 @@ class Pass:
                     repository_root=root,
                     clock=self.clock,
                     key_dir=self.key_dir,
+                    status_description=description if describe else None,
                 )
             except StatusError as error:
                 if error.kind == "RATE_LIMITED" and error.retryable:

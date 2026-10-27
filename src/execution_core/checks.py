@@ -642,8 +642,12 @@ def post_check_flow(
     clock=None,
     key_dir=None,
     check_text=None,
+    status_description=None,
 ):
-    """Mint a token, post the check, then the commit status. Discard the token."""
+    """Mint a token, post the check, then the commit status. Discard the token.
+
+    ``status_description`` is sent with the commit status only when given.
+    """
 
     if clock is None:
         clock = datetime.now(UTC)
@@ -685,7 +689,13 @@ def post_check_flow(
         if post_status_request:
             try:
                 posted.status_remaining = post_status(
-                    api_base, repository, sha, status_state, context, token
+                    api_base,
+                    repository,
+                    sha,
+                    status_state,
+                    context,
+                    token,
+                    description=status_description,
                 )
                 posted.status_posted = True
             except StatusError as error:

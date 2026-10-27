@@ -482,6 +482,49 @@ class CliCheckTests(unittest.TestCase):
         self.assertNotIn("old output must be trimmed", check["output"]["text"])
         validate_response("run.status", json.loads(result.stdout))
 
+    def _flow_status(self, status_description):
+        moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+        previous = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.home)
+        try:
+            posted = post_check_flow(
+                api_base=f"http://127.0.0.1:{self.server.server_address[1]}",
+                repository="moonbase2090/rookrunner",
+                sha=HEAD,
+                context=CONTEXT,
+                run_id="run-trust",
+                check_status="completed",
+                check_conclusion="failure",
+                check_summary_text="refused",
+                check_run_id=None,
+                status_state="failure",
+                post_status_request=True,
+                app_key=APP_KEY,
+                state_dir=self.state,
+                repository_root=self.repo,
+                clock=moment,
+                status_description=status_description,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous
+        self.assertTrue(posted.status_posted)
+        self.assertIsNone(posted.error)
+        return json.loads(self.server.requests[2]["body"])
+
+    def test_app_status_carries_the_refusal_description_when_given(self):
+        reason = "refused: pull request changes a workflow file: .github/workflows/ci.yml"
+        body = self._flow_status(reason)
+        self.assertEqual(body["state"], "failure")
+        self.assertEqual(body["description"], reason)
+
+    def test_app_status_omits_a_description_when_none_is_given(self):
+        body = self._flow_status(None)
+        self.assertEqual(body["state"], "failure")
+        self.assertNotIn("description", body)
+
     def test_a_queued_check_omits_conclusion_and_uses_the_clock(self):
         moment = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
         previous = os.environ.get("HOME")
