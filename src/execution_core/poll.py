@@ -420,6 +420,24 @@ _WORKFLOW_DIR = ".github/workflows/"
 _WORKFLOW_PATH_LIMIT = 5
 
 
+def _allow_pr_workflow_sha(values):
+    """Return the exact head SHAs that may change a workflow file for one invocation.
+
+    The set is not read from state, and it never matches another head.
+    """
+
+    if values is None:
+        values = ()
+    if not isinstance(values, list | tuple):
+        raise PollError("INVALID_PARAMS", "allow-pr-workflow-sha must be a list of commit SHAs")
+    allowed = []
+    for item in values:
+        if not isinstance(item, str) or _SHA.fullmatch(item) is None:
+            raise PollError("INVALID_PARAMS", "allow-pr-workflow-sha must be a commit SHA")
+        allowed.append(item)
+    return frozenset(allowed)
+
+
 def _allow_pr_workflow(values):
     """Return the association set for one invocation. It is not read from state."""
 
@@ -1045,6 +1063,7 @@ class Pass:
         places=None,
         allow_untrusted=(),
         allow_pr_workflow=(),
+        allow_pr_workflow_sha=(),
         key_dir=None,
         retry_failed=None,
     ):
@@ -1069,6 +1088,7 @@ class Pass:
         self.retry_applied = False
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
+        self.allow_pr_workflow_sha = _allow_pr_workflow_sha(allow_pr_workflow_sha)
         self.hold_branches = False
         self.hold_pulls = False
         self.remote_repository = None
@@ -2190,6 +2210,21 @@ class Pass:
         if kind is None:
             self._clear_refusal_status(number, head_sha)
             return True, None
+        if kind == "changed" and head_sha in self.allow_pr_workflow_sha:
+            # An owner named this exact head. No association is widened, and a
+            # new push moves the head, so the override does not carry over.
+            message = f"pull request workflow change allowed by owner for this head SHA: {_show_paths(paths)}"
+            self.result["warnings"].append(
+                {
+                    "number": number,
+                    "sha": head_sha,
+                    "action": "allowed",
+                    "reason": "workflow_changed",
+                    "message": message,
+                }
+            )
+            self._clear_refusal_status(number, head_sha)
+            return True, "pull request workflow change allowed by owner for this head SHA"
         association = _association(item.get("author_association"))
         allowed_by = association if association in self.allow_pr_workflow else None
         permission_checked = False
@@ -3021,6 +3056,7 @@ def poll_once(
     places=None,
     allow_untrusted=(),
     allow_pr_workflow=(),
+    allow_pr_workflow_sha=(),
     key_dir=None,
     retry_failed=None,
 ):
@@ -3044,6 +3080,7 @@ def poll_once(
         places=places,
         allow_untrusted=allow_untrusted,
         allow_pr_workflow=allow_pr_workflow,
+        allow_pr_workflow_sha=allow_pr_workflow_sha,
         key_dir=key_dir,
         retry_failed=retry_failed,
     ).run()
