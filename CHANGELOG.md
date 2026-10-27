@@ -1,11 +1,21 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.12. A published release section
+The current package version is 0.1.13. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.13] - 2026-10-27
+
+- In App-key mode, a refused pull request's trust status and a
+  sign-off status carry their reason as the status description. The
+  App-key commit status carries its refusal reason as the description,
+  so a failure such as the workflow-edit gate says why it refused. Run
+  statuses and the CLI poster are unchanged.
+- The package version is 0.1.13. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.12] - 2026-10-26
 
