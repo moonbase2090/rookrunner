@@ -572,19 +572,26 @@ def _reconcile_poster(args):
             )
         if decision.get("action") not in {"post", "skip"}:
             raise StatusError("WORKER_ERROR", "worker status decision was not post or skip")
+        state = decision.get("state")
+        if (
+            not isinstance(state, str)
+            or state not in {"success", "failure", "error"}
+            or state != candidate["final"]
+        ):
+            raise StatusError("STATUS_REFUSED", "worker final state does not match the candidate")
         token = read_credential(args.credential_file, args.state, args.clone or args.state)
         try:
             post_status(
                 args.api_base,
                 args.repository,
                 candidate["sha"],
-                candidate["final"],
+                state,
                 candidate["context"],
                 token,
             )
         finally:
             token = None
-        caller("run.status", {**params, "record": candidate["final"]})
+        caller("run.status", {**params, "record": state})
 
     if not args.credential_file:
         raise StatusError("INVALID_PARAMS", "a live reconcile posts with --credential-file")
