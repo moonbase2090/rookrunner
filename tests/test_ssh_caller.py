@@ -116,13 +116,27 @@ class SshCallerTests(unittest.TestCase):
 
     def test_a_hung_ssh_times_out_without_a_listen_port(self):
         self._ssh("#!/bin/sh\nexec sleep 60\n")
+        previous = os.environ.get("ROOKRUNNER_WORKER_TIMEOUT")
+        os.environ["ROOKRUNNER_WORKER_TIMEOUT"] = "3"
         started = time.monotonic()
-        with self.assertRaises(PollError) as caught:
-            ssh_caller("worker-host", str(self.state))("worker.describe", {})
+        try:
+            with self.assertRaises(PollError) as caught:
+                ssh_caller("worker-host", str(self.state))("worker.describe", {})
+        finally:
+            if previous is None:
+                os.environ.pop("ROOKRUNNER_WORKER_TIMEOUT", None)
+            else:
+                os.environ["ROOKRUNNER_WORKER_TIMEOUT"] = previous
         self.assertEqual(caught.exception.kind, "WORKER_ERROR")
         self.assertEqual(str(caught.exception), "worker ssh call timed out")
         self.assertLess(time.monotonic() - started, 20)
         self.assertFalse(self.marker.exists())
+
+    def test_a_slow_ssh_that_answers_is_not_cut_off_at_five_seconds(self):
+        # Start-up on a remote host can exceed the old fixed five-second cap.
+        self._ssh('#!/bin/sh\nsleep 7\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+        result = ssh_caller("worker-host", str(self.state))("worker.describe", {})
+        self.assertTrue(result["ready"])
 
     def test_ssh_stderr_is_not_returned(self):
         self._ssh(
