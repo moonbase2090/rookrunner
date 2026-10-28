@@ -1,4 +1,4 @@
-# Proposed pending-status recovery
+# Proposed safe pending-status recovery
 
 Status: proposed; owner decision pending.
 
@@ -12,21 +12,18 @@ is missing and the request identity can differ from the snapshot base.
 
 ## Proposed behavior
 
-Add an explicit recovery mode for reconciliation. It may operate only on a
-terminal workflow run with a matching `pending` row in the worker's status
-history. It must verify the retained snapshot digest, cleanliness, and empty
-included-file list again. It derives the tested commit from the verified
-manifest and posts the worker's current final state for the status SHA already
-bound to the pending row. The normal `run.status` path continues to require an
-explicit tested commit that matches the snapshot.
+When poller state is missing, reconciliation can recover the submitted commit
+from the worker's persisted request. The worker still verifies the retained
+snapshot and requires that commit to equal the manifest base before posting.
+An existing pending row does not override a mismatch; it binds only the run,
+context, and status SHA.
 
-The pending row is the authorization for the recovery path: the worker only
-records it after the normal path has validated the snapshot and tested commit.
-The recovery path does not authorize a new run, context, or status SHA, and it
-does not manufacture a successful result.
+For runs whose request identity does not match the manifest, this path refuses
+to post and does not manufacture a result. The mismatch seen on the six stuck
+runs cannot be repaired by this change.
 
 ## Open question
 
-Moonbase must decide whether the existing pending row is sufficient evidence
-for this narrowly scoped recovery path or whether these old statuses should
-remain pending and be replaced by fresh submissions.
+Moonbase must decide whether the six mismatched runs should remain pending and
+be replaced by fresh submissions, or whether to accept a deliberate design
+change that attributes their result to the snapshot base instead.

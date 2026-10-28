@@ -226,7 +226,7 @@ class WorkerStatusTests(unittest.TestCase):
             self.worker.db.execute("SELECT count(*) FROM status_posts").fetchone()[0], 0
         )
 
-    def test_pending_status_authorizes_recovery_without_relaxing_normal_status_checks(self):
+    def test_existing_pending_row_does_not_override_submitted_commit_mismatch(self):
         snapshot_id, digest = _snapshot(self.state, base=COMMIT)
         submitted_head = HEAD
         run = _record(
@@ -244,27 +244,21 @@ class WorkerStatusTests(unittest.TestCase):
             ),
         )
         self.assertNotEqual(submitted_head, COMMIT)
-        recovery = {
-            "run_id": run["run_id"],
-            "recover_pending": True,
-            "status_sha": HEAD,
-            "context": CONTEXT,
-        }
+        with self.worker.db:
+            self.worker.db.execute(
+                "INSERT INTO status_posts(run_id, context, sha, state) VALUES (?, ?, ?, 'pending')",
+                (run["run_id"], CONTEXT, HEAD),
+            )
+        recovered = self.worker.get(run["run_id"])
+        self.assertEqual(recovered["input"]["tested_commit"], submitted_head)
 
-        refused = self._reply(recovery)
+        refused = self._reply(_params(run["run_id"], tested=submitted_head))
         self.assertEqual(refused["error"]["data"]["kind"], "STATUS_REFUSED")
-        self.assertIn("no matching pending status", refused["error"]["message"])
-        explicit = self._reply(_params(run["run_id"], tested=COMMIT, record="pending"))
-        self.assertEqual(explicit["result"], {"action": "recorded", "state": "success"})
-
-        decision = self._reply(recovery)
-        self.assertEqual(decision["result"], {"action": "post", "state": "success"})
-        recorded = self._reply({**recovery, "record": "success"})
-        self.assertEqual(recorded["result"], {"action": "recorded", "state": "success"})
+        self.assertIn("base_commit does not equal the tested commit", refused["error"]["message"])
         states = self.worker.db.execute(
             "SELECT state FROM status_posts WHERE run_id=? ORDER BY state", (run["run_id"],)
         ).fetchall()
-        self.assertEqual([row[0] for row in states], ["pending", "success"])
+        self.assertEqual([row[0] for row in states], ["pending"])
 
     def test_a_failed_run_maps_to_failure_and_a_nonzero_success_maps_to_error(self):
         snapshot_id, digest = _snapshot(self.state)

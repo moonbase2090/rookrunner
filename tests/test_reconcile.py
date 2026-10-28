@@ -340,7 +340,7 @@ class ReportReconcileTest(unittest.TestCase):
             self.assertEqual(stop.exception.code, 0)
             self.assertEqual(out.getvalue(), "")
 
-    def test_live_reconcile_uses_worker_pending_row_recovery_without_poll_state(self):
+    def test_live_reconcile_uses_worker_submission_identity_without_poll_state(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(
                 directory,
@@ -351,6 +351,8 @@ class ReportReconcileTest(unittest.TestCase):
 
             def caller(method, params):
                 calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "b" * 40}}
                 return {"action": "skip", "state": "success"}
 
             args = _args(
@@ -374,15 +376,16 @@ class ReportReconcileTest(unittest.TestCase):
 
             self.assertEqual(stop.exception.code, 0)
             self.assertEqual(json.loads(out.getvalue())["action"], "posted")
-            self.assertEqual([method for method, _ in calls], ["run.status", "run.status"])
-            self.assertIs(calls[0][1]["recover_pending"], True)
-            self.assertNotIn("tested_commit", calls[0][1])
-            self.assertEqual(calls[1][1]["record"], "success")
+            self.assertEqual(
+                [method for method, _ in calls], ["run.get", "run.status", "run.status"]
+            )
+            self.assertEqual(calls[1][1]["tested_commit"], "b" * 40)
+            self.assertEqual(calls[2][1]["record"], "success")
             post_status.assert_called_once_with(
                 "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
             )
 
-    def test_live_reconcile_does_not_post_when_worker_rejects_missing_pending_row(self):
+    def test_live_reconcile_does_not_post_when_worker_rejects_recovered_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(
                 directory,
@@ -393,9 +396,9 @@ class ReportReconcileTest(unittest.TestCase):
 
             def caller(method, params):
                 calls.append((method, params))
-                raise StatusError(
-                    "STATUS_REFUSED", "no matching pending status authorizes recovery"
-                )
+                if method == "run.get":
+                    return {"input": {"tested_commit": "c" * 40}}
+                raise StatusError("STATUS_REFUSED", "base commit does not match submitted commit")
 
             args = _args(
                 directory,
@@ -418,7 +421,7 @@ class ReportReconcileTest(unittest.TestCase):
 
             self.assertEqual(stop.exception.code, 1)
             self.assertEqual(json.loads(out.getvalue())["action"], "failed")
-            self.assertEqual([method for method, _ in calls], ["run.status"])
+            self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
             post_status.assert_not_called()
 
     def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):

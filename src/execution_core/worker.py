@@ -1086,10 +1086,20 @@ class Worker:
     def get(self, run_id):
         if not utf8_string(run_id, 1, 128):
             invalid("run_id must be a nonempty UTF-8 string of at most 128 characters")
-        row = self.db.execute("SELECT record FROM runs WHERE id=?", (run_id,)).fetchone()
+        row = self.db.execute("SELECT record, request FROM runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise Fault("RUN_NOT_FOUND", "run does not exist")
-        return json.loads(row[0])
+        record = json.loads(row[0])
+        if record["input"].get("kind") == "workflow_job":
+            try:
+                request = json.loads(row[1])
+            except (TypeError, ValueError):
+                request = {}
+            event = request.get("event") if isinstance(request, dict) else None
+            submitted_commit = event.get("after") if isinstance(event, dict) else None
+            if isinstance(submitted_commit, str) and _STATUS_SHA.fullmatch(submitted_commit):
+                record["input"]["tested_commit"] = submitted_commit
+        return record
 
     def schedule(self):
         try:
@@ -1927,6 +1937,13 @@ class Worker:
                     "kind": "workflow_job",
                     "digest": captured["digest"],
                     "snapshot_id": captured["snapshot_id"],
+                    **(
+                        {"tested_commit": p["event"]["after"]}
+                        if isinstance(p["event"], dict)
+                        and isinstance(p["event"].get("after"), str)
+                        and _STATUS_SHA.fullmatch(p["event"]["after"])
+                        else {}
+                    ),
                     "workflow": manifest["workflow"],
                     "workflow_digest": captured["workflow_digest"],
                     "plan_digest": planned["digest"],
@@ -2583,28 +2600,13 @@ class Worker:
 
         fields(
             p,
-            ("run_id", "status_sha", "context"),
-            (
-                "tested_commit",
-                "recover_pending",
-                "record",
-                "checks",
-                "check_run_id",
-                "check_status",
-                "check_conclusion",
-            ),
+            ("run_id", "tested_commit", "status_sha", "context"),
+            ("record", "checks", "check_run_id", "check_status", "check_conclusion"),
         )
-        recover_pending = p.get("recover_pending") is True
-        if "recover_pending" in p and not recover_pending:
-            invalid("recover_pending must be true")
-        if recover_pending == ("tested_commit" in p):
-            invalid("provide either tested_commit or recover_pending")
-        tested = p.get("tested_commit")
+        tested = p["tested_commit"]
         status_sha = p["status_sha"]
         context = p["context"]
-        if "tested_commit" in p and (
-            not isinstance(tested, str) or not _STATUS_SHA.fullmatch(tested)
-        ):
+        if not isinstance(tested, str) or not _STATUS_SHA.fullmatch(tested):
             invalid("tested_commit must be 40 or 64 lowercase hex characters")
         if not isinstance(status_sha, str) or not _STATUS_SHA.fullmatch(status_sha):
             invalid("status_sha must be 40 or 64 lowercase hex characters")
@@ -2615,8 +2617,6 @@ class Worker:
         if "checks" in p and p["checks"] is not True:
             invalid("checks is not accepted")
         recording_check = "check_run_id" in p or "check_status" in p or "check_conclusion" in p
-        if recover_pending and ("checks" in p or recording_check):
-            invalid("pending recovery does not accept check fields")
         if p.get("checks") and ("record" in p or recording_check):
             invalid("missing or unknown parameters")
         if recording_check and ("check_run_id" not in p or "check_status" not in p):
@@ -2626,25 +2626,12 @@ class Worker:
         record = self.get(p["run_id"])
         if record["input"].get("kind") != "workflow_job":
             raise Fault("STATUS_REFUSED", "run is not a workflow run")
-        if recover_pending:
-            if record["state"] not in TERMINAL:
-                raise Fault("STATUS_REFUSED", "pending status recovery requires a terminal run")
-            # A pending row is written only after ordinary run.status validates
-            # the submitted commit against this verified snapshot.
-            pending = self.db.execute(
-                "SELECT 1 FROM status_posts WHERE run_id=? AND context=? AND sha=? AND state='pending'",
-                (p["run_id"], context, status_sha),
-            ).fetchone()
-            if not pending:
-                raise Fault("STATUS_REFUSED", "no matching pending status authorizes recovery")
         manifest = self._status_manifest(record)
         if manifest["dirty"] is not False:
             raise Fault("STATUS_REFUSED", "snapshot is dirty")
         included = manifest["included"]
         if not isinstance(included, list) or included:
             raise Fault("STATUS_REFUSED", "snapshot includes files")
-        if recover_pending:
-            tested = manifest["base_commit"]
         if manifest["base_commit"] != tested:
             raise Fault("STATUS_REFUSED", "base_commit does not equal the tested commit")
         error = record.get("error")

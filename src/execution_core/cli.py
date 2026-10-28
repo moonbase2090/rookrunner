@@ -548,16 +548,23 @@ def _reconcile_poster(args):
             if "run_id" in entry and "tested_commit" in entry
         }
 
+    def tested_commit(run_id):
+        if run_id in tested:
+            return tested[run_id]
+        record = caller("run.get", {"run_id": run_id})
+        pinned = record.get("input", {}) if isinstance(record, dict) else {}
+        submitted_commit = pinned.get("tested_commit")
+        if not isinstance(submitted_commit, str):
+            raise StatusError("STATUS_REFUSED", "run has no submitted tested commit")
+        return submitted_commit
+
     def post(candidate):
         params = {
             "run_id": candidate["run_id"],
             "context": candidate["context"],
             "status_sha": candidate["sha"],
+            "tested_commit": tested_commit(candidate["run_id"]),
         }
-        if candidate["run_id"] in tested:
-            params["tested_commit"] = tested[candidate["run_id"]]
-        else:
-            params["recover_pending"] = True
         decision = caller("run.status", params)
         if decision.get("action") not in {"post", "skip", "retry"}:
             raise StatusError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
