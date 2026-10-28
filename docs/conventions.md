@@ -9,7 +9,7 @@ Changing a row changes this file and needs the label
 
 A row marked CI has a mechanical check in the pull request that
 introduces it. Until that check exists, the row says CI (planned).
-Review rows stay with Muse until a check exists.
+Review rows stay with the designated reviewer until a check exists.
 
 | Rule | Check |
 | --- | --- |

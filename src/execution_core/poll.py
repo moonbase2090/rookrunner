@@ -127,12 +127,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow
+from .reconcile import post_with_retry
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
 from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
@@ -415,6 +418,24 @@ _PR_WORKFLOW_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
 _PR_WORKFLOW_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _WORKFLOW_DIR = ".github/workflows/"
 _WORKFLOW_PATH_LIMIT = 5
+
+
+def _allow_pr_workflow_sha(values):
+    """Return the exact head SHAs that may change a workflow file for one invocation.
+
+    The set is not read from state, and it never matches another head.
+    """
+
+    if values is None:
+        values = ()
+    if not isinstance(values, list | tuple):
+        raise PollError("INVALID_PARAMS", "allow-pr-workflow-sha must be a list of commit SHAs")
+    allowed = []
+    for item in values:
+        if not isinstance(item, str) or _SHA.fullmatch(item) is None:
+            raise PollError("INVALID_PARAMS", "allow-pr-workflow-sha must be a commit SHA")
+        allowed.append(item)
+    return frozenset(allowed)
 
 
 def _allow_pr_workflow(values):
@@ -1042,6 +1063,7 @@ class Pass:
         places=None,
         allow_untrusted=(),
         allow_pr_workflow=(),
+        allow_pr_workflow_sha=(),
         key_dir=None,
         retry_failed=None,
     ):
@@ -1066,10 +1088,12 @@ class Pass:
         self.retry_applied = False
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
+        self.allow_pr_workflow_sha = _allow_pr_workflow_sha(allow_pr_workflow_sha)
         self.hold_branches = False
         self.hold_pulls = False
         self.remote_repository = None
         self.budget = _Budget()
+        self.sleep = time.sleep
         self.state = None
         self.lock_fd = None
         self.repository_body = None
@@ -1380,8 +1404,7 @@ class Pass:
                 return
             if self._placed_caller(entry) is None or "run_id" not in entry:
                 continue
-            if self._post_record(entry):
-                self._retire_submission(entry)
+            self._post_record_guarded(entry)
 
     def _placed_caller(self, entry):
         place = self._place_for(entry.get("host"))
@@ -2199,6 +2222,21 @@ class Pass:
         if kind is None:
             self._clear_refusal_status(number, head_sha)
             return True, None
+        if kind == "changed" and head_sha in self.allow_pr_workflow_sha:
+            # An owner named this exact head. No association is widened, and a
+            # new push moves the head, so the override does not carry over.
+            message = f"pull request workflow change allowed by owner for this head SHA: {_show_paths(paths)}"
+            self.result["warnings"].append(
+                {
+                    "number": number,
+                    "sha": head_sha,
+                    "action": "allowed",
+                    "reason": "workflow_changed",
+                    "message": message,
+                }
+            )
+            self._clear_refusal_status(number, head_sha)
+            return True, "pull request workflow change allowed by owner for this head SHA"
         association = _association(item.get("author_association"))
         allowed_by = association if association in self.allow_pr_workflow else None
         permission_checked = False
@@ -2373,6 +2411,7 @@ class Pass:
                     repository_root=root,
                     clock=self.clock,
                     key_dir=self.key_dir,
+                    status_description=description if describe else None,
                 )
             except StatusError as error:
                 if error.kind == "RATE_LIMITED" and error.retryable:
@@ -2767,8 +2806,21 @@ class Pass:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
+            self._post_record_guarded(entry)
+
+    def _post_record_guarded(self, entry):
+        """Post one run; a failure is logged with its run id and the pass goes on."""
+
+        try:
             if self._post_record(entry):
                 self._retire_submission(entry)
+        except (PollError, StatusError, OSError, ValueError) as exc:
+            kind = getattr(exc, "kind", None) or (
+                "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
+            )
+            failure = {"run_id": entry["run_id"], "kind": kind, "message": str(exc)}
+            self.result.setdefault("errors", []).append(failure)
+            print(canonical({"run_error": failure}), file=sys.stderr)  # noqa: T201  run id on stderr
 
     def _retire_submission(self, entry):
         key = entry["key"]
@@ -2831,7 +2883,10 @@ class Pass:
             return False
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
-        if self._post(entry, decision["state"], decision if self.app_key else None):
+        if post_with_retry(
+            lambda: self._post(entry, decision["state"], decision if self.app_key else None),
+            sleep=self.sleep,
+        ):
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
             )
@@ -3040,6 +3095,7 @@ def poll_once(
     places=None,
     allow_untrusted=(),
     allow_pr_workflow=(),
+    allow_pr_workflow_sha=(),
     key_dir=None,
     retry_failed=None,
 ):
@@ -3063,6 +3119,7 @@ def poll_once(
         places=places,
         allow_untrusted=allow_untrusted,
         allow_pr_workflow=allow_pr_workflow,
+        allow_pr_workflow_sha=allow_pr_workflow_sha,
         key_dir=key_dir,
         retry_failed=retry_failed,
     ).run()

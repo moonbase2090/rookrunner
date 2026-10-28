@@ -2139,6 +2139,70 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 1)
         self.assertEqual(repeat["warnings"], [])
 
+    def test_an_exact_head_override_runs_that_head_and_records_the_owner_reason(self):
+        # The agents App shows as CONTRIBUTOR and cannot pass by association.
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        refused = self.poll()
+        self._assert_workflow_refused(
+            refused, head, "pull request changes a workflow file: .github/workflows/check.yml"
+        )
+        allowed = self.poll(allow_pr_workflow_sha=[head])
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(allowed["submitted"][0]["event"], "pull_request")
+        record = self.worker.get(allowed["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"],
+            "pull request workflow change allowed by owner for this head SHA",
+        )
+        self.assertEqual(
+            allowed["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "allowed",
+                    "reason": "workflow_changed",
+                    "message": (
+                        "pull request workflow change allowed by owner for this head SHA: "
+                        ".github/workflows/check.yml"
+                    ),
+                }
+            ],
+        )
+        self.assertIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
+    def test_an_override_for_another_sha_does_not_admit_the_workflow_edit(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        other = "0" * 40
+        self.assertNotEqual(other, head)
+        refused = self.poll(allow_pr_workflow_sha=[other])
+        self._assert_workflow_refused(
+            refused, head, "pull request changes a workflow file: .github/workflows/check.yml"
+        )
+        self.assertEqual(self.runs(), 0)
+        self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
+    def test_the_sha_override_does_not_widen_associations(self):
+        _tip, head = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        self.server.permissions = {"Mona": "read"}
+        self.poll(allow_pr_workflow=["OWNER", "MEMBER", "COLLABORATOR"])
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(self.runs(), 0)
+        self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
+    def test_allow_pr_workflow_sha_rejects_values_that_are_not_commit_shas(self):
+        for value in ("main", "6192c3b", "A" * 40, ""):
+            with self.assertRaises(PollError) as caught:
+                self.poll(allow_pr_workflow_sha=[value])
+            self.assertEqual(caught.exception.kind, "INVALID_PARAMS")
+            self.assertEqual(str(caught.exception), "allow-pr-workflow-sha must be a commit SHA")
+        with self.assertRaises(PollError) as caught:
+            self.poll(allow_pr_workflow_sha="0" * 40)
+        self.assertEqual(
+            str(caught.exception), "allow-pr-workflow-sha must be a list of commit SHAs"
+        )
+
     def _workflow_edit(self, seed):
         (seed / ".github/workflows/check.yml").write_text(WORKFLOW + "# edited\n")
 
