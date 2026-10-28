@@ -232,9 +232,22 @@ class WorkerStatusTests(unittest.TestCase):
             self.worker,
             snapshot_id,
             digest,
-            request=canonical({"event": {"after": HEAD}}),
+            request=canonical(
+                {
+                    "version": 1,
+                    "workflow": "workflow.yml",
+                    "job_id": "check",
+                    "event": {"after": HEAD},
+                    "event_name": "pull_request",
+                }
+            ),
         )
 
+        stored = self.worker.db.execute(
+            "SELECT record, request FROM runs WHERE id=?", (run["run_id"],)
+        ).fetchone()
+        self.assertNotIn("tested_commit", json.loads(stored[0])["input"])
+        self.assertEqual(json.loads(stored[1])["event"]["after"], HEAD)
         recovered = self.worker.get(run["run_id"])
         self.assertEqual(recovered["input"]["tested_commit"], HEAD)
         refused = self._reply(_params(run["run_id"], tested=HEAD))
