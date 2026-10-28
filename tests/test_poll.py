@@ -251,7 +251,7 @@ class _Handler(BaseHTTPRequestHandler):
             code = 201 if method == "POST" else 200
             response = json.dumps({"id": APP_CHECK_ID}).encode()
         else:
-            code = 201
+            code = getattr(self.server, "post_status", 201)
             response = b"{}"
         self._send(code, response, None)
 
@@ -619,7 +619,7 @@ class PollTests(unittest.TestCase):
         self.server.requests.clear()
         fourth = self.poll()
         self.assertEqual(self.posts(), [])
-        self.assertEqual(fourth["statuses"][0]["action"], "skip")
+        self.assertEqual(fourth["statuses"], [])
 
         feature = self.seed / "feature.txt"
         feature.write_text("feature\n")
@@ -774,13 +774,231 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.submits[0]["event"]["before"], tip)
         self.assertEqual(self.submits[0]["event"]["after"], new)
 
+    def test_adjacent_terminal_runs_are_both_posted_locally(self):
+        self._assert_adjacent_terminal_posts(placed=False)
+
+    def test_adjacent_terminal_runs_are_both_posted_on_their_place(self):
+        self._assert_adjacent_terminal_posts(placed=True)
+
+    def _assert_adjacent_terminal_posts(self, *, placed):
+        self._write(
+            WORKFLOW + "\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo lint\n"
+        )
+        _git(self.seed, "push", "origin", "main")
+        self.server.branches = [{"name": "main", "commit": {"sha": self._tip()}}]
+        worker = self._place_worker("adjacent") if placed else self.worker
+        extra = {}
+        if placed:
+            place = self._place("adjacent", worker, self._bound(worker, []))
+            place["cap"] = 2
+            extra["places"] = [place]
+        jobs = [JOB, (JOB[0], "lint")]
+        first = self.poll(jobs=jobs, **extra)
+        self.assertEqual(len(first["submitted"]), 2)
+        left, right = [entry["run_id"] for entry in first["submitted"]]
+        for run_id in (left, right):
+            record = worker.get(run_id)
+            record.update(state="failed", exit_code=1)
+            with worker.guard, worker.db:
+                worker.save(record)
+        self.server.requests.clear()
+        # Each pass receives fresh placement dictionaries, just like CLI invocations.
+        if placed:
+            place = self._place("adjacent", worker, self._bound(worker, []))
+            place["cap"] = 2
+            extra["places"] = [place]
+        finished = self.poll(jobs=jobs, **extra)
+        self.assertEqual(
+            finished["statuses"],
+            [
+                {"run_id": left, "state": "failure", "action": "posted"},
+                {"run_id": right, "state": "failure", "action": "posted"},
+            ],
+        )
+        self.assertEqual(
+            [json.loads(row["body"])["state"] for row in self.posts()], ["failure", "failure"]
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 2)
+
+    def test_a_rate_limited_terminal_post_keeps_the_submission_for_retry(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        run_id = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(run_id)
+        record["state"] = "cancelled"
+        record["exit_code"] = None
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        self.server.post_status = 429
+        limited = self.poll()
+        self.assertTrue(limited["stopped"])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual([entry["run_id"] for entry in saved["submissions"]], [run_id])
+        self.assertEqual(saved.get("completed", {}), {})
+        self.server.post_status = 201
+        retried = self.poll()
+        self.assertEqual(
+            retried["statuses"],
+            [
+                {"run_id": run_id, "state": "error", "action": "posted"},
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 1)
+
+    def test_an_already_reported_legacy_submission_is_retired(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        run_id = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(run_id)
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        saved = json.loads((self.state / "poll.json").read_text())
+        saved.pop("completed", None)
+        (self.state / "poll.json").write_text(canonical(saved))
+        entry = saved["submissions"][0]
+        self.caller(
+            "run.status",
+            {
+                "run_id": run_id,
+                "tested_commit": tip,
+                "status_sha": tip,
+                "context": entry["context"],
+                "record": "success",
+            },
+        )
+        self.server.requests.clear()
+        migrated = self.poll()
+        self.assertEqual(
+            migrated["statuses"],
+            [
+                {"run_id": run_id, "state": "success", "action": "skip"},
+            ],
+        )
+        self.assertEqual(self.posts(), [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(list(saved["completed"]), [entry["key"]])
+        self.assertEqual(saved["completed"][entry["key"]]["run_id"], run_id)
+
+    def test_finished_submissions_are_pruned_without_resubmitting_an_old_tip(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        submitted = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(submitted)
+        record["state"] = "failed"
+        record["exit_code"] = 1
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        finished = self.poll()
+        self.assertEqual(
+            finished["statuses"],
+            [
+                {"run_id": submitted, "state": "failure", "action": "posted"},
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 1)
+        # Simulate rediscovery after a branch cursor is lost. The compact key
+        # must prevent another submit, including placement on another worker.
+        saved["tips"] = {}
+        saved["etags"] = {}
+        (self.state / "poll.json").write_text(canonical(saved))
+        self.submits.clear()
+        self.server.requests.clear()
+        repeated = self.poll()
+        self.assertEqual(repeated["submitted"], [])
+        self.assertEqual(repeated["statuses"], [])
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(self.runs(), 1)
+        other = self._place_worker("other")
+        calls = []
+        saved = json.loads((self.state / "poll.json").read_text())
+        saved["tips"] = {}
+        saved["etags"] = {}
+        (self.state / "poll.json").write_text(canonical(saved))
+        self._places([self._place("other", other, self._bound(other, calls))], datetime.now(UTC))
+        self.assertEqual(other.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
+        self.assertNotIn("run.submit", calls)
+
+    def test_app_reporting_retires_an_unreadable_terminal_snapshot_once(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        run_id = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(run_id)
+        record["state"] = "failed"
+        record["exit_code"] = None
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        shutil.rmtree(self.state / "snapshots" / record["input"]["snapshot_id"])
+
+        def app_poll():
+            return poll_once(
+                repository="acme/demo",
+                clone=self.clone,
+                jobs=[JOB],
+                image=IMAGE,
+                credential_file=None,
+                app_key="unused-key",
+                api_base=self.base,
+                state=self.state,
+                caller=self.caller,
+            )
+
+        self.server.requests.clear()
+        first = app_poll()
+        self.assertEqual(first["skipped"], [{"reason": "snapshot_unreadable", "run_id": run_id}])
+        self.assertEqual(first["statuses"], [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 1)
+        second = app_poll()
+        self.assertEqual(second["skipped"], [])
+        self.assertEqual(second["statuses"], [])
+        self.assertEqual(self.posts(), [])
+        self.assertEqual(self.runs(), 1)
+
+    def test_placed_terminal_submissions_are_retired(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        worker = self._place_worker("alpha")
+        clock = datetime.now(UTC)
+        calls = []
+        first = self._places([self._place("alpha", worker, self._bound(worker, calls))], clock)
+        run_id = first["submitted"][0]["run_id"]
+        record = worker.get(run_id)
+        record["state"] = "failed"
+        record["exit_code"] = 1
+        with worker.guard, worker.db:
+            worker.save(record)
+        second = self._places([self._place("alpha", worker, self._bound(worker, calls))], clock)
+        self.assertEqual(
+            second["statuses"],
+            [
+                {"run_id": run_id, "state": "failure", "action": "posted"},
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 1)
+        third = self._places([self._place("alpha", worker, self._bound(worker, calls))], clock)
+        self.assertEqual(third["statuses"], [])
+        self.assertEqual(third["submitted"], [])
+        self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 1)
+
     def test_a_missing_snapshot_does_not_stop_a_later_terminal_post(self):
         tip = self._tip()
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
         first = self.poll()
         older = first["submitted"][0]["run_id"]
         record = self.worker.get(older)
-        older_sha = tip
         record["state"] = "succeeded"
         record["exit_code"] = 0
         with self.worker.guard, self.worker.db:
@@ -822,55 +1040,25 @@ class PollTests(unittest.TestCase):
         third = self.poll()
         self.assertEqual(
             [json.loads(item["body"]) for item in self.posts()],
-            [
-                {
-                    "context": "rookrunner/check.yml/check",
-                    "description": "snapshot is not readable",
-                    "state": "error",
-                },
-                {"context": "rookrunner/check.yml/check", "state": "success"},
-            ],
+            [{"context": "rookrunner/check.yml/check", "state": "success"}],
         )
-        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
-        self.assertTrue(self.posts()[1]["path"].endswith("/" + new))
-        self.assertEqual(
-            [item for item in third["skipped"] if item["reason"] == "snapshot_unreadable"],
-            [{"reason": "snapshot_unreadable", "run_id": older}],
-        )
+        self.assertTrue(self.posts()[0]["path"].endswith("/" + new))
+        self.assertEqual(third["skipped"], [])
         self.assertEqual(
             third["statuses"],
             [
-                {"run_id": older, "state": "error", "action": "posted"},
                 {"run_id": newer, "state": "success", "action": "posted"},
             ],
         )
         saved = json.loads((self.state / "poll.json").read_text())
-        self.assertEqual([item["run_id"] for item in saved["submissions"]], [older, newer])
+        self.assertEqual(saved["submissions"], [])
+        self.assertEqual(len(saved["completed"]), 2)
         self.server.requests.clear()
         fourth = self.poll()
-        self.assertEqual(
-            [json.loads(item["body"]) for item in self.posts()],
-            [
-                {
-                    "context": "rookrunner/check.yml/check",
-                    "description": "snapshot is not readable",
-                    "state": "error",
-                },
-            ],
-        )
-        self.assertTrue(self.posts()[0]["path"].endswith("/" + older_sha))
+        self.assertEqual(self.posts(), [])
         self.assertEqual(self.runs(), 2)
-        self.assertEqual(
-            [item for item in fourth["skipped"] if item["reason"] == "snapshot_unreadable"],
-            [{"reason": "snapshot_unreadable", "run_id": older}],
-        )
-        self.assertEqual(
-            fourth["statuses"],
-            [
-                {"run_id": older, "state": "error", "action": "posted"},
-                {"run_id": newer, "state": "success", "action": "skip"},
-            ],
-        )
+        self.assertEqual(fourth["skipped"], [])
+        self.assertEqual(fourth["statuses"], [])
 
     def test_a_fork_and_a_missing_merge_ref_run_nothing(self):
         self.server.pulls = [

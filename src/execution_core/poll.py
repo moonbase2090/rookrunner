@@ -1144,6 +1144,10 @@ class Pass:
             else:
                 self._probe_places()
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
+            completed = self.state.get("completed", {})
+            if isinstance(completed, list):
+                completed = {key: {} for key in completed}
+            self.completed = self.state["completed"] = completed
             if self.places is None:
                 self._expire_queued()
             else:
@@ -1180,6 +1184,10 @@ class Pass:
         entry = next(
             (row for row in self.state["submissions"] if row.get("key") == self.retry_failed), None
         )
+        retired = False
+        if entry is None and self.completed.get(self.retry_failed):
+            entry = {"key": self.retry_failed, **self.completed[self.retry_failed]}
+            retired = True
         if (
             entry is None
             or "run_id" not in entry
@@ -1187,6 +1195,9 @@ class Pass:
         ):
             raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
         if self.places is not None:
+            place = self._place_for(entry.get("host"))
+            if retired and place is not None and not place["connected"]:
+                self._classify(place, force_connect=True)
             if self._placed_caller(entry) is None:
                 raise PollError("WORKER_ERROR", "retry worker is unavailable")
         elif not self._claims_this_host(entry):
@@ -1196,7 +1207,8 @@ class Pass:
             raise PollError("INVALID_PARAMS", "only a failed run can be retried")
         self.retry_entry = entry
         self.retry_key = "poll-" + hashlib.sha256(("retry\0" + entry["key"]).encode()).hexdigest()
-        self._post_record(entry)
+        if not retired:
+            self._post_record(entry)
 
     def _retry_matches(self, event, sha):
         return (
@@ -1387,7 +1399,7 @@ class Pass:
                 self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
 
     def _post_placed(self):
-        for entry in self.state["submissions"]:
+        for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
             if self._placed_caller(entry) is None or "run_id" not in entry:
@@ -2491,6 +2503,8 @@ class Pass:
             key = self._submission_key(
                 submission_key(self.repository, event_name, tested, workflow, job_id, tick)
             )
+            if key in self.completed:
+                continue
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2619,6 +2633,8 @@ class Pass:
             key = self._submission_key(
                 submission_key(self.repository, event_name, tested, workflow, job_id, tick)
             )
+            if key in self.completed:
+                continue
             context = _job_context(workflow, job_id, context_suffix)
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
@@ -2785,7 +2801,7 @@ class Pass:
                 self.caller("run.cancel", {"version": 0, "run_id": entry["run_id"]})
 
     def _post_terminal(self):
-        for entry in self.state["submissions"]:
+        for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
             if not self._claims_this_host(entry) or "run_id" not in entry:
@@ -2796,7 +2812,8 @@ class Pass:
         """Post one run; a failure is logged with its run id and the pass goes on."""
 
         try:
-            self._post_record(entry)
+            if self._post_record(entry):
+                self._retire_submission(entry)
         except (PollError, StatusError, OSError, ValueError) as exc:
             kind = getattr(exc, "kind", None) or (
                 "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
@@ -2805,11 +2822,28 @@ class Pass:
             self.result.setdefault("errors", []).append(failure)
             print(canonical({"run_error": failure}), file=sys.stderr)  # noqa: T201  run id on stderr
 
+    def _retire_submission(self, entry):
+        key = entry["key"]
+        retry_fields = ("run_id", "event", "status_sha", "host", "retry_base")
+        self.completed[key] = (
+            {field: entry[field] for field in retry_fields if field in entry}
+            if entry.get("event") in {"push", "pull_request"}
+            else {}
+        )
+        self.state["submissions"] = [
+            item for item in self.state["submissions"] if item is not entry
+        ]
+        self._checkpoint()
+
     def _post_record(self, entry):
+        """Return whether terminal reporting allows retiring this submission."""
+
         record = self.caller("run.get", {"run_id": entry["run_id"]})
+        # Lost execution still belongs to its original host for reconciliation.
+        can_retire = record["state"] in {"succeeded", "failed", "cancelled"}
         mapped = github_state(record["state"], record["exit_code"])
         if mapped == "pending":
-            return
+            return False
         params = {
             "run_id": entry["run_id"],
             "tested_commit": entry["tested_commit"],
@@ -2818,8 +2852,8 @@ class Pass:
         }
         if self.app_key:
             params["checks"] = True
-        # A removed snapshot cannot be posted. Keep the submission and
-        # continue so a later run still posts. A later pass tries again.
+        # A removed snapshot cannot produce a verified terminal post. Report
+        # it once and retire its key so retention does not cause endless retries.
         try:
             decision = self.caller("run.status", params)
         except PollError as exc:
@@ -2827,24 +2861,26 @@ class Pass:
                 self.result["skipped"].append(
                     {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
                 )
-                if not self.app_key and self._post(
-                    entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
-                ):
+                if not self.app_key:
+                    if not self._post(
+                        entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
+                    ):
+                        return False
                     self.result["statuses"].append(
                         {"run_id": entry["run_id"], "state": "error", "action": "posted"}
                     )
-                return
+                return can_retire
             raise
         if decision["action"] == "skip":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
             )
-            return
+            return can_retire
         if decision["action"] == "retry":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "retry"}
             )
-            return
+            return False
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
         if post_with_retry(
@@ -2854,6 +2890,8 @@ class Pass:
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "posted"}
             )
+            return can_retire
+        return False
 
     def _status_params(self, entry):
         return {
@@ -2988,6 +3026,7 @@ def _empty_state(repository):
         "tips": {},
         "pulls": {},
         "submissions": [],
+        "completed": {},
         "forks": [],
         "merge_absent": [],
     }

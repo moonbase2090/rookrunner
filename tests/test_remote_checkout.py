@@ -265,6 +265,18 @@ class RemoteCheckoutTests(unittest.TestCase):
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual(saved["submissions"][0]["host"], HOST)
         self.assertEqual(saved["submissions"][0]["run_id"], run_id)
+        self.assertNotIn(saved["submissions"][0]["key"], saved["completed"])
+        self.server.requests.clear()
+        third = self.poll()
+        self.assertEqual(
+            third["statuses"],
+            [
+                {"run_id": run_id, "state": "error", "action": "skip"},
+            ],
+        )
+        retained = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(retained["submissions"], saved["submissions"])
+        self.assertEqual(len(self.submits), 1)
 
     def test_origin_name_mismatch_submits_nothing(self):
         _git(self.worker_repo, "remote", "set-url", "origin", "https://github.com/other/name.git")

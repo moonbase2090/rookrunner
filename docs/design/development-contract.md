@@ -440,6 +440,28 @@ that place. `--place` is not combined with `--ssh-host` or
 One invocation is still one repository. The operator runs one invocation
 per repository. Linux hosts still have no poll timer.
 
+The poll state keeps active submissions until terminal reporting completes.
+After reporting a `succeeded`, `failed`, or `cancelled` run, or after the worker
+confirms that report was already recorded, the poll removes the submission and
+retains its key in the `completed` mapping. That key prevents resubmission when
+the same event is rediscovered, including placement on a different worker. Older state files without `completed` start with no
+completed keys and retire their finished submissions during the next pass.
+Queued and running submissions, unreachable placements, and terminal posts that
+fail or hit a rate limit remain active for retry. Lost runs retain their original
+host assignment for reconciliation, even after their error status is recorded.
+
+A `succeeded`, `failed`, or `cancelled` run with an unreadable snapshot cannot
+produce a verified final status. The poll reports `snapshot_unreadable` once
+and retires the submission. Lost runs remain tracked even with an unreadable
+snapshot. With a commit-status credential it first posts an `error` status; a failed post
+keeps the submission for retry. With App reporting it posts no check or status
+for that unreadable snapshot. Retirement records no success and does not remove
+the worker's run history. Completed keys are retained without expiry. Push and
+pull-request entries keep only the run id, event, status SHA, host when present, and retry base when present.
+Explicit retries consult this metadata and verify the worker run again; normal
+poll passes do not query retired runs. Older key-only lists are read as completed
+keys without retry metadata.
+
 Durable format migrations, doctor diagnostics, external backend supervision, and
 release compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
@@ -462,8 +484,9 @@ and merge-parent checks run again. Repeat any explicit trust/workflow override
 needed for this pass; an earlier override is not inherited.
 
 The successor uses a deterministic new submission key derived from the failed
-key. The old run and submission remain intact. The new poll entry stores
-`retry_of` and `retry_base`. Repeating the same flag resumes that one successor,
+key. The old worker run remains intact. Once reporting completes, the poll keeps
+its compact retry metadata in `completed` rather than active `submissions`.
+The new poll entry stores `retry_of` and `retry_base`. Repeating the same flag resumes that one successor,
 including after a lost submit reply, and never creates another run because the
 successor subsequently failed or succeeded. To retry a failed successor, name
 that successor's key explicitly.
