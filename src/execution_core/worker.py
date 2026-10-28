@@ -1086,10 +1086,20 @@ class Worker:
     def get(self, run_id):
         if not utf8_string(run_id, 1, 128):
             invalid("run_id must be a nonempty UTF-8 string of at most 128 characters")
-        row = self.db.execute("SELECT record FROM runs WHERE id=?", (run_id,)).fetchone()
+        row = self.db.execute("SELECT record, request FROM runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise Fault("RUN_NOT_FOUND", "run does not exist")
-        return json.loads(row[0])
+        record = json.loads(row[0])
+        if record["input"].get("kind") == "workflow_job":
+            try:
+                request = json.loads(row[1])
+            except (TypeError, ValueError):
+                request = {}
+            event = request.get("event") if isinstance(request, dict) else None
+            submitted_commit = event.get("after") if isinstance(event, dict) else None
+            if isinstance(submitted_commit, str) and _STATUS_SHA.fullmatch(submitted_commit):
+                record["input"]["tested_commit"] = submitted_commit
+        return record
 
     def schedule(self):
         try:
@@ -1925,6 +1935,13 @@ class Worker:
                     "kind": "workflow_job",
                     "digest": captured["digest"],
                     "snapshot_id": captured["snapshot_id"],
+                    **(
+                        {"tested_commit": p["event"]["after"]}
+                        if isinstance(p["event"], dict)
+                        and isinstance(p["event"].get("after"), str)
+                        and _STATUS_SHA.fullmatch(p["event"]["after"])
+                        else {}
+                    ),
                     "workflow": manifest["workflow"],
                     "workflow_digest": captured["workflow_digest"],
                     "plan_digest": planned["digest"],

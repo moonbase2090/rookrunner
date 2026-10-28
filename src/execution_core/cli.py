@@ -539,40 +539,59 @@ def _reconcile_poster(args):
     caller = _worker_caller(args.state)
     import json as _json
 
-    if not args.poll_state:
-        raise SystemExit("reconcile: --poll-state is required to post")
-    poll_state = _json.loads((Path(args.poll_state) / "poll.json").read_text())
-    tested = {
-        entry["run_id"]: entry["tested_commit"]
-        for entry in poll_state.get("submissions", [])
-        if "run_id" in entry and "tested_commit" in entry
-    }
+    tested = {}
+    if args.poll_state:
+        poll_state = _json.loads((Path(args.poll_state) / "poll.json").read_text())
+        tested = {
+            entry["run_id"]: entry["tested_commit"]
+            for entry in poll_state.get("submissions", [])
+            if "run_id" in entry and "tested_commit" in entry
+        }
+
+    def tested_commit(run_id):
+        if run_id in tested:
+            return tested[run_id]
+        record = caller("run.get", {"run_id": run_id})
+        pinned = record.get("input", {}) if isinstance(record, dict) else {}
+        submitted_commit = pinned.get("tested_commit")
+        if not isinstance(submitted_commit, str):
+            raise StatusError("STATUS_REFUSED", "run has no submitted tested commit")
+        return submitted_commit
 
     def post(candidate):
-        if candidate["run_id"] not in tested:
-            raise StatusError("INVALID_PARAMS", "run has no poll submission to post from")
         params = {
             "run_id": candidate["run_id"],
             "context": candidate["context"],
             "status_sha": candidate["sha"],
-            "tested_commit": tested[candidate["run_id"]],
+            "tested_commit": tested_commit(candidate["run_id"]),
         }
         decision = caller("run.status", params)
-        if decision.get("action") not in {"post", "skip", "retry"}:
-            raise StatusError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
+        if decision.get("action") == "retry":
+            raise StatusError(
+                "STATUS_REFUSED", "worker requires a fresh run before posting a final status"
+            )
+        if decision.get("action") not in {"post", "skip"}:
+            raise StatusError("WORKER_ERROR", "worker status decision was not post or skip")
+        state = decision.get("state")
+        if (
+            not isinstance(state, str)
+            or state not in {"success", "failure", "error"}
+            or state != candidate["final"]
+        ):
+            raise StatusError("STATUS_REFUSED", "worker final state does not match the candidate")
         token = read_credential(args.credential_file, args.state, args.clone or args.state)
         try:
             post_status(
                 args.api_base,
                 args.repository,
                 candidate["sha"],
-                candidate["final"],
+                state,
                 candidate["context"],
                 token,
             )
         finally:
             token = None
-        caller("run.status", {**params, "record": candidate["final"]})
+        caller("run.status", {**params, "record": state})
 
     if not args.credential_file:
         raise StatusError("INVALID_PARAMS", "a live reconcile posts with --credential-file")

@@ -693,6 +693,10 @@
                 "snapshot_id": {
                   "$ref": "#/$defs/Uuid"
                 },
+                "tested_commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
+                },
                 "workflow": {
                   "type": "string",
                   "minLength": 1,

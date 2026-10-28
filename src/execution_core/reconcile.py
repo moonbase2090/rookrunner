@@ -23,9 +23,8 @@ RETRY_BASE_SECONDS = 1.0
 def post_with_retry(post, *, attempts=RETRY_ATTEMPTS, base=RETRY_BASE_SECONDS, sleep=time.sleep):
     """Call ``post()`` until it returns, backing off 1s, 2s, 4s between tries.
 
-    A rate-limit stop is not retried; it is raised at once so the pass can stop.
-    Other ``StatusError`` and ``OSError`` failures are retried, and the last
-    failure is raised.
+    Rate-limit and worker status refusals are not retried. Other ``StatusError``
+    and ``OSError`` failures are retried, and the last failure is raised.
     """
 
     if attempts < 1:
@@ -34,7 +33,7 @@ def post_with_retry(post, *, attempts=RETRY_ATTEMPTS, base=RETRY_BASE_SECONDS, s
         try:
             return post()
         except StatusError as error:
-            if error.kind == "RATE_LIMITED":
+            if error.kind in {"RATE_LIMITED", "STATUS_REFUSED"}:
                 raise
             if attempt == attempts - 1:
                 raise

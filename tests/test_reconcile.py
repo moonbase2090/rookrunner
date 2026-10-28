@@ -95,6 +95,16 @@ class RetryTest(unittest.TestCase):
             post_with_retry(post, sleep=sleeps.append)
         self.assertEqual(sleeps, [])
 
+    def test_worker_status_refusal_is_not_retried(self):
+        sleeps = []
+
+        def post():
+            raise StatusError("STATUS_REFUSED", "no matching pending status")
+
+        with self.assertRaises(StatusError):
+            post_with_retry(post, sleep=sleeps.append)
+        self.assertEqual(sleeps, [])
+
     def test_gives_up_after_the_last_attempt(self):
         sleeps, calls = [], []
 
@@ -317,14 +327,145 @@ class ReportReconcileTest(unittest.TestCase):
             code = cli._print_reconcile_actions([{"action": "posted"}, {"action": "failed"}])
         self.assertEqual(code, 1)
 
-    def test_live_run_needs_the_poll_state(self):
+    def test_live_run_with_no_candidates_does_not_need_poll_state(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(directory, [], [])
-            with self.assertRaises(SystemExit) as stop:
-                cli.report_reconcile(_args(directory, dry_run=False))
-            self.assertIn("--poll-state", str(stop.exception.code))
+            out = io.StringIO()
+            with (
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(_args(directory, dry_run=False, credential_file="/credential"))
+            self.assertEqual(stop.exception.code, 0)
+            self.assertEqual(out.getvalue(), "")
 
-    def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):
+    def test_live_reconcile_uses_worker_submission_identity_without_poll_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "b" * 40}}
+                return {"action": "skip", "state": "success"}
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_reconcile_token", return_value=None),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 0)
+            self.assertEqual(json.loads(out.getvalue())["action"], "posted")
+            self.assertEqual(
+                [method for method, _ in calls], ["run.get", "run.status", "run.status"]
+            )
+            self.assertEqual(calls[1][1]["tested_commit"], "b" * 40)
+            self.assertEqual(calls[2][1]["record"], "success")
+            post_status.assert_called_once_with(
+                "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
+            )
+
+    def test_live_reconcile_does_not_post_when_worker_rejects_recovered_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "c" * 40}}
+                raise StatusError("STATUS_REFUSED", "base commit does not match submitted commit")
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_reconcile_token", return_value=None),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 1)
+            self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+            self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
+            post_status.assert_not_called()
+
+    def test_live_reconcile_does_not_post_when_worker_requests_a_fresh_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "failed", 1)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "b" * 40}}
+                return {"action": "retry", "state": "error"}
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 1)
+            self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+            self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
+            post_status.assert_not_called()
+
+    def test_matching_worker_success_is_posted_and_recorded(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(
                 directory,
@@ -371,6 +512,104 @@ class ReportReconcileTest(unittest.TestCase):
                 "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
             )
             self.assertEqual([method for method, _ in calls], ["run.status", "run.status"])
+            self.assertEqual(calls[0][1]["tested_commit"], "c" * 40)
+            self.assertEqual(calls[0][1]["status_sha"], SHA_A)
+            self.assertEqual(calls[1][1]["record"], "success")
+
+    def test_live_reconcile_refuses_worker_state_that_differs_from_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            poll_state = Path(directory) / "poll-state"
+            poll_state.mkdir()
+            (poll_state / "poll.json").write_text(
+                json.dumps({"submissions": [{"run_id": "ok", "tested_commit": "c" * 40}]})
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                return {"action": "skip", "state": "failure"}
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                poll_state=str(poll_state),
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_reconcile_token", return_value=None),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token") as read,
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 1)
+            self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+            self.assertEqual([method for method, _ in calls], ["run.status"])
+            read.assert_not_called()
+            post_status.assert_not_called()
+
+    def test_live_reconcile_refuses_pending_or_unknown_worker_states(self):
+        for worker_state in ("pending", "bogus"):
+            with (
+                self.subTest(worker_state=worker_state),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                _state_db(
+                    directory,
+                    [("ok", "succeeded", 0)],
+                    [("ok", "ci/test", SHA_A, "pending")],
+                )
+                poll_state = Path(directory) / "poll-state"
+                poll_state.mkdir()
+                (poll_state / "poll.json").write_text(
+                    json.dumps({"submissions": [{"run_id": "ok", "tested_commit": "c" * 40}]})
+                )
+                args = _args(
+                    directory,
+                    dry_run=False,
+                    sha=[SHA_A],
+                    poll_state=str(poll_state),
+                    credential_file="/credential",
+                )
+                out = io.StringIO()
+                with (
+                    mock.patch(
+                        "execution_core.reconcile.github_statuses",
+                        return_value={"ci/test": "pending"},
+                    ),
+                    mock.patch.object(cli, "_reconcile_token", return_value=None),
+                    mock.patch.object(
+                        cli,
+                        "_worker_caller",
+                        return_value=lambda _method, _params, state=worker_state: {
+                            "action": "post",
+                            "state": state,
+                        },
+                    ),
+                    mock.patch.object(cli, "read_credential", return_value="token") as read,
+                    mock.patch.object(cli, "post_status") as post_status,
+                    redirect_stdout(out),
+                    self.assertRaises(SystemExit) as stop,
+                ):
+                    cli.report_reconcile(args)
+
+                self.assertEqual(stop.exception.code, 1)
+                self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+                read.assert_not_called()
+                post_status.assert_not_called()
 
 
 class ReconcileTokenTest(unittest.TestCase):
