@@ -1991,7 +1991,8 @@ class Worker:
                 if existing and existing[0] == normalized:
                     return json.loads(existing[1])
                 raise Fault(
-                    "IDEMPOTENCY_CONFLICT", _conflict_message(existing[0], normalized)
+                    "IDEMPOTENCY_CONFLICT",
+                    _conflict_message(existing[0] if existing else None, normalized),
                 ) from None
             self._sync_state_files()
             store.commit()
