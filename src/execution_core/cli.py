@@ -538,7 +538,6 @@ def _reconcile_poster(args):
 
     caller = _worker_caller(args.state)
     import json as _json
-    from .verify import VerifyError, verify_snapshot
 
     tested = {}
     if args.poll_state:
@@ -554,19 +553,10 @@ def _reconcile_poster(args):
             return tested[run_id]
         record = caller("run.get", {"run_id": run_id})
         pinned = record.get("input", {}) if isinstance(record, dict) else {}
-        snapshot_id = pinned.get("snapshot_id")
-        digest = pinned.get("digest")
-        if not isinstance(snapshot_id, str) or not isinstance(digest, str):
-            raise StatusError("STATUS_REFUSED", "run has no verifiable snapshot")
-        snapshot = Path(args.state) / "snapshots" / snapshot_id
-        try:
-            manifest = verify_snapshot(snapshot, digest)
-        except (VerifyError, OSError, UnicodeError, ValueError):
-            raise StatusError("STATUS_REFUSED", "run snapshot is not readable") from None
-        base_commit = manifest.get("base_commit")
-        if not isinstance(base_commit, str):
-            raise StatusError("STATUS_REFUSED", "run snapshot has no tested commit")
-        return base_commit
+        submitted_commit = pinned.get("tested_commit")
+        if not isinstance(submitted_commit, str):
+            raise StatusError("STATUS_REFUSED", "run has no submitted tested commit")
+        return submitted_commit
 
     def post(candidate):
         params = {

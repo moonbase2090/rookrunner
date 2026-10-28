@@ -22,7 +22,6 @@ from execution_core.poll import Pass, PollError
 from execution_core.reconcile import pending_final, post_with_retry, reconcile
 from execution_core.status import StatusError
 from execution_core.snapshot import SourceCapture
-from execution_core.verify import verify_snapshot
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -332,7 +331,7 @@ class ReportReconcileTest(unittest.TestCase):
             self.assertEqual(stop.exception.code, 0)
             self.assertEqual(out.getvalue(), "")
 
-    def test_live_reconcile_recovers_tested_commit_from_verified_snapshot(self):
+    def test_live_reconcile_recovers_tested_commit_from_worker_run_input(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(
                 directory,
@@ -357,18 +356,13 @@ class ReportReconcileTest(unittest.TestCase):
                 "fixture",
             )
             expected_base_commit = capture.git("rev-parse", "HEAD").stdout.strip().decode()
-            captured = capture.capture(".github/workflows/test.yml")
+            capture.capture(".github/workflows/test.yml")
             calls = []
 
             def caller(method, params):
                 calls.append((method, params))
                 if method == "run.get":
-                    return {
-                        "input": {
-                            "snapshot_id": captured["snapshot_id"],
-                            "digest": captured["digest"],
-                        }
-                    }
+                    return {"input": {"tested_commit": expected_base_commit}}
                 return {"action": "skip", "state": "success"}
 
             args = _args(
@@ -392,10 +386,6 @@ class ReportReconcileTest(unittest.TestCase):
 
             self.assertEqual(stop.exception.code, 0)
             self.assertEqual(json.loads(out.getvalue())["action"], "posted")
-            verified_base_commit = verify_snapshot(
-                Path(directory) / "snapshots" / captured["snapshot_id"], captured["digest"]
-            )["base_commit"]
-            self.assertEqual(verified_base_commit, expected_base_commit)
             self.assertEqual(
                 [method for method, _ in calls], ["run.get", "run.status", "run.status"]
             )
@@ -404,6 +394,47 @@ class ReportReconcileTest(unittest.TestCase):
             post_status.assert_called_once_with(
                 "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
             )
+
+    def test_live_reconcile_does_not_post_when_worker_rejects_recovered_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "c" * 40}}
+                raise StatusError(
+                    "STATUS_REFUSED", "base commit does not match the submitted commit"
+                )
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 1)
+            self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+            self.assertEqual([method for method, _ in calls], ["run.get", "run.status"] * 4)
+            post_status.assert_not_called()
 
     def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):
         with tempfile.TemporaryDirectory() as directory:

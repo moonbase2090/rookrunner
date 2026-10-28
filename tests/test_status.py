@@ -75,7 +75,15 @@ def _snapshot(state, *, dirty=False, included=None, base=COMMIT):
 
 
 def _record(
-    worker, snapshot_id, digest, *, state="succeeded", exit_code=0, kind="workflow_job", error=None
+    worker,
+    snapshot_id,
+    digest,
+    *,
+    state="succeeded",
+    exit_code=0,
+    kind="workflow_job",
+    error=None,
+    request="{}",
 ):
     run_id = str(uuid.uuid4())
     record = {
@@ -112,7 +120,7 @@ def _record(
     with worker.guard, worker.db:
         worker.db.execute(
             "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
-            (run_id, run_id, "{}", canonical(record), b""),
+            (run_id, run_id, request, canonical(record), b""),
         )
     return record
 
@@ -214,6 +222,24 @@ class WorkerStatusTests(unittest.TestCase):
         fixture = _record(self.worker, clean_id, clean_digest, kind="development_fixture")
         refused = self._reply(_params(fixture["run_id"]))
         self.assertIn("workflow", refused["error"]["message"])
+        self.assertEqual(
+            self.worker.db.execute("SELECT count(*) FROM status_posts").fetchone()[0], 0
+        )
+
+    def test_recovered_submission_commit_mismatch_is_refused(self):
+        snapshot_id, digest = _snapshot(self.state, base=COMMIT)
+        run = _record(
+            self.worker,
+            snapshot_id,
+            digest,
+            request=canonical({"event": {"after": HEAD}}),
+        )
+
+        recovered = self.worker.get(run["run_id"])
+        self.assertEqual(recovered["input"]["tested_commit"], HEAD)
+        refused = self._reply(_params(run["run_id"], tested=HEAD))
+        self.assertEqual(refused["error"]["data"]["kind"], "STATUS_REFUSED")
+        self.assertIn("base_commit does not equal the tested commit", refused["error"]["message"])
         self.assertEqual(
             self.worker.db.execute("SELECT count(*) FROM status_posts").fetchone()[0], 0
         )
