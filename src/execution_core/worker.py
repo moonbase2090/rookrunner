@@ -1802,9 +1802,7 @@ class Worker:
         ).fetchone()
         if existing:
             if existing[0] != normalized:
-                raise Fault(
-                    "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
-                )
+                raise Fault("IDEMPOTENCY_CONFLICT", _conflict_message(existing[0], normalized))
             return json.loads(existing[1])
         if self.stop.is_set() or self.execution_error is not None:
             raise Fault(
@@ -1993,7 +1991,8 @@ class Worker:
                 if existing and existing[0] == normalized:
                     return json.loads(existing[1])
                 raise Fault(
-                    "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
+                    "IDEMPOTENCY_CONFLICT",
+                    _conflict_message(existing[0] if existing else None, normalized),
                 ) from None
             self._sync_state_files()
             store.commit()
@@ -2208,9 +2207,7 @@ class Worker:
             ).fetchone()
             if existing:
                 if existing[0] != normalized:
-                    raise Fault(
-                        "IDEMPOTENCY_CONFLICT", "submission key already identifies different inputs"
-                    )
+                    raise Fault("IDEMPOTENCY_CONFLICT", _conflict_message(existing[0], normalized))
                 return json.loads(existing[1])
             if self.stop.is_set() or self.execution_error is not None:
                 raise Fault(
@@ -2974,3 +2971,19 @@ def serve(
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: worker.stop.set())
     worker.serve()
+
+
+def _conflict_message(stored, normalized):
+    """Return the top-level request field names that differ, never their values."""
+
+    try:
+        old = json.loads(stored)
+        new = json.loads(normalized)
+    except (TypeError, ValueError):
+        return "submission key already identifies different inputs; differing fields: unreadable stored request"
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return "submission key already identifies different inputs; differing fields: request"
+    names = sorted(key for key in set(old) | set(new) if old.get(key) != new.get(key))
+    return "submission key already identifies different inputs; differing fields: " + (
+        ", ".join(names) or "none"
+    )

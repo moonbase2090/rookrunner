@@ -202,6 +202,7 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assertEqual(snapshot.read_text(), "original\n")
         conflict = call(self.state, "run.submit", self.params(event={"kind": "other"}))
         self.assert_fault(conflict, "IDEMPOTENCY_CONFLICT")
+        self.assertIn("differing fields: event", conflict["error"]["message"])
         self.assertEqual(len(self.rpc("run.list", {})["runs"]), 1)
         failed = self.await_state(run["run_id"], {"failed"})
         self.assertIsNone(failed["exit_code"])
