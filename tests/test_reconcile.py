@@ -465,7 +465,7 @@ class ReportReconcileTest(unittest.TestCase):
             self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
             post_status.assert_not_called()
 
-    def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):
+    def test_matching_worker_success_is_posted_and_recorded(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(
                 directory,
@@ -512,6 +512,8 @@ class ReportReconcileTest(unittest.TestCase):
                 "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
             )
             self.assertEqual([method for method, _ in calls], ["run.status", "run.status"])
+            self.assertEqual(calls[0][1]["tested_commit"], "c" * 40)
+            self.assertEqual(calls[0][1]["status_sha"], SHA_A)
             self.assertEqual(calls[1][1]["record"], "success")
 
     def test_live_reconcile_refuses_worker_state_that_differs_from_candidate(self):
