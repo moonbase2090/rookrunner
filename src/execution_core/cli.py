@@ -20,8 +20,10 @@ from .snapshot import CaptureError, SourceCapture
 
 # Pause while a followed run is still open. This is client pacing, not an Actions limit.
 POLL_SECONDS = 0.2
-# The remote client uses the same socket bound. This covers the ssh process.
-_SSH_CALL_SECONDS = 5
+# The remote client uses the worker socket bound. The ssh process also needs
+# time to connect and start the remote interpreter, so the subprocess bound is
+# the worker bound plus this margin.
+_SSH_OVERHEAD_SECONDS = 10
 _SSH_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
 DEFAULT_WORKER_TIMEOUT = 30.0
 MAX_WORKER_TIMEOUT = 600.0
@@ -311,7 +313,7 @@ def ssh_caller(host, remote_state):
                 command,
                 input=request,
                 capture_output=True,
-                timeout=_SSH_CALL_SECONDS,
+                timeout=worker_timeout() + _SSH_OVERHEAD_SECONDS,
                 check=False,
             )
         except subprocess.TimeoutExpired:
