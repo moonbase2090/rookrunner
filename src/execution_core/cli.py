@@ -448,6 +448,7 @@ def _run_poll(args, caller, mint, revoke, places=None):
             places=places,
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
             allow_pr_workflow=getattr(args, "allow_pr_workflow", ()) or (),
+            allow_pr_workflow_sha=getattr(args, "allow_pr_workflow_sha", ()) or (),
             key_dir=getattr(args, "key_dir", None),
             retry_failed=getattr(args, "retry_failed", None),
         )
@@ -1067,6 +1068,15 @@ def main():
         "--retry-failed",
         metavar="KEY",
         help="retry one failed poll submission at the current push/PR commit; current trust gates apply",
+    )
+    poll.add_argument(
+        "--allow-pr-workflow-sha",
+        action="append",
+        default=[],
+        help=(
+            "exact head SHA of one pull request whose workflow-file change may run, "
+            "for one invocation. Repeat for each SHA. A new push does not match."
+        ),
     )
     poll.add_argument(
         "--allow-untrusted",
