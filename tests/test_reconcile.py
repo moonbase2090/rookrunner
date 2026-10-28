@@ -21,6 +21,8 @@ from execution_core.cli import call, worker_timeout
 from execution_core.poll import Pass, PollError
 from execution_core.reconcile import pending_final, post_with_retry, reconcile
 from execution_core.status import StatusError
+from execution_core.snapshot import SourceCapture
+from execution_core.verify import verify_snapshot
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -317,12 +319,91 @@ class ReportReconcileTest(unittest.TestCase):
             code = cli._print_reconcile_actions([{"action": "posted"}, {"action": "failed"}])
         self.assertEqual(code, 1)
 
-    def test_live_run_needs_the_poll_state(self):
+    def test_live_run_with_no_candidates_does_not_need_poll_state(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(directory, [], [])
-            with self.assertRaises(SystemExit) as stop:
-                cli.report_reconcile(_args(directory, dry_run=False))
-            self.assertIn("--poll-state", str(stop.exception.code))
+            out = io.StringIO()
+            with (
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(_args(directory, dry_run=False, credential_file="/credential"))
+            self.assertEqual(stop.exception.code, 0)
+            self.assertEqual(out.getvalue(), "")
+
+    def test_live_reconcile_recovers_tested_commit_from_verified_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "succeeded", 0)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            workflow = repo / ".github" / "workflows" / "test.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("name: fixture\non: push\njobs: {}\n")
+            capture = SourceCapture(repo, Path(directory))
+            capture.git("init", "--initial-branch=main")
+            capture.git("add", ".")
+            capture.git(
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-m",
+                "fixture",
+            )
+            expected_base_commit = capture.git("rev-parse", "HEAD").stdout.strip().decode()
+            captured = capture.capture(".github/workflows/test.yml")
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {
+                        "input": {
+                            "snapshot_id": captured["snapshot_id"],
+                            "digest": captured["digest"],
+                        }
+                    }
+                return {"action": "skip", "state": "success"}
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 0)
+            self.assertEqual(json.loads(out.getvalue())["action"], "posted")
+            verified_base_commit = verify_snapshot(
+                Path(directory) / "snapshots" / captured["snapshot_id"], captured["digest"]
+            )["base_commit"]
+            self.assertEqual(verified_base_commit, expected_base_commit)
+            self.assertEqual(
+                [method for method, _ in calls], ["run.get", "run.status", "run.status"]
+            )
+            self.assertEqual(calls[1][1]["tested_commit"], expected_base_commit)
+            self.assertEqual(calls[2][1]["record"], "success")
+            post_status.assert_called_once_with(
+                "https://api.github.com", "owner/name", SHA_A, "success", "ci/test", "token"
+            )
 
     def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):
         with tempfile.TemporaryDirectory() as directory:

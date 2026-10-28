@@ -538,24 +538,42 @@ def _reconcile_poster(args):
 
     caller = _worker_caller(args.state)
     import json as _json
+    from .verify import VerifyError, verify_snapshot
 
-    if not args.poll_state:
-        raise SystemExit("reconcile: --poll-state is required to post")
-    poll_state = _json.loads((Path(args.poll_state) / "poll.json").read_text())
-    tested = {
-        entry["run_id"]: entry["tested_commit"]
-        for entry in poll_state.get("submissions", [])
-        if "run_id" in entry and "tested_commit" in entry
-    }
+    tested = {}
+    if args.poll_state:
+        poll_state = _json.loads((Path(args.poll_state) / "poll.json").read_text())
+        tested = {
+            entry["run_id"]: entry["tested_commit"]
+            for entry in poll_state.get("submissions", [])
+            if "run_id" in entry and "tested_commit" in entry
+        }
+
+    def tested_commit(run_id):
+        if run_id in tested:
+            return tested[run_id]
+        record = caller("run.get", {"run_id": run_id})
+        pinned = record.get("input", {}) if isinstance(record, dict) else {}
+        snapshot_id = pinned.get("snapshot_id")
+        digest = pinned.get("digest")
+        if not isinstance(snapshot_id, str) or not isinstance(digest, str):
+            raise StatusError("STATUS_REFUSED", "run has no verifiable snapshot")
+        snapshot = Path(args.state) / "snapshots" / snapshot_id
+        try:
+            manifest = verify_snapshot(snapshot, digest)
+        except (VerifyError, OSError, UnicodeError, ValueError):
+            raise StatusError("STATUS_REFUSED", "run snapshot is not readable") from None
+        base_commit = manifest.get("base_commit")
+        if not isinstance(base_commit, str):
+            raise StatusError("STATUS_REFUSED", "run snapshot has no tested commit")
+        return base_commit
 
     def post(candidate):
-        if candidate["run_id"] not in tested:
-            raise StatusError("INVALID_PARAMS", "run has no poll submission to post from")
         params = {
             "run_id": candidate["run_id"],
             "context": candidate["context"],
             "status_sha": candidate["sha"],
-            "tested_commit": tested[candidate["run_id"]],
+            "tested_commit": tested_commit(candidate["run_id"]),
         }
         decision = caller("run.status", params)
         if decision.get("action") not in {"post", "skip", "retry"}:
