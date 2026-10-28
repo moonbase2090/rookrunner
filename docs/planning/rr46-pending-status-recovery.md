@@ -12,9 +12,9 @@ the merge commit used by the poller.
 
 Read-only checks found that runs `356515ac` and `eb954530` return `retry` with
 state `error` because of `SETUP_FAILED` from full storage. The worker's correct
-route is a fresh submission after capacity recovers. Run `20f79802` returns
-`skip` with state `success`; if GitHub still shows pending, reconciliation can
-repost that success using the recovered commit. No status was posted during
+route is a fresh submission after capacity recovers. Runs `0eda7a6a`,
+`1cf9b32f`, `b9b5ac96`, and `20f79802` return `skip` with state `success`;
+GitHub already shows success for those status rows. No status was posted during
 these checks.
 
 ## Proposed behavior
@@ -33,5 +33,5 @@ status remains pending.
 
 ## Open question
 
-Moonbase must route the retry-class runs to fresh submissions and confirm which
-remaining stuck runs are eligible for a final status repost.
+Moonbase must route the two retry-class runs to fresh submissions. The four
+success rows need no repost while GitHub continues to show success.
