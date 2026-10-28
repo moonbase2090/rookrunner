@@ -424,6 +424,45 @@ class ReportReconcileTest(unittest.TestCase):
             self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
             post_status.assert_not_called()
 
+    def test_live_reconcile_does_not_post_when_worker_requests_a_fresh_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _state_db(
+                directory,
+                [("ok", "failed", 1)],
+                [("ok", "ci/test", SHA_A, "pending")],
+            )
+            calls = []
+
+            def caller(method, params):
+                calls.append((method, params))
+                if method == "run.get":
+                    return {"input": {"tested_commit": "b" * 40}}
+                return {"action": "retry", "state": "error"}
+
+            args = _args(
+                directory,
+                dry_run=False,
+                sha=[SHA_A],
+                credential_file="/credential",
+            )
+            out = io.StringIO()
+            with (
+                mock.patch(
+                    "execution_core.reconcile.github_statuses", return_value={"ci/test": "pending"}
+                ),
+                mock.patch.object(cli, "_worker_caller", return_value=caller),
+                mock.patch.object(cli, "read_credential", return_value="token"),
+                mock.patch.object(cli, "post_status") as post_status,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as stop,
+            ):
+                cli.report_reconcile(args)
+
+            self.assertEqual(stop.exception.code, 1)
+            self.assertEqual(json.loads(out.getvalue())["action"], "failed")
+            self.assertEqual([method for method, _ in calls], ["run.get", "run.status"])
+            post_status.assert_not_called()
+
     def test_live_reconcile_posts_when_worker_says_local_status_is_recorded(self):
         with tempfile.TemporaryDirectory() as directory:
             _state_db(

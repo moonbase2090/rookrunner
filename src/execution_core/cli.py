@@ -566,8 +566,12 @@ def _reconcile_poster(args):
             "tested_commit": tested_commit(candidate["run_id"]),
         }
         decision = caller("run.status", params)
-        if decision.get("action") not in {"post", "skip", "retry"}:
-            raise StatusError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
+        if decision.get("action") == "retry":
+            raise StatusError(
+                "STATUS_REFUSED", "worker requires a fresh run before posting a final status"
+            )
+        if decision.get("action") not in {"post", "skip"}:
+            raise StatusError("WORKER_ERROR", "worker status decision was not post or skip")
         token = read_credential(args.credential_file, args.state, args.clone or args.state)
         try:
             post_status(
