@@ -260,6 +260,34 @@ class WorkerStatusTests(unittest.TestCase):
         ).fetchall()
         self.assertEqual([row[0] for row in states], ["pending"])
 
+    def test_legacy_pull_request_record_recovers_matching_submitted_commit(self):
+        snapshot_id, digest = _snapshot(self.state, base=COMMIT)
+        run = _record(
+            self.worker,
+            snapshot_id,
+            digest,
+            request=canonical(
+                {
+                    "version": 1,
+                    "workflow": "workflow.yml",
+                    "job_id": "check",
+                    "event": {"after": COMMIT},
+                    "event_name": "pull_request",
+                }
+            ),
+        )
+        stored = self.worker.db.execute(
+            "SELECT record FROM runs WHERE id=?", (run["run_id"],)
+        ).fetchone()
+        self.assertNotIn("tested_commit", json.loads(stored[0])["input"])
+
+        recovered = self.worker.get(run["run_id"])
+        self.assertEqual(recovered["input"]["tested_commit"], COMMIT)
+        decision = self._reply(_params(run["run_id"], tested=recovered["input"]["tested_commit"]))
+        self.assertEqual(decision["result"], {"action": "post", "state": "success"})
+        recorded = self._reply(_params(run["run_id"], tested=COMMIT, record="success"))
+        self.assertEqual(recorded["result"], {"action": "recorded", "state": "success"})
+
     def test_a_failed_run_maps_to_failure_and_a_nonzero_success_maps_to_error(self):
         snapshot_id, digest = _snapshot(self.state)
         failed = _record(self.worker, snapshot_id, digest, state="failed", exit_code=1)
