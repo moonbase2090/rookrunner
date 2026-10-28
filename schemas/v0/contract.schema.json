@@ -693,10 +693,6 @@
                 "snapshot_id": {
                   "$ref": "#/$defs/Uuid"
                 },
-                "tested_commit": {
-                  "type": "string",
-                  "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
-                },
                 "workflow": {
                   "type": "string",
                   "minLength": 1,
@@ -2144,6 +2140,9 @@
               "type": "string",
               "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
             },
+            "recover_pending": {
+              "const": true
+            },
             "status_sha": {
               "type": "string",
               "pattern": "^[0-9a-f]{40}$|^[0-9a-f]{64}$"
@@ -2188,9 +2187,18 @@
           },
           "required": [
             "run_id",
-            "tested_commit",
             "status_sha",
             "context"
+          ],
+          "oneOf": [
+            {
+              "required": ["tested_commit"],
+              "not": {"required": ["recover_pending"]}
+            },
+            {
+              "required": ["recover_pending"],
+              "not": {"required": ["tested_commit"]}
+            }
           ],
           "additionalProperties": false
         }
