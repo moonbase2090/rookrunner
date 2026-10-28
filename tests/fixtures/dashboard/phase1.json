@@ -1,0 +1,885 @@
+{
+  "fixture_version": 1,
+  "description": "Synthetic owned-protocol UI examples. No execution, source provenance, streaming, artifact availability or image validation is established. The negative run intentionally violates success semantics.",
+  "observed_at": "2026-10-23T12:00:00Z",
+  "last_observed_at": "2026-10-23T12:00:00Z",
+  "mode": "current",
+  "negative_run_ids": [
+    "00000000-0000-4000-8000-000000000006"
+  ],
+  "responses": [
+    {
+      "method": "run.list",
+      "params": {},
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "runs": [
+            {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-1",
+              "state": "queued",
+              "exit_code": null,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000201",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": null,
+              "finished_at": null,
+              "attempt_id": null,
+              "cancel_requested": false,
+              "error": null,
+              "cleanup": "not_started"
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-2",
+              "state": "running",
+              "exit_code": null,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000202",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": "2026-10-23T11:56:00.000000+00:00",
+              "finished_at": null,
+              "attempt_id": "00000000-0000-4000-8000-000000000102",
+              "cancel_requested": false,
+              "error": null,
+              "cleanup": "not_started"
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-3",
+              "state": "failed",
+              "exit_code": 1,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000203",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": "2026-10-23T11:56:00.000000+00:00",
+              "finished_at": "2026-10-23T11:58:00.000000+00:00",
+              "attempt_id": "00000000-0000-4000-8000-000000000103",
+              "cancel_requested": false,
+              "error": null,
+              "cleanup": "confirmed_no_external_resources",
+              "steps": [
+                {
+                  "index": 0,
+                  "name": "Compile <script>alert(\"fixture\")</script>",
+                  "status": "failed",
+                  "exit_code": 1,
+                  "id": "compile",
+                  "stdout": "",
+                  "stderr": "",
+                  "error": null
+                }
+              ]
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-4",
+              "state": "lost",
+              "exit_code": null,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000204",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": "2026-10-23T11:56:00.000000+00:00",
+              "finished_at": "2026-10-23T11:58:00.000000+00:00",
+              "attempt_id": "00000000-0000-4000-8000-000000000104",
+              "cancel_requested": false,
+              "error": {
+                "kind": "WORKER_INTERRUPTED",
+                "message": "Synthetic interrupted attempt"
+              },
+              "cleanup": "unresolved"
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000005",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-5",
+              "state": "succeeded",
+              "exit_code": 0,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000205",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": "2026-10-23T11:56:00.000000+00:00",
+              "finished_at": "2026-10-23T11:58:00.000000+00:00",
+              "attempt_id": "00000000-0000-4000-8000-000000000105",
+              "cancel_requested": false,
+              "error": null,
+              "cleanup": "confirmed_no_external_resources"
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000006",
+              "worker_id": "00000000-0000-4000-8000-000000000100",
+              "submission_key": "comparison-6",
+              "state": "succeeded",
+              "exit_code": null,
+              "input": {
+                "kind": "workflow_job",
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+                "snapshot_id": "00000000-0000-4000-8000-000000000206",
+                "workflow": ".github/workflows/check.yml",
+                "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+                "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+                "job_id": "check",
+                "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+                "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              },
+              "backend": {
+                "name": "workflow",
+                "version": "0.1.11"
+              },
+              "compatibility_notes": [
+                "Synthetic UI fixture, not evidence of a workflow execution."
+              ],
+              "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+              "started_at": "2026-10-23T11:56:00.000000+00:00",
+              "finished_at": "2026-10-23T11:58:00.000000+00:00",
+              "attempt_id": "00000000-0000-4000-8000-000000000106",
+              "cancel_requested": false,
+              "error": null,
+              "cleanup": "confirmed_no_external_resources"
+            }
+          ],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000001",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-1",
+          "state": "queued",
+          "exit_code": null,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000201",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": null,
+          "finished_at": null,
+          "attempt_id": null,
+          "cancel_requested": false,
+          "error": null,
+          "cleanup": "not_started"
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-1-page-2",
+          "end_of_stream": false
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000002"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000002",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-2",
+          "state": "running",
+          "exit_code": null,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000202",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": "2026-10-23T11:56:00.000000+00:00",
+          "finished_at": null,
+          "attempt_id": "00000000-0000-4000-8000-000000000102",
+          "cancel_requested": false,
+          "error": null,
+          "cleanup": "not_started"
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000002"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-2-page-2",
+          "end_of_stream": false
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000002",
+        "cursor": "fixture-2-page-2"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-2-page-3",
+          "end_of_stream": false
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000002"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000003"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000003",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-3",
+          "state": "failed",
+          "exit_code": 1,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000203",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": "2026-10-23T11:56:00.000000+00:00",
+          "finished_at": "2026-10-23T11:58:00.000000+00:00",
+          "attempt_id": "00000000-0000-4000-8000-000000000103",
+          "cancel_requested": false,
+          "error": null,
+          "cleanup": "confirmed_no_external_resources",
+          "steps": [
+            {
+              "index": 0,
+              "name": "Compile <script>alert(\"fixture\")</script>",
+              "status": "failed",
+              "exit_code": 1,
+              "id": "compile",
+              "stdout": "",
+              "stderr": "",
+              "error": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000003"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "Q29tcGlsZSA8c2NyaXB0PmFsZXJ0KCJmaXh0dXJlIik8L3NjcmlwdD4KG1szMW1lcnJvchtbMG0HCg==",
+          "next_cursor": "fixture-3-page-2",
+          "end_of_stream": false
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000003",
+        "cursor": "fixture-3-page-2"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "VGVzdCBmYWlsZWQgd2l0aCBleGl0IGNvZGUgMQo=",
+          "next_cursor": "fixture-end",
+          "end_of_stream": true
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000003"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [
+            {
+              "id": "00000000-0000-4000-8000-000000000300",
+              "path": "out/report.txt",
+              "size": 8,
+              "digest": "6666666666666666666666666666666666666666666666666666666666666666"
+            }
+          ],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000004"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000004",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-4",
+          "state": "lost",
+          "exit_code": null,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000204",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": "2026-10-23T11:56:00.000000+00:00",
+          "finished_at": "2026-10-23T11:58:00.000000+00:00",
+          "attempt_id": "00000000-0000-4000-8000-000000000104",
+          "cancel_requested": false,
+          "error": {
+            "kind": "WORKER_INTERRUPTED",
+            "message": "Synthetic interrupted attempt"
+          },
+          "cleanup": "unresolved"
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000004"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-end",
+          "end_of_stream": true
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000004"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000005"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000005",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-5",
+          "state": "succeeded",
+          "exit_code": 0,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000205",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": "2026-10-23T11:56:00.000000+00:00",
+          "finished_at": "2026-10-23T11:58:00.000000+00:00",
+          "attempt_id": "00000000-0000-4000-8000-000000000105",
+          "cancel_requested": false,
+          "error": null,
+          "cleanup": "confirmed_no_external_resources"
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000005"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-end",
+          "end_of_stream": true
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000005"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000006"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "run_id": "00000000-0000-4000-8000-000000000006",
+          "worker_id": "00000000-0000-4000-8000-000000000100",
+          "submission_key": "comparison-6",
+          "state": "succeeded",
+          "exit_code": null,
+          "input": {
+            "kind": "workflow_job",
+            "digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "snapshot_id": "00000000-0000-4000-8000-000000000206",
+            "workflow": ".github/workflows/check.yml",
+            "workflow_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "plan_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+            "job_id": "check",
+            "event_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+            "image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "image_reference": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "backend": {
+            "name": "workflow",
+            "version": "0.1.11"
+          },
+          "compatibility_notes": [
+            "Synthetic UI fixture, not evidence of a workflow execution."
+          ],
+          "accepted_at": "2026-10-23T11:55:00.000000+00:00",
+          "started_at": "2026-10-23T11:56:00.000000+00:00",
+          "finished_at": "2026-10-23T11:58:00.000000+00:00",
+          "attempt_id": "00000000-0000-4000-8000-000000000106",
+          "cancel_requested": false,
+          "error": null,
+          "cleanup": "confirmed_no_external_resources"
+        }
+      }
+    },
+    {
+      "method": "run.logs",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000006"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "",
+          "next_cursor": "fixture-end",
+          "end_of_stream": true
+        }
+      }
+    },
+    {
+      "method": "run.artifacts",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000006"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "artifacts": [],
+          "next_cursor": null
+        }
+      }
+    },
+    {
+      "method": "artifact.read",
+      "params": {
+        "artifact_id": "00000000-0000-4000-8000-000000000300"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "data_base64": "Zml4dHVyZQo=",
+          "end_of_stream": true,
+          "next_offset": 8
+        }
+      }
+    },
+    {
+      "method": "run.get",
+      "params": {
+        "run_id": "00000000-0000-4000-8000-000000000999"
+      },
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32000,
+          "message": "Synthetic run is unavailable",
+          "data": {
+            "kind": "RUN_NOT_FOUND",
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "method": "status.view",
+      "params": {},
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "worker": {
+            "version": "0.1.11",
+            "ready": true,
+            "readiness_error": null,
+            "runner_image": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "poll": {
+            "completed_at": "2026-10-23T11:59:00Z",
+            "repository": "sample/engine"
+          },
+          "runs": [
+            {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "queued",
+              "exit_code": null,
+              "duration": "unstarted",
+              "duration_seconds": null,
+              "check_url": null
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000002",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "running",
+              "exit_code": null,
+              "duration": "running",
+              "duration_seconds": 240,
+              "check_url": null
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000003",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "failed",
+              "exit_code": 1,
+              "duration": "finished",
+              "duration_seconds": 120,
+              "check_url": null
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000004",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "lost",
+              "exit_code": null,
+              "duration": "finished",
+              "duration_seconds": 120,
+              "check_url": null
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000005",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "succeeded",
+              "exit_code": 0,
+              "duration": "finished",
+              "duration_seconds": 120,
+              "check_url": null
+            },
+            {
+              "run_id": "00000000-0000-4000-8000-000000000006",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "state": "succeeded",
+              "exit_code": null,
+              "duration": "finished",
+              "duration_seconds": 120,
+              "check_url": null
+            }
+          ],
+          "queue": [
+            {
+              "run_id": "00000000-0000-4000-8000-000000000001",
+              "repository": "sample/engine",
+              "subject": {
+                "kind": "commit",
+                "sha": "7777777777777777777777777777777777777777"
+              },
+              "workflow": ".github/workflows/check.yml",
+              "job_id": "check",
+              "waiting": false,
+              "groups": []
+            }
+          ],
+          "groups": [],
+          "ungrouped": 2
+        }
+      }
+    }
+  ]
+}
