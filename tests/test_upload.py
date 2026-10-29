@@ -331,7 +331,6 @@ class PlanUploadTests(unittest.TestCase):
 
     def test_rejected_inputs_and_uses_name_the_field(self):
         cases = (
-            ("retention-days: 1\n", "CAPABILITY_UNSUPPORTED", "retention-days"),
             ("compression-level: 6\n", "CAPABILITY_UNSUPPORTED", "compression-level"),
             ("overwrite: true\n", "CAPABILITY_UNSUPPORTED", "overwrite"),
             ("include-hidden-files: yes\n", "WORKFLOW_INVALID", "include-hidden-files"),
@@ -377,6 +376,24 @@ class PlanUploadTests(unittest.TestCase):
                 self.assertEqual(error.kind, "CAPABILITY_UNSUPPORTED")
                 self.assertEqual(error.field, "jobs.build.steps.0.uses")
         self.assertEqual(store.calls, [])
+
+    def test_retention_days_is_accepted_and_recorded(self):
+        workflow = _workflow(
+            UPLOAD,
+            "          name: coverage\n          path: coverage.txt\n          retention-days: 7\n",
+        )
+        step = self.plan(workflow)["jobs"][0]["steps"][0]
+        self.assertEqual(step["with"]["retention-days"], "7")
+
+    def test_retention_days_must_be_an_integer_from_one_to_ninety(self):
+        for value in ("0", "91", "soon", "-1"):
+            workflow = _workflow(
+                UPLOAD,
+                "          name: coverage\n          path: coverage.txt\n"
+                f"          retention-days: {value}\n",
+            )
+            error = self.reject(workflow)
+            self.assertIn("retention-days", str(error))
 
     def test_write_permissions_still_fail_planning(self):
         for scope in ("security-events", "actions"):

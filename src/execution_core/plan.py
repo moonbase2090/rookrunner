@@ -241,7 +241,17 @@ _UPLOAD_FILE_KEYS = {
     "include-hidden-files",
     "archive",
     "overwrite",
+    "retention-days",
 }
+# The worker keeps artifacts in its own state and does not expire them early;
+# retention-days is accepted and recorded, and it is not enforced by the worker.
+_UPLOAD_RETENTION_MAX_DAYS = 90
+
+
+def _retention_message(field):
+    return f"{field}: retention-days must be an integer from 1 to {_UPLOAD_RETENTION_MAX_DAYS}"
+
+
 _UPLOAD_BOOL_KEYS = {"include-hidden-files", "archive", "overwrite"}
 _UPLOAD_NO_FILES = {"warn", "error", "ignore"}
 _SARIF_KEYS = {"sarif_file"}
@@ -1791,10 +1801,18 @@ class _Planner:
                     _unsupported(field)
                 accepted[key] = flag
                 continue
+            if key == "retention-days" and isinstance(value, ScalarNode) and value.value.isdigit():
+                days = int(value.value)
+                if not 1 <= days <= _UPLOAD_RETENTION_MAX_DAYS:
+                    _invalid(_retention_message(field), field)
+                accepted[key] = str(days)
+                continue
             text = self._string_scalar(value, field)
             self._check_expression(text, field, check_step_secret_value)
             if key == "if-no-files-found" and "${{" not in text and text not in _UPLOAD_NO_FILES:
                 _invalid(f"{field}: if-no-files-found is not accepted", field)
+            if key == "retention-days" and "${{" not in text:
+                _invalid(_retention_message(field), field)
             accepted[key] = text
         if required not in accepted:
             _invalid(f"{required_field} is required", required_field)
