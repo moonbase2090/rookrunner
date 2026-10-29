@@ -59,6 +59,41 @@ class PollRetryTests(unittest.TestCase):
         self.host.poll(retry_failed=key)
         self.assertEqual(self.host.runs(), 2)
 
+    def test_a_storage_refusal_on_submit_is_retried_once_through_the_real_submit_path(self):
+        # The worker answers the first submit with the earlier storage-full failure
+        # for the same key; every other call reaches the real worker.
+        host = self.host
+        host.server.branches = [{"name": "main", "commit": {"sha": host._tip()}}]
+        original = host.caller
+        keys = []
+        refusal = {
+            "state": "failed",
+            "run_id": "earlier-failure",
+            "error": {
+                "kind": "SETUP_FAILED",
+                "message": "worker storage is full; free space before retrying",
+            },
+        }
+
+        def wrapped(method, params):
+            if method == "run.submit":
+                keys.append(params["submission_key"])
+                if len(keys) == 1:
+                    return dict(refusal)
+            return original(method, params)
+
+        host.caller = wrapped
+        try:
+            result = host.poll()
+        finally:
+            host.caller = original
+        self.assertEqual(len(keys), 2)
+        self.assertNotEqual(keys[0], keys[1])
+        self.assertTrue(keys[1].startswith("poll-"))
+        self.assertEqual(len(result["submitted"]), 1)
+        self.assertNotEqual(result["submitted"][0]["run_id"], "earlier-failure")
+        self.assertEqual(host.runs(), 1)
+
     def test_a_pruned_failure_can_be_retried_after_an_ordinary_pass(self):
         _tip, old_id, key = self._push()
         self.host.poll()
