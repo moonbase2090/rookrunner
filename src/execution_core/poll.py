@@ -208,6 +208,37 @@ def queue_expired(accepted_at, clock):
     return clock - accepted >= QUEUE_LIMIT
 
 
+_STORAGE_SETUP_REFUSAL = "worker storage is full"
+
+
+def retry_submission_key(key):
+    """The key of the one retry of a submission. It matches the explicit retry key."""
+
+    return "poll-" + hashlib.sha256(("retry\0" + key).encode()).hexdigest()
+
+
+def resubmit_after_setup_refusal(caller, params, submitted):
+    """Retry once when a same-key reply is a storage-full setup refusal.
+
+    The worker returns the earlier failed record for a repeated key, so that
+    record is not a new run. A storage refusal is retry-class: once the worker
+    has room, a run under a derived key is the correct outcome. The retry is
+    submitted once and its reply is returned without a second retry.
+    """
+
+    key = params["submission_key"]
+    error = submitted.get("error") if isinstance(submitted, dict) else None
+    if (
+        submitted.get("state") != "failed"
+        or not isinstance(error, dict)
+        or error.get("kind") != "SETUP_FAILED"
+        or _STORAGE_SETUP_REFUSAL not in str(error.get("message", ""))
+    ):
+        return submitted
+    retry = retry_submission_key(key)
+    return caller("run.submit", {**params, "submission_key": retry})
+
+
 def submission_key(repository, event, sha, workflow, job, tick=None):
     """Key built from the repository, event, tested SHA, workflow, and job.
 
@@ -2562,7 +2593,9 @@ class Pass:
             if self.ssh_host is not None:
                 self._remote_checkout(tested)
             try:
-                submitted = self.caller("run.submit", params)
+                submitted = resubmit_after_setup_refusal(
+                    self.caller, params, self.caller("run.submit", params)
+                )
             except PollError as exc:
                 absent = _absent_reason(exc, job_id)
                 if absent is not None:
@@ -2718,7 +2751,9 @@ class Pass:
                 params["untrusted_reason"] = override
             self._place_checkout(tested)
             try:
-                submitted = self.caller("run.submit", params)
+                submitted = resubmit_after_setup_refusal(
+                    self.caller, params, self.caller("run.submit", params)
+                )
             except PollError as exc:
                 absent = _absent_reason(exc, job_id)
                 if absent is not None:
