@@ -32,12 +32,12 @@ class ComparisonTests(unittest.TestCase):
         board.press("enter")
         text = board.render()
         self.assertIn('Compile <script>alert("fixture")</script>', text)
-        self.assertIn("\\x1b[31merror\\x1b[0m\\x07", text)
+        self.assertIn("^[[31merror^[[0m^G", text)
         self.assertNotIn("\x1b", text)
         self.assertIn("out/report.txt", text)
         board.press("n")
         self.assertIn("Test failed with exit code 1", board.render())
-        self.assertNotIn("\\x1b[31merror", board.render())
+        self.assertNotIn("^[[31merror", board.render())
 
     def test_stale_and_unavailable_observations_do_not_invent_run_outcomes(self):
         stale = Comparison(self.bundle, "stale").render()
