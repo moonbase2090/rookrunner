@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 
-import hashlib
 import unittest
 
 from execution_core.poll import resubmit_after_setup_refusal, retry_submission_key
@@ -17,7 +16,7 @@ STORAGE_FULL = {
 class SetupRetryTests(unittest.TestCase):
     def test_storage_setup_refusal_is_resubmitted_once_under_the_retry_key(self):
         key = "poll-" + "a" * 64
-        retry = retry_submission_key(key)
+        retry = "poll-4ddfa70de6204f5b752859252a187e5a931846af4be34a69d3c0bca32e295afd"
         calls = []
 
         def caller(method, params):
@@ -45,10 +44,13 @@ class SetupRetryTests(unittest.TestCase):
         self.assertIs(result, exit_failure)
         self.assertEqual(calls, [])
 
-    def test_retry_key_matches_the_explicit_retry_derivation(self):
+    def test_retry_key_is_the_fixed_derivation_of_the_original_key(self):
+        # Expected value computed once with shasum over "retry\0" + original key.
         key = "poll-" + "d" * 64
-        expected = "poll-" + hashlib.sha256(("retry\0" + key).encode()).hexdigest()
-        self.assertEqual(retry_submission_key(key), expected)
+        self.assertEqual(
+            retry_submission_key(key),
+            "poll-7b4b958c07889c78e090687a49a98dc2afd4676c9337bf9b9980b104bcb4572a",
+        )
 
 
 if __name__ == "__main__":
