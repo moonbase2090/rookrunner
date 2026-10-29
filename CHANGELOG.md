@@ -1,11 +1,29 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.14. A published release section
+The current package version is 0.1.15. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.15] - 2026-10-28
+
+- Pending commit statuses can be recovered from the worker's stored request.
+  The poller posts only a terminal worker state that matches the recorded
+  reconciliation candidate.
+- Completed poll submissions are pruned after reporting finishes while their
+  keys remain available for idempotency and explicit retries.
+- Remote worker calls use the configured worker timeout plus a ten-second
+  startup margin.
+- Idempotency conflict errors identify differing request fields without
+  exposing their values.
+- A workflow-file change can be allowed for one poll only at the exact
+  owner-approved pull-request head SHA.
+- A runnable, read-only local web dashboard option and shared synthetic
+  comparison fixture are available alongside the terminal dashboard.
+- The package version is 0.1.15. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.14] - 2026-10-27
 

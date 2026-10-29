@@ -28,9 +28,9 @@ class CleanContainerAcceptanceTests(unittest.TestCase):
         self.assertIn("not a P01" + "\u2013" + "P12 claim", RECORD)
         checksums = [line for line in RECORD.splitlines() if SHA_LINE.match(line)]
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())
-        self.assertEqual(project["project"]["version"], "0.1.14")
+        self.assertEqual(project["project"]["version"], "0.1.15")
         init = (ROOT / "src" / "execution_core" / "__init__.py").read_text()
-        self.assertIn('__version__ = "0.1.14"', init)
+        self.assertIn('__version__ = "0.1.15"', init)
         self.assertEqual(
             checksums,
             [
