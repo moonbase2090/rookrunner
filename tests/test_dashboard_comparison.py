@@ -32,7 +32,7 @@ class ComparisonTests(unittest.TestCase):
         board.press("enter")
         text = board.render()
         self.assertIn('Compile <script>alert("fixture")</script>', text)
-        self.assertIn("\\x1b[31merror\\x1b[0m\\x07", text)
+        self.assertIn("^[[31merror^[[0m^G", text)
         self.assertNotIn("\x1b", text)
         self.assertIn("out/report.txt", text)
         board.press("n")
