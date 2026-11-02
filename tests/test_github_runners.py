@@ -135,14 +135,14 @@ class ClientTests(unittest.TestCase):
         return gr.RunnerClient(self.fake.url, provider or (lambda: API_SECRET), environ=ON)
 
     JIT_BODY = MappingProxyType(
-        {"runner": {"id": 12, "name": "rr-1"}, "encoded_jit_config": JIT_SECRET}
+        {"runner": {"id": 12, "name": "runner-1"}, "encoded_jit_config": JIT_SECRET}
     )
 
     def test_jit_request_shape_repo_scope(self):
         client = self.client(body=dict(self.JIT_BODY))
         result = client.generate_jit_config(
             gr.Scope("octo", "widgets"),
-            name="rr-1",
+            name="runner-1",
             runner_group_id=1,
             labels=["self-hosted", "linux"],
             work_folder="_work",
@@ -154,24 +154,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(
             json.loads(body),
             {
-                "name": "rr-1",
+                "name": "runner-1",
                 "runner_group_id": 1,
                 "labels": ["self-hosted", "linux"],
                 "work_folder": "_work",
             },
         )
-        self.assertEqual((result.runner_id, result.runner_name), (12, "rr-1"))
+        self.assertEqual((result.runner_id, result.runner_name), (12, "runner-1"))
         self.assertEqual(result.encoded_jit_config.reveal(), JIT_SECRET)
 
     def test_jit_request_shape_org_scope_omits_work_folder(self):
         client = self.client(body=dict(self.JIT_BODY))
         client.generate_jit_config(
-            gr.Scope("octo"), name="rr-1", runner_group_id=3, labels=["linux"]
+            gr.Scope("octo"), name="runner-1", runner_group_id=3, labels=["linux"]
         )
         path, _, body = self.fake.requests[0]
         self.assertEqual(path, "/orgs/octo/actions/runners/generate-jitconfig")
         self.assertEqual(
-            json.loads(body), {"name": "rr-1", "runner_group_id": 3, "labels": ["linux"]}
+            json.loads(body), {"name": "runner-1", "runner_group_id": 3, "labels": ["linux"]}
         )
 
     def test_registration_token_request_and_redaction(self):
@@ -189,7 +189,7 @@ class ClientTests(unittest.TestCase):
     def test_jit_result_repr_hides_config(self):
         client = self.client(body=dict(self.JIT_BODY))
         result = client.generate_jit_config(
-            gr.Scope("octo"), name="rr-1", runner_group_id=1, labels=["linux"]
+            gr.Scope("octo"), name="runner-1", runner_group_id=1, labels=["linux"]
         )
         self.assertNotIn(JIT_SECRET, repr(result))
         self.assertNotIn(JIT_SECRET, str(result))
@@ -203,7 +203,7 @@ class ClientTests(unittest.TestCase):
             os.chdir(tmp)
             try:
                 client.generate_jit_config(
-                    gr.Scope("octo"), name="rr-1", runner_group_id=1, labels=["linux"]
+                    gr.Scope("octo"), name="runner-1", runner_group_id=1, labels=["linux"]
                 )
                 written = list(Path(tmp).rglob("*"))
             finally:
@@ -216,7 +216,7 @@ class ClientTests(unittest.TestCase):
         )
         with self.assertRaises(gr.GitHubRunnerError) as caught:
             client.generate_jit_config(
-                gr.Scope("octo"), name="rr-1", runner_group_id=1, labels=["linux"]
+                gr.Scope("octo"), name="runner-1", runner_group_id=1, labels=["linux"]
             )
         message = str(caught.exception)
         self.assertIn("422", message)
@@ -228,7 +228,7 @@ class ClientTests(unittest.TestCase):
         client = self.client(body={"encoded_jit_config": JIT_SECRET})
         with self.assertRaises(gr.GitHubRunnerError) as caught:
             client.generate_jit_config(
-                gr.Scope("octo"), name="rr-1", runner_group_id=1, labels=["linux"]
+                gr.Scope("octo"), name="runner-1", runner_group_id=1, labels=["linux"]
             )
         self.assertNotIn(JIT_SECRET, str(caught.exception))
 
@@ -239,7 +239,7 @@ class ClientTests(unittest.TestCase):
         self.fake.redirect_to = target.url + "/stolen"
         with self.assertRaises(gr.GitHubRunnerError):
             client.generate_jit_config(
-                gr.Scope("octo"), name="rr-1", runner_group_id=1, labels=["linux"]
+                gr.Scope("octo"), name="runner-1", runner_group_id=1, labels=["linux"]
             )
         self.assertEqual(target.requests, [])
         self.assertEqual(len(self.fake.requests), 1)
@@ -253,7 +253,7 @@ class ClientTests(unittest.TestCase):
     def test_invalid_inputs_refused_before_any_request(self):
         client = self.client(body=dict(self.JIT_BODY))
         scope = gr.Scope("octo")
-        good = {"name": "rr-1", "runner_group_id": 1, "labels": ["linux"]}
+        good = {"name": "runner-1", "runner_group_id": 1, "labels": ["linux"]}
         bad = [
             {"name": ""},
             {"name": "has space"},
