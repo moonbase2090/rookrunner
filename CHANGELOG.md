@@ -1,11 +1,29 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.15. A published release section
+The current package version is 0.1.16. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.16] - 2026-11-02
+
+- A repeated poll submission that returns an earlier storage-full setup
+  refusal is retried once with a distinct, stable submission key.
+- `actions/upload-artifact` accepts `retention-days` as an integer from
+  1 to 90. The value is validated and recorded, but the worker does not
+  enforce it as an artifact expiration policy.
+- Resource-scheduling decision proposals and a private managed-capacity
+  cost and design study are added. They do not select or implement a
+  scheduler or a managed service.
+- An experimental GitHub runner registration and webhook-intake module is
+  included. It is disabled unless `ROOKRUNNER_EXPERIMENTAL_GITHUB_RUNNERS=1`
+  is set. It has no CLI command or HTTP listener, and does not execute jobs.
+- CI checks documentation for links to unpublished packages and dead
+  external links.
+- The package version is 0.1.16. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.15] - 2026-10-28
 
