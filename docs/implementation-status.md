@@ -51,6 +51,12 @@ status
 dispatch
 reconcile
 poll
+diagnose
+submissions list
+submissions inspect
+submissions abandon
+submissions retry
+submissions repair
 call
 oidc
 oidc publish
@@ -107,6 +113,8 @@ workflow planner | execution_core.plan:plan_workflow
 workflow runner | execution_core.run:run_job
 runner image readiness | execution_core.run:runner_image_readiness
 owner poll | execution_core.poll:poll_once
+skip diagnosis | execution_core.diagnose:bundle
+poll submission repair | execution_core.submissions:repair_submission
 workflow dispatch | execution_core.poll:dispatch_once
 untrusted code refusal | execution_core.poll:untrusted_reason
 commit status | execution_core.status:post_status

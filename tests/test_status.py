@@ -338,6 +338,8 @@ class WorkerStatusTests(unittest.TestCase):
         )
         again = self._reply({**_params(setup["run_id"]), "checks": True})["result"]
         self.assertEqual(again, {"action": "skip", "state": "error"})
+        credential = self._reply(_params(setup["run_id"]))["result"]
+        self.assertEqual(credential, {"action": "skip", "state": "error"})
 
         failed_id, failed_digest = _snapshot(self.state)
         failed = _record(self.worker, failed_id, failed_digest, state="failed", exit_code=1)
