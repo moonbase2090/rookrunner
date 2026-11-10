@@ -877,7 +877,12 @@
             }
           ],
           "groups": [],
-          "ungrouped": 2
+          "ungrouped": 2,
+          "health": {
+            "state": "available",
+            "last_seen": "2026-10-23T11:59:00.000000+00:00",
+            "reason": null
+          }
         }
       }
     }
