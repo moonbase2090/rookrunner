@@ -104,6 +104,7 @@ from .disk import (
 from .expr import ExprError
 from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
+from .capabilities import assess
 from .plan import (
     PlanError,
     plan_needs_history,
@@ -1925,6 +1926,11 @@ class Worker:
                 raise self._plan_fault(exc) from exc
             except (OSError, UnicodeError, ValueError) as exc:
                 raise Fault("INVALID_PARAMS", "workflow snapshot could not be planned") from exc
+            # This process is the engine that would run the job. Refuse a
+            # plan it is too old to accept before the run is stored.
+            floor = assess(planned["plan"], __version__)
+            if not floor["ok"]:
+                raise Fault("CAPABILITY_UNSUPPORTED", floor["message"][:512])
             if "image" in p:
                 image = p["image"]
             else:

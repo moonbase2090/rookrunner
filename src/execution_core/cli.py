@@ -10,8 +10,10 @@ import subprocess
 import sys
 import time
 
+from .capabilities import check_workflow, engine_version_from_describe, require_engine_version
 from .checks import mint_list_token, post_check_flow, post_commit_status, revoke_installation_token
 from .oidc_keys import OidcError, load_key_set, publish
+from .plan import PlanError
 from .poll import PollError, accept_place, dispatch_once, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
@@ -458,6 +460,53 @@ def _run_poll(args, caller, mint, revoke, places=None):
         if isinstance(token, str):
             revoke(args.api_base, token)
         token = None
+
+
+def _check_failure(kind, message, field=None):
+    body = {"kind": kind, "message": message}
+    if field is not None:
+        body["field"] = field
+    print(canonical({"error": body}), file=sys.stderr)
+    sys.exit(1)
+
+
+def report_check(args):
+    """Plan one job and compare it with a deployed engine version.
+
+    ``--engine-version`` names that engine. Omitting it reads ``version``
+    from ``worker.describe``, which is the engine listening on ``--state``.
+    A missing capability is printed and the process exits 1. No run is stored.
+    """
+
+    if args.engine_version is None:
+        reply = call(args.state, "worker.describe", {})
+        if "error" in reply:
+            print(canonical(reply))
+            sys.exit(1)
+        try:
+            version = engine_version_from_describe(reply.get("result"))
+        except ValueError as error:
+            _check_failure("INVALID_PARAMS", str(error))
+        source = "worker"
+    else:
+        try:
+            version = require_engine_version(args.engine_version)
+        except ValueError as error:
+            _check_failure("INVALID_PARAMS", str(error))
+        source = "flag"
+    try:
+        workflow = Path(args.workflow).read_bytes()
+    except OSError:
+        _check_failure("INVALID_PARAMS", "workflow file could not be read")
+    try:
+        result = check_workflow(workflow, args.job_id, version, action_root=args.repository)
+    except PlanError as error:
+        _check_failure(error.kind, str(error), error.field)
+    except ValueError as error:
+        _check_failure("INVALID_PARAMS", str(error))
+    result["engine_version_from"] = source
+    print(canonical(result))
+    sys.exit(0 if result["ok"] else 1)
 
 
 def report_dispatch(args):
@@ -1342,6 +1391,26 @@ def main():
     )
     oidc_publish.add_argument("--out", required=True, help="directory to upload to the issuer host")
     _add_key_dir(oidc_publish)
+    check = commands.add_parser(
+        "check",
+        help="compare one workflow job with the capability floor of a deployed engine",
+    )
+    check.add_argument("--workflow", required=True, help="path of the workflow file to read")
+    check.add_argument("--job-id", required=True, help="job to check, including the jobs it needs")
+    check.add_argument(
+        "--repository",
+        help=(
+            "directory of local reusable workflows and local actions. "
+            "Omit it to check one file that does not call them."
+        ),
+    )
+    check.add_argument(
+        "--engine-version",
+        help=(
+            "deployed engine version, such as 0.1.16. "
+            "Omit it to use the version worker.describe reports for --state."
+        ),
+    )
     args = parser.parse_args()
     if args.command == "poll" and not args.job:
         parser.error("poll requires at least one --job WORKFLOW JOB_ID")
@@ -1364,6 +1433,9 @@ def main():
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)
             print(canonical({"snapshot": result}))
+            return
+        if args.command == "check":
+            report_check(args)
             return
         if args.command == "status":
             report_status(args)
