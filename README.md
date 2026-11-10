@@ -35,6 +35,31 @@ The first time a workflow is seen, the poll records the latest due minute and do
 
 A due minute runs on the first poll at or after that minute. The engine does not choose the interval. The owner poll is every 5 minutes, so a shorter cron still runs at most once per poll.
 
+## Stuck submissions
+
+A poll submission stays active until a final commit status is recorded.
+A setup failure's final status is `error`. The next poll posts it, and
+a neutral check posts that `error` status as well. `submissions list`
+prints the submissions that still have no final status. `--all` includes
+the rest. `--poll-state` selects the directory that holds `poll.json`
+and defaults to `--state`. `--dry-run` reads and does not post, submit,
+or write `poll.json`.
+
+```bash
+python3 -m execution_core --state "$STATE" submissions list --dry-run
+python3 -m execution_core --state "$STATE" submissions inspect KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
+```
+
+`repair` posts the missing final status. For a setup failure that is
+still reported as needing another try, that status is `error`. `abandon`
+posts `error` and does not post `success`. `retry` submits one successor
+of a failed push or pull request. The successor key is stable, and
+repeating the command does not create another run. A live `repair` or
+`abandon` also needs `--repository owner/name` and `--credential-file`.
+
 ## Project boundaries
 
 This is an independent repository under Moonbase2090. `execution-platform` is a temporary directory name.

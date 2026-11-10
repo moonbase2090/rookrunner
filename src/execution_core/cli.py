@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from .checks import mint_list_token, post_check_flow, revoke_installation_token
+from .checks import mint_list_token, post_check_flow, post_commit_status, revoke_installation_token
 from .oidc_keys import OidcError, load_key_set, publish
 from .poll import PollError, accept_place, dispatch_once, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
@@ -598,6 +598,101 @@ def _reconcile_poster(args):
     return post
 
 
+def report_submissions(args):
+    """List, inspect, abandon, retry, or repair one poll state's submissions."""
+
+    from .submissions import (
+        abandon_submission,
+        bound_repository,
+        inspect_submission,
+        list_submissions,
+        load_poll_state,
+        recorded_status_states,
+        repair_submission,
+        retry_submission,
+        stored_request,
+    )
+
+    directory = args.poll_state or args.state
+    db_path = Path(args.state) / "runs.sqlite3"
+    caller = _worker_caller(args.state)
+
+    def recorded(run_id, context, sha):
+        return recorded_status_states(db_path, run_id, context, sha)
+
+    def request_for(run_id):
+        return stored_request(db_path, run_id)
+
+    def post(sha, state, context):
+        if not args.credential_file:
+            raise StatusError(
+                "INVALID_PARAMS", "a live submission command posts with --credential-file"
+            )
+        bound = load_poll_state(directory).get("repository")
+        repository = bound_repository(bound, args.repository)
+        described = caller("worker.describe", {})
+        token = read_credential(args.credential_file, args.state, described["repository"])
+        try:
+            post_status(args.api_base, repository, sha, state, context, token)
+        finally:
+            token = None
+
+    command = args.submissions_command
+    try:
+        if command == "list":
+            result = list_submissions(
+                directory,
+                caller=caller,
+                recorded_states=recorded,
+                stuck_only=not args.all,
+                dry_run=args.dry_run,
+            )
+        elif command == "inspect":
+            result = inspect_submission(
+                directory,
+                args.key,
+                caller=caller,
+                recorded_states=recorded,
+                dry_run=args.dry_run,
+            )
+        elif command == "repair":
+            result = repair_submission(
+                directory,
+                args.key,
+                caller=caller,
+                recorded_states=recorded,
+                post=None if args.dry_run else post,
+                dry_run=args.dry_run,
+            )
+        elif command == "abandon":
+            result = abandon_submission(
+                directory,
+                args.key,
+                caller=caller,
+                post=None if args.dry_run else post,
+                dry_run=args.dry_run,
+            )
+        elif command == "retry":
+            result = retry_submission(
+                directory,
+                args.key,
+                caller=caller,
+                request_for=request_for,
+                dry_run=args.dry_run,
+            )
+        else:
+            raise PollError("INVALID_PARAMS", "submission command is not accepted")
+    except StatusError as error:
+        _print_status_error(error)
+    except PollError as error:
+        print(
+            canonical({"error": {"kind": error.kind, "message": str(error)}}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(canonical(result))
+
+
 def report_poll(args):
     """Run one pass and exit. A rate-limit stop is a finished pass."""
 
@@ -688,10 +783,7 @@ def _report_app_status(args, decision, repository_root):
             check_text=decision.get("check_text"),
             check_run_id=decision.get("check_run_id"),
             status_state=decision["state"],
-            post_status_request=(
-                decision.get("status_recorded") is not True
-                and decision.get("check_conclusion") != "neutral"
-            ),
+            post_status_request=post_commit_status(decision),
             app_key=args.app_key,
             state_dir=args.state,
             repository_root=repository_root,
@@ -1038,6 +1130,56 @@ def main():
     rec.add_argument("--clone", help="worker clone; needed to mint an app token")
     rec.add_argument("--credential-file", help="token file for the GitHub reads and posts")
     rec.add_argument("--api-base", default=DEFAULT_API_BASE)
+    submissions = commands.add_parser(
+        "submissions",
+        help="list stuck poll submissions, and inspect, abandon, retry, or repair one",
+    )
+    submission_commands = submissions.add_subparsers(dest="submissions_command", required=True)
+
+    def _submission_parser(name, help_text, *, key):
+        parser = submission_commands.add_parser(name, help=help_text)
+        parser.add_argument(
+            "--poll-state",
+            help="directory holding poll.json; default is --state",
+        )
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="read and decide; post nothing, submit nothing, and write nothing",
+        )
+        parser.add_argument("--repository", help="GitHub repository as owner/name")
+        parser.add_argument(
+            "--credential-file",
+            help="operator token file read only when a status is posted",
+        )
+        parser.add_argument("--api-base", default=DEFAULT_API_BASE)
+        if name == "list":
+            parser.add_argument(
+                "--all",
+                action="store_true",
+                help="include submissions that already have a final commit status",
+            )
+        if key:
+            parser.add_argument("key", help="poll submission key or run id")
+        return parser
+
+    _submission_parser("list", "list poll submissions that have no final commit status", key=False)
+    _submission_parser("inspect", "show one poll submission and its worker status", key=True)
+    _submission_parser(
+        "abandon",
+        "post error for one submission and retire it; never post success",
+        key=True,
+    )
+    _submission_parser(
+        "retry",
+        "submit one successor of a failed push or pull-request submission",
+        key=True,
+    )
+    _submission_parser(
+        "repair",
+        "post the missing final commit status, including error after a setup failure",
+        key=True,
+    )
     poll = commands.add_parser("poll", help="run one poll pass for one owner repository")
     poll.add_argument("--repository", required=True, help="GitHub repository as owner/name")
     poll.add_argument("--clone", required=True, help="dedicated clone; the worker repository")
@@ -1186,6 +1328,9 @@ def main():
             return
         if args.command == "reconcile":
             report_reconcile(args)
+            return
+        if args.command == "submissions":
+            report_submissions(args)
             return
         if args.command == "call":
             _call_stdio(args.state)
