@@ -2658,12 +2658,15 @@ class Worker:
                 return self._check_decision(
                     record, context, status_sha, state, check_status, check_conclusion, error
                 )
-            if is_setup_failure(error):
-                return {"action": "retry", "state": state}
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):
                 return {"action": "skip", "state": state}
+            # A setup failure has no workflow result. ``retry`` means the
+            # final ``error`` status is not recorded yet. Once it is, the
+            # check above returns ``skip`` and the poll can retire the run.
+            if is_setup_failure(error):
+                return {"action": "retry", "state": state}
             return {"action": "post", "state": state}
         # A poll can post pending, then the run finishes before the record
         # call. Store that pending post. A terminal state is stored only

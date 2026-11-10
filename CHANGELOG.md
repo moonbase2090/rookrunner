@@ -10,6 +10,15 @@ This file does not reconstruct earlier milestones.
 - Worker storage counts each inode once. A second hard link no longer makes a mostly empty budget look full.
 - `worker.describe` and `status.view` report the disk budget, charged bytes, 60% and 80% watermarks, and pressure (`ok`, `low`, `high`, or `full`).
 - `storage-plan --dry-run` lists finished folders a prune would remove and the bytes those folders hold. The command does not delete them.
+- A poll submission reaches a final commit status. A setup failure posts
+  `error`, including when its check conclusion is `neutral`, and a later
+  decision is `skip` once that `error` is recorded. A successor for the
+  same submission is retired without another post.
+- `submissions list` shows poll submissions that have no final commit
+  status. `inspect`, `abandon`, `retry`, and `repair` act on one
+  submission. Each command accepts `--dry-run`. `repair` posts the
+  missing final status, including `error` after a setup failure.
+  `abandon` posts `error` and does not post `success`.
 
 ## [0.1.16] - 2026-11-02
 

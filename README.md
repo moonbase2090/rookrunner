@@ -2,12 +2,11 @@
 
 A local tool, worker agent, and execution protocol for software builds and tests.
 
-**Status:** M1 is complete. M3 is implemented: the MCP adapter and the dashboard
-are in the tree. The owned engine runs owner CI. M4, the downloadable preview,
-is planned in [the release plan](docs/planning/m4-release.md). A wheel and a
-source tarball build from this tree and are not yet published. See
-[Install](docs/install.md). The worker runs synthetic development fixtures and executes one
-captured workflow job in a caller-pinned container.
+**Status:** What this tree implements is the
+[implementation status](docs/implementation-status.md). That page is checked
+against the code. This file does not restate it. Install steps are in
+[Install](docs/install.md). The downloadable preview is planned in
+[the release plan](docs/planning/m4-release.md).
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection
@@ -19,6 +18,7 @@ The first release targets one local worker. Later designs can extend execution t
 
 ## Start here
 
+- [Implementation status](docs/implementation-status.md): commands and features in this tree, checked against the code.
 - [Product requirements](docs/prd.md): users, scope, acceptance criteria, and open decisions.
 - [Technical design](docs/design/architecture.md): components, execution boundaries, and recovery.
 - [Execution protocol draft](docs/design/protocol.md): client and worker contract.
@@ -34,6 +34,31 @@ A poll of the default-branch tip runs a workflow that lists `on.schedule`. Each 
 The first time a workflow is seen, the poll records the latest due minute and does not run it. A later poll runs at most the newest minute that is due, including one catch-up after downtime. That minute is not run again after a restart. The due minute and the tip SHA are stored before submit, so a lost reply retries that SHA after the default branch moves. The run checks out that stored SHA. `github.event_name` is `schedule` and `github.event.schedule` is the cron text. File-backed secrets follow the same rule as a push to the default branch. The check context is `rookrunner/<workflow file>/<job>/schedule`.
 
 A due minute runs on the first poll at or after that minute. The engine does not choose the interval. The owner poll is every 5 minutes, so a shorter cron still runs at most once per poll.
+
+## Stuck submissions
+
+A poll submission stays active until a final commit status is recorded.
+A setup failure's final status is `error`. The next poll posts it, and
+a neutral check posts that `error` status as well. `submissions list`
+prints the submissions that still have no final status. `--all` includes
+the rest. `--poll-state` selects the directory that holds `poll.json`
+and defaults to `--state`. `--dry-run` reads and does not post, submit,
+or write `poll.json`.
+
+```bash
+python3 -m execution_core --state "$STATE" submissions list --dry-run
+python3 -m execution_core --state "$STATE" submissions inspect KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
+```
+
+`repair` posts the missing final status. For a setup failure that is
+still reported as needing another try, that status is `error`. `abandon`
+posts `error` and does not post `success`. `retry` submits one successor
+of a failed push or pull request. The successor key is stable, and
+repeating the command does not create another run. A live `repair` or
+`abandon` also needs `--repository owner/name` and `--credential-file`.
 
 ## Project boundaries
 
@@ -199,11 +224,10 @@ PYTHONPATH=src python3 -m execution_core --state "$PWD/.execution-state" snapsho
 Use `--include relative/path` for each required untracked file. This creates a
 snapshot, not a run. See the [capture rules and limitations](docs/design/source-capture.md).
 
-See the [implemented contract](docs/design/development-contract.md),
-[implementation choice](docs/decisions/0001-executable-foundation.md), and
+See the [development contract](docs/design/development-contract.md),
+[implementation choice](docs/decisions/0001-executable-foundation.md),
 [M1 completion evidence](docs/validation/m1-completion.md), and
-[machine-readable schemas](schemas/v0/README.md). M1 covers the development
-backend. Version 1 accepts one workflow job and the worker executes it after
-recording the attempt. The MCP adapter and the dashboard are implemented.
-Packaging is the M4 preview and is not published yet. Development dependency
-provenance is [recorded here](docs/development-dependencies.md).
+[machine-readable schemas](schemas/v0/README.md).
+What the tree implements now is the
+[implementation status](docs/implementation-status.md).
+Development dependency provenance is [recorded here](docs/development-dependencies.md).
