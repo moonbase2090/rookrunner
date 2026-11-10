@@ -102,6 +102,7 @@ class _Scan:
         self.sizes = {}
         self.links = {}
         self.directories = {}
+        self.nlinks = {}
 
 
 def _scan(root):
@@ -124,6 +125,7 @@ def _scan(root):
         else:
             scan.links[ident] = scan.links.get(ident, 0) + 1
         if not is_dir:
+            scan.nlinks[ident] = info.st_nlink
             continue
         seen_directories.add(ident)
         scan.directories[current] = info.st_size
@@ -137,7 +139,12 @@ class StateUsage:
 
     An inode already included in the total is not charged again when a later
     add or refresh sees another name for it. File growth updates the charged
-    size in place.
+    size in place. Each name found for a known file raises its recorded link
+    count, capped at the inode's link count on disk, so removing one name of
+    a hard-linked file keeps the bytes charged while another name remains.
+    A repeated sync of a file that also has names outside the tree can leave
+    the count high. That only delays freeing until the next refresh.
+    A path that vanished outside the tracker is settled by a full refresh.
     """
 
     def __init__(self, root):
@@ -168,6 +175,7 @@ class StateUsage:
         try:
             scan = _scan(path)
         except FileNotFoundError:
+            self.refresh()
             return 0
         with self._lock:
             self._integrate(scan)
@@ -180,7 +188,9 @@ class StateUsage:
         try:
             scan = _scan(path)
         except FileNotFoundError:
-            return 0
+            before = self.total
+            self.refresh()
+            return max(0, before - self.total)
         with self._lock:
             freed = 0
             for ident, count in scan.links.items():
@@ -263,7 +273,11 @@ class StateUsage:
 
     def _integrate(self, scan):
         for ident, size in scan.sizes.items():
-            self._note_inode(ident, size, scan.links.get(ident, 1))
+            names = scan.links.get(ident, 1)
+            on_disk = scan.nlinks.get(ident)
+            if on_disk is not None and ident in self._links:
+                self._links[ident] = min(on_disk, self._links[ident] + names)
+            self._note_inode(ident, size, names)
 
     def _note_inode(self, ident, size, links_if_new):
         previous = self._sizes.get(ident)

@@ -161,6 +161,60 @@ class DiskUsageTests(unittest.TestCase):
             self.assertEqual(tracked.total, before)
             self.assertEqual(tracked.total, usage(root))
 
+    def test_removing_one_of_two_hard_links_keeps_the_bytes_charged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            first = root / "a"
+            first.mkdir()
+            (first / "data").write_bytes(b"z" * 4000)
+            tracked.add(first)
+            second = root / "b"
+            second.mkdir()
+            os.link(first / "data", second / "data")
+            tracked.add(second)
+            tracked.remove(first)
+            shutil.rmtree(first)
+            tracked.sync_parent_directories(first)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertGreaterEqual(tracked.total, 4000)
+            tracked.remove(second)
+            shutil.rmtree(second)
+            tracked.sync_parent_directories(second)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertLess(tracked.total, 4000)
+
+    def test_a_path_deleted_outside_the_tracker_is_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "one"
+            payload.mkdir()
+            (payload / "data").write_bytes(b"q" * 4000)
+            tracked.add(payload)
+            self.assertGreaterEqual(tracked.total, 4000)
+            shutil.rmtree(payload)
+            freed = tracked.remove(payload)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertLess(tracked.total, 4000)
+            self.assertGreaterEqual(freed, 4000)
+
+    def test_sync_path_of_a_missing_path_releases_what_was_tracked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "one"
+            payload.mkdir()
+            (payload / "data").write_bytes(b"w" * 4000)
+            tracked.add(payload)
+            shutil.rmtree(payload)
+            tracked.sync_path(payload)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertLess(tracked.total, 4000)
+
 
 class DiskBudgetTests(unittest.TestCase):
     def test_fixture_over_budget_does_not_consume_the_key_or_evidence(self):
