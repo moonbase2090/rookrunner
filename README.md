@@ -2,12 +2,11 @@
 
 A local tool, worker agent, and execution protocol for software builds and tests.
 
-**Status:** M1 is complete. M3 is implemented: the MCP adapter and the dashboard
-are in the tree. The owned engine runs owner CI. M4, the downloadable preview,
-is planned in [the release plan](docs/planning/m4-release.md). A wheel and a
-source tarball build from this tree and are not yet published. See
-[Install](docs/install.md). The worker runs synthetic development fixtures and executes one
-captured workflow job in a caller-pinned container.
+**Status:** What this tree implements is the
+[implementation status](docs/implementation-status.md). That page is checked
+against the code. This file does not restate it. Install steps are in
+[Install](docs/install.md). The downloadable preview is planned in
+[the release plan](docs/planning/m4-release.md).
 
 **Accepted direction:** Rookrunner will own its workflow execution engine and
 incrementally match GitHub Actions behavior. The earlier act backend selection
@@ -19,6 +18,7 @@ The first release targets one local worker. Later designs can extend execution t
 
 ## Start here
 
+- [Implementation status](docs/implementation-status.md): commands and features in this tree, checked against the code.
 - [Product requirements](docs/prd.md): users, scope, acceptance criteria, and open decisions.
 - [Technical design](docs/design/architecture.md): components, execution boundaries, and recovery.
 - [Execution protocol draft](docs/design/protocol.md): client and worker contract.
@@ -194,11 +194,10 @@ PYTHONPATH=src python3 -m execution_core --state "$PWD/.execution-state" snapsho
 Use `--include relative/path` for each required untracked file. This creates a
 snapshot, not a run. See the [capture rules and limitations](docs/design/source-capture.md).
 
-See the [implemented contract](docs/design/development-contract.md),
-[implementation choice](docs/decisions/0001-executable-foundation.md), and
+See the [development contract](docs/design/development-contract.md),
+[implementation choice](docs/decisions/0001-executable-foundation.md),
 [M1 completion evidence](docs/validation/m1-completion.md), and
-[machine-readable schemas](schemas/v0/README.md). M1 covers the development
-backend. Version 1 accepts one workflow job and the worker executes it after
-recording the attempt. The MCP adapter and the dashboard are implemented.
-Packaging is the M4 preview and is not published yet. Development dependency
-provenance is [recorded here](docs/development-dependencies.md).
+[machine-readable schemas](schemas/v0/README.md).
+What the tree implements now is the
+[implementation status](docs/implementation-status.md).
+Development dependency provenance is [recorded here](docs/development-dependencies.md).
