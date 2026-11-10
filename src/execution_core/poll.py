@@ -109,8 +109,12 @@ Local rules, not GitHub-equivalence claims:
   matches ``--image`` when that flag is set, and the worker runner image
   when ``--image`` is omitted. A place that is not ready, full,
   unreachable, or a different repository is named in the summary. A job
-  with no matching place is left unrecorded. A recorded place stays,
-  including when its run is lost.
+  with no ready place is left unrecorded. A job that has a ready place
+  but no free cap is recorded as waiting for capacity, with the time it
+  started waiting and the reason ``capacity``. The summary lists that
+  backlog in ``waiting``. Later passes do not add another ``no_host``
+  skip for it. When a place has room, the oldest waiting job is
+  submitted first. A recorded place stays, including when its run is lost.
 - A queued run is cancelled 24 hours after acceptance and reported as
   ``error``. An older SHA is not cancelled because a newer push arrived.
 - This pass lists branches and open pull requests. It does not list tags.
@@ -1169,6 +1173,7 @@ class Pass:
             "submitted": [],
             "statuses": [],
             "skipped": [],
+            "waiting": [],
             "warnings": [],
         }
 
@@ -1217,6 +1222,12 @@ class Pass:
                 self._note_unknown_hosts()
                 self._connect_claimed()
                 self._expire_placed()
+                if not self._admit_capacity():
+                    self._prepare_retry()
+                    self.result["stopped"] = self.budget.stopped
+                    self._record_polls()
+                    _save_state(self.state_dir / "poll.json", self.state)
+                    return self.result
             self._prepare_retry()
             self._branches()
             self._pulls()
@@ -1412,6 +1423,8 @@ class Pass:
         names = {place["name"] for place in self.places}
         seen = []
         for entry in self.state["submissions"]:
+            if self._is_capacity_wait(entry):
+                continue
             host = entry.get("host")
             if host in names or host in seen:
                 continue
@@ -2688,6 +2701,198 @@ class Pass:
             )
         return not self.budget.stopped
 
+    def _capacity_pressure(self):
+        """True when every usable place is at its cap and at least one is full."""
+
+        if not self.places:
+            return False
+        saw_full = False
+        for place in self.places:
+            if place.get("skip") == "host_full":
+                saw_full = True
+                continue
+            if (
+                place.get("skip") is None
+                and place.get("reachable")
+                and place.get("active", 0) < place.get("cap", 0)
+            ):
+                return False
+        return saw_full
+
+    def _is_capacity_wait(self, entry):
+        waiting = entry.get("waiting") if isinstance(entry, dict) else None
+        return (
+            isinstance(waiting, dict)
+            and waiting.get("reason") == "capacity"
+            and "run_id" not in entry
+            and "host" not in entry
+        )
+
+    def _waiting_row(self, entry):
+        waiting = entry.get("waiting") if isinstance(entry.get("waiting"), dict) else {}
+        request = waiting.get("request") if isinstance(waiting.get("request"), dict) else {}
+        return {
+            "reason": "capacity",
+            "since": waiting.get("since"),
+            "event": entry.get("event"),
+            "ref": waiting.get("ref"),
+            "workflow": request.get("workflow"),
+            "job_id": request.get("job_id"),
+        }
+
+    def _show_waiting(self, entry):
+        row = self._waiting_row(entry)
+        if row not in self.result["waiting"]:
+            self.result["waiting"].append(row)
+
+    def _placed_params(
+        self, key, event_name, workflow, job_id, event, activity, changed, first, override
+    ):
+        params = {
+            "version": 1,
+            "submission_key": key,
+            "workflow": workflow,
+            "job_id": job_id,
+            "event": event,
+            "event_name": event_name,
+        }
+        if self.image is not None:
+            params["image"] = self.image
+        if activity is not None:
+            params["activity_type"] = activity
+        if first or changed is None:
+            params["diff_unavailable"] = True
+        else:
+            files, commits = changed
+            params["changed_files"] = files
+            if event_name == "push":
+                params["commit_count"] = commits
+                if commits > COMMIT_PATH_LIMIT:
+                    params.pop("changed_files", None)
+        if override is not None:
+            params["untrusted_override"] = True
+            params["untrusted_reason"] = override
+        return params
+
+    def _remember_capacity(
+        self,
+        key,
+        event_name,
+        ref,
+        tested,
+        status_sha,
+        context,
+        workflow,
+        job_id,
+        event,
+        activity,
+        changed,
+        first,
+        override,
+    ):
+        claimed = {
+            "key": key,
+            **self._retry_metadata(key),
+            "event": event_name,
+            "tested_commit": tested,
+            "status_sha": status_sha,
+            "context": context,
+            "pending": False,
+            "waiting": {
+                "since": self.clock.isoformat(),
+                "reason": "capacity",
+                "ref": ref,
+                "request": self._placed_params(
+                    key, event_name, workflow, job_id, event, activity, changed, first, override
+                ),
+            },
+        }
+        self.state["submissions"].append(claimed)
+        self._checkpoint()
+        self._show_waiting(claimed)
+
+    def _finish_placed(self, claimed, place, params, event_name, ref, job_id):
+        """Submit one claimed job. False means the pending post did not finish."""
+
+        self._bind(place)
+        self._place_checkout(claimed["tested_commit"])
+        try:
+            submitted = resubmit_after_setup_refusal(
+                self.caller, params, self.caller("run.submit", params)
+            )
+        except PollError as exc:
+            absent = _absent_reason(exc, job_id)
+            if absent is not None:
+                if "run_id" not in claimed:
+                    self._drop_unstarted(claimed)
+                self._skip(
+                    {
+                        "reason": absent,
+                        "event": event_name,
+                        "ref": ref,
+                        "workflow": params.get("workflow"),
+                        "job_id": job_id,
+                    }
+                )
+                return True
+            raise
+        if submitted.get("triggered") is False and "run_id" not in submitted:
+            if "run_id" not in claimed:
+                self._drop_unstarted(claimed)
+            self.result["submitted"].append(
+                {"event": event_name, "ref": ref, "triggered": False, "host": place["name"]}
+            )
+            return True
+        claimed["run_id"] = submitted["run_id"]
+        place["active"] += 1
+        if place["active"] >= place["cap"]:
+            place["skip"] = "host_full"
+        self._checkpoint()
+        if not self._post_pending(claimed):
+            return False
+        claimed["pending"] = True
+        self._checkpoint()
+        self.result["submitted"].append(
+            {
+                "event": event_name,
+                "ref": ref,
+                "run_id": submitted["run_id"],
+                "host": place["name"],
+            }
+        )
+        return True
+
+    def _admit_capacity(self):
+        """Submit waiting jobs, oldest first, while a place has room."""
+
+        ranked = []
+        for index, entry in enumerate(self.state.get("submissions") or []):
+            if not self._is_capacity_wait(entry):
+                continue
+            since = entry["waiting"].get("since")
+            ranked.append((since if isinstance(since, str) else "", index, entry))
+        ranked.sort()
+        for _since, _index, entry in ranked:
+            place = self._choose_place()
+            if place is None:
+                self._show_waiting(entry)
+                continue
+            waiting = entry.get("waiting") or {}
+            request = waiting.get("request")
+            ref = waiting.get("ref")
+            if not isinstance(request, dict) or not isinstance(ref, str):
+                self._show_waiting(entry)
+                continue
+            params = dict(request)
+            job_id = params.get("job_id")
+            event_name = entry.get("event")
+            entry.pop("waiting", None)
+            entry["host"] = place["name"]
+            self._checkpoint()
+            if not self._finish_placed(entry, place, params, event_name, ref, job_id):
+                return False
+        return True
+
     def _submit_placed(
         self,
         event_name,
@@ -2716,6 +2921,9 @@ class Pass:
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
             )
+            if existing is not None and self._is_capacity_wait(existing):
+                self._show_waiting(existing)
+                continue
             if existing is not None:
                 place = self._place_for(existing.get("host"))
                 if place is None or not place.get("reachable"):
@@ -2745,6 +2953,23 @@ class Pass:
             else:
                 place = self._choose_place()
                 if place is None:
+                    if self._capacity_pressure():
+                        self._remember_capacity(
+                            key,
+                            event_name,
+                            ref,
+                            tested,
+                            status_sha,
+                            context,
+                            workflow,
+                            job_id,
+                            event,
+                            activity,
+                            changed,
+                            first,
+                            override,
+                        )
+                        continue
                     self.unplaced = True
                     self._skip(
                         {
@@ -2768,76 +2993,11 @@ class Pass:
                 }
                 self.state["submissions"].append(claimed)
                 self._checkpoint()
-            self._bind(place)
-            params = {
-                "version": 1,
-                "submission_key": key,
-                "workflow": workflow,
-                "job_id": job_id,
-                "event": event,
-                "event_name": event_name,
-            }
-            if self.image is not None:
-                params["image"] = self.image
-            if activity is not None:
-                params["activity_type"] = activity
-            if first or changed is None:
-                params["diff_unavailable"] = True
-            else:
-                files, commits = changed
-                params["changed_files"] = files
-                if event_name == "push":
-                    params["commit_count"] = commits
-                    if commits > COMMIT_PATH_LIMIT:
-                        params.pop("changed_files", None)
-            if override is not None:
-                params["untrusted_override"] = True
-                params["untrusted_reason"] = override
-            self._place_checkout(tested)
-            try:
-                submitted = resubmit_after_setup_refusal(
-                    self.caller, params, self.caller("run.submit", params)
-                )
-            except PollError as exc:
-                absent = _absent_reason(exc, job_id)
-                if absent is not None:
-                    if "run_id" not in claimed:
-                        self._drop_unstarted(claimed)
-                    self._skip(
-                        {
-                            "reason": absent,
-                            "event": event_name,
-                            "ref": ref,
-                            "workflow": workflow,
-                            "job_id": job_id,
-                        }
-                    )
-                    continue
-                raise
-            if submitted.get("triggered") is False and "run_id" not in submitted:
-                if "run_id" not in claimed:
-                    self._drop_unstarted(claimed)
-                self.result["submitted"].append(
-                    {"event": event_name, "ref": ref, "triggered": False, "host": place["name"]}
-                )
-                continue
-            claimed["run_id"] = submitted["run_id"]
-            place["active"] += 1
-            if place["active"] >= place["cap"]:
-                place["skip"] = "host_full"
-            self._checkpoint()
-            if not self._post_pending(claimed):
-                return False
-            claimed["pending"] = True
-            self._checkpoint()
-            self.result["submitted"].append(
-                {
-                    "event": event_name,
-                    "ref": ref,
-                    "run_id": submitted["run_id"],
-                    "host": place["name"],
-                }
+            params = self._placed_params(
+                key, event_name, workflow, job_id, event, activity, changed, first, override
             )
+            if not self._finish_placed(claimed, place, params, event_name, ref, job_id):
+                return False
         return not self.budget.stopped
 
     def _claims_this_host(self, entry):

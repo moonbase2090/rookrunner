@@ -17,7 +17,7 @@ from .plan import PlanError
 from .poll import PollError, accept_place, dispatch_once, poll_once
 from .protocol import MAX_MESSAGE, TERMINAL, canonical, strict_json
 from .status import DEFAULT_API_BASE, StatusError, post_status, read_credential
-from .worker import serve
+from .worker import serve, storage_plan
 from .snapshot import CaptureError, SourceCapture
 
 # Pause while a followed run is still open. This is client pacing, not an Actions limit.
@@ -1061,6 +1061,27 @@ def main():
             "It does not add other capabilities."
         ),
     )
+    plan = commands.add_parser(
+        "storage-plan",
+        help="report bytes a finished-folder prune would free; nothing is deleted",
+    )
+    plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="required spelling for the read-only plan; the command never deletes",
+    )
+    plan.add_argument(
+        "--disk-budget-bytes",
+        type=int,
+        default=None,
+        help="bytes allowed under the state directory (default 10*1024**3)",
+    )
+    plan.add_argument(
+        "--finished-folder-count",
+        type=int,
+        default=None,
+        help="newest finished run folders kept while younger than 90 days (default 100)",
+    )
     commands.add_parser("describe")
     diagnose = commands.add_parser(
         "diagnose",
@@ -1439,6 +1460,14 @@ def main():
             return
         if args.command == "diagnose":
             report_diagnose(args)
+            return
+        if args.command == "storage-plan":
+            report = storage_plan(
+                args.state,
+                args.disk_budget_bytes,
+                args.finished_folder_count,
+            )
+            print(canonical(report))
             return
         if args.command == "worker":
             serve(

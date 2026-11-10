@@ -98,6 +98,7 @@ from .disk import (
     FINISHED_RUN_FOLDER_COUNT,
     FINISHED_RUN_FOLDER_SECONDS,
     StateUsage,
+    storage_report,
     usage,
 )
 from .expr import ExprError
@@ -2071,16 +2072,30 @@ class Worker:
 
         try:
             self._sync_state_files()
-            used = self.state_usage.total
         except OSError:
             return True
-        if used + incoming <= self.disk_budget:
+        if self._usage_fits(incoming):
+            self._prune_finished_run_folders(0)
+            return False
+        # The running total can charge an inode twice after a refresh sees
+        # staging bytes that a later add measures again. Re-measure before
+        # deleting finished folders or refusing the attempt.
+        try:
+            self.state_usage.refresh()
+        except OSError:
+            return True
+        if self._usage_fits(incoming):
             self._prune_finished_run_folders(0)
             return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
-        used = self.state_usage.total
-        return used + incoming > self.disk_budget
+        return not self._usage_fits(incoming)
+
+    def _usage_fits(self, incoming):
+        return self.state_usage.total + incoming <= self.disk_budget
+
+    def _storage_report(self):
+        return storage_report(self.state_usage.total, self.disk_budget)
 
     def _runtime_over_budget(self):
         """Return whether the state already exceeds the disk budget.
@@ -2314,6 +2329,7 @@ class Worker:
                     "json_depth": MAX_JSON_DEPTH,
                 },
                 "retention": "runs and submission keys retained indefinitely; terminal attempt directories removed",
+                "storage": self._storage_report(),
             }
             if self.node24 is not None:
                 described["node24"] = {
@@ -2602,6 +2618,7 @@ class Worker:
                 }
             )
         groups, ungrouped = _group_rows(active)
+        storage = described.get("storage")
         return {
             "worker": {
                 "version": described.get("version")
@@ -2610,6 +2627,7 @@ class Worker:
                 "ready": described.get("ready") is True,
                 "readiness_error": error if isinstance(error, str) else None,
                 "runner_image": image if isinstance(image, str) else None,
+                "storage": storage if isinstance(storage, dict) else self._storage_report(),
             },
             "poll": {
                 "completed_at": self._metadata("poll_completed_at"),
@@ -2964,6 +2982,186 @@ def _oidc_settings(issuer, pull_requests, *, repository, state_dir, refs, pusher
         )
     except OidcError as exc:
         raise ValueError(f"worker --oidc-issuer: {exc}") from None
+
+
+def _plan_protected(record, posted):
+    if record.get("state") not in TERMINAL:
+        return True
+    if record.get("cleanup") != "confirmed_no_external_resources":
+        return True
+    if (record.get("input") or {}).get("kind") == "workflow_job":
+        return record.get("run_id") not in posted
+    return False
+
+
+def _plan_names(records):
+    snapshots = set()
+    attempts = set()
+    for record in records:
+        snapshot_id = (record.get("input") or {}).get("snapshot_id")
+        if isinstance(snapshot_id, str) and _ATTEMPT_ID.fullmatch(snapshot_id):
+            snapshots.add(snapshot_id)
+        attempt_id = record.get("attempt_id")
+        if isinstance(attempt_id, str) and _ATTEMPT_ID.fullmatch(attempt_id):
+            attempts.add(attempt_id)
+    return snapshots, attempts
+
+
+def _measure_folder(root, kind, name):
+    path = Path(root) / ("snapshots" if kind == "snapshot" else "attempts") / name
+    try:
+        if path.is_symlink() or not path.is_dir():
+            return 0
+        return usage(path)
+    except OSError:
+        return 0
+
+
+def _reason_for_name(dropped, reasons, kind, name):
+    rank = {"age": 0, "count": 1, "pressure": 2}
+    found = "pressure"
+    best = 3
+    for record in dropped:
+        if kind == "snapshot":
+            matches = (record.get("input") or {}).get("snapshot_id") == name
+        else:
+            matches = record.get("attempt_id") == name
+        if not matches:
+            continue
+        reason = reasons.get(record.get("run_id"), "pressure")
+        score = rank.get(reason, 2)
+        if score < best:
+            best = score
+            found = reason
+    return found
+
+
+def _plan_folders(root, records, drop_ids, reasons):
+    kept = [record for record in records if record.get("run_id") not in drop_ids]
+    dropped = [record for record in records if record.get("run_id") in drop_ids]
+    keep_snapshots, keep_attempts = _plan_names(kept)
+    drop_snapshots, drop_attempts = _plan_names(dropped)
+    folders = []
+    for name in sorted(drop_snapshots - keep_snapshots):
+        folders.append(
+            {
+                "kind": "snapshot",
+                "id": name,
+                "bytes": _measure_folder(root, "snapshot", name),
+                "reason": _reason_for_name(dropped, reasons, "snapshot", name),
+            }
+        )
+    for name in sorted(drop_attempts - keep_attempts):
+        folders.append(
+            {
+                "kind": "attempt",
+                "id": name,
+                "bytes": _measure_folder(root, "attempt", name),
+                "reason": _reason_for_name(dropped, reasons, "attempt", name),
+            }
+        )
+    return [item for item in folders if item["bytes"] > 0]
+
+
+def storage_plan(state, disk_budget=None, finished_folder_count=None):
+    """Return the bytes a prune would free. The state directory is not changed."""
+
+    if disk_budget is None:
+        disk_budget = DEFAULT_DISK_BUDGET
+    if type(disk_budget) is not int or disk_budget < 0:
+        raise ValueError("disk budget must be a non-negative integer")
+    if finished_folder_count is None:
+        finished_folder_count = FINISHED_RUN_FOLDER_COUNT
+    if type(finished_folder_count) is not int or finished_folder_count < 1:
+        raise ValueError("finished folder count must be a positive integer")
+    root = Path(state)
+    database = root / "runs.sqlite3"
+    try:
+        if (
+            root.is_symlink()
+            or not root.is_dir()
+            or database.is_symlink()
+            or not database.is_file()
+        ):
+            raise ValueError("worker storage could not be read")
+        db = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+    except (OSError, sqlite3.Error) as exc:
+        raise ValueError("worker storage could not be read") from exc
+    try:
+        db.execute("PRAGMA query_only=ON")
+        try:
+            rows = db.execute("SELECT record FROM runs").fetchall()
+        except sqlite3.Error as exc:
+            raise ValueError("worker storage could not be read") from exc
+        records = []
+        for (raw,) in rows:
+            try:
+                record = json.loads(raw)
+            except (ValueError, UnicodeError):
+                continue
+            if isinstance(record, dict) and isinstance(record.get("run_id"), str):
+                records.append(record)
+        posted = set()
+        try:
+            posted.update(
+                run_id
+                for (run_id,) in db.execute(
+                    "SELECT run_id FROM status_posts WHERE state IN ('success', 'failure', 'error')"
+                )
+            )
+        except sqlite3.Error:
+            posted = set()
+    finally:
+        db.close()
+    try:
+        used = usage(root)
+    except OSError as exc:
+        raise ValueError("worker storage could not be read") from exc
+    current = datetime.now(UTC)
+    eligible = []
+    for record in records:
+        if _plan_protected(record, posted):
+            continue
+        stamp = _finished_stamp(record.get("finished_at"))
+        if stamp is None:
+            continue
+        eligible.append((stamp, record))
+    eligible.sort(key=lambda item: item[0])
+    newest = {record["run_id"] for _stamp, record in eligible[-finished_folder_count:]}
+    reasons = {}
+    retention_ids = set()
+    keep = []
+    for stamp, record in eligible:
+        age = (current - stamp).total_seconds()
+        if age >= FINISHED_RUN_FOLDER_SECONDS:
+            reasons[record["run_id"]] = "age"
+            retention_ids.add(record["run_id"])
+        elif record["run_id"] not in newest:
+            reasons[record["run_id"]] = "count"
+            retention_ids.add(record["run_id"])
+        else:
+            keep.append(record)
+    drop_ids = set(retention_ids)
+    freed = sum(item["bytes"] for item in _plan_folders(root, records, drop_ids, reasons))
+    for record in keep:
+        if used - freed <= disk_budget:
+            break
+        trial = drop_ids | {record["run_id"]}
+        reasons[record["run_id"]] = "pressure"
+        trial_folders = _plan_folders(root, records, trial, reasons)
+        trial_freed = sum(item["bytes"] for item in trial_folders)
+        # Keep the candidate even when its folder is still shared. A later
+        # candidate can be the last reference, and that is when bytes move.
+        drop_ids = trial
+        freed = trial_freed
+    folders = _plan_folders(root, records, drop_ids, reasons)
+    freed = sum(item["bytes"] for item in folders)
+    report = storage_report(used, disk_budget)
+    report["dry_run"] = True
+    report["freed_bytes"] = freed
+    report["used_after_bytes"] = max(0, used - freed)
+    report["folders"] = folders
+    return report
 
 
 def _accept_runner_image(value):
