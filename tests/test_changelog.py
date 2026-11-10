@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -83,18 +83,21 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_16_is_the_current_version_and_unreleased_entries(self):
-        self.assertIn("The current package version is 0.1.16.", TEXT)
-        self.assertIn("## [Unreleased]", TEXT)
-        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.16]", 1)[0]
-        prose = " ".join(unreleased.split())
+    def test_0_1_17_is_the_current_version_and_its_entries_are_released(self):
+        self.assertIn("The current package version is 0.1.17.", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.17]", 1)[0]
+        self.assertNotIn("`diagnose --since`", unreleased)
+        self.assertNotIn("The package version is 0.1.17.", unreleased)
+        section = TEXT.split("## [0.1.17] - 2026-11-10", 1)[1].split("## [0.1.16]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.17.", prose)
+        self.assertIn("This change does not create a tag.", prose)
         self.assertIn("`check` compares one selected job", prose)
         self.assertIn("directory of local reusable workflows and local actions", prose)
         self.assertIn("names the capability and the minimum engine version", prose)
         self.assertIn("`step.continue-on-error` requires 0.1.6", prose)
         self.assertIn("`permissions.id-token-write` requires 0.1.8", prose)
         self.assertIn("`upload.retention-days` requires 0.1.16", prose)
-        self.assertIn("The package version stays 0.1.16.", prose)
         self.assertIn("`diagnose --since`", prose)
         self.assertIn("skip-journal.jsonl", prose)
         self.assertIn("256 KiB", prose)
@@ -107,6 +110,12 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("`submissions list` shows poll submissions", prose)
         self.assertIn("`repair` posts the missing final status", prose)
         self.assertIn("`abandon` posts `error` and does not post `success`", prose)
+        self.assertIn("`worker_unavailable`", prose)
+        self.assertIn("`heartbeat_stale`", prose)
+        self.assertIn("Jobs that wait for capacity stay on a backlog", prose)
+
+    def test_0_1_16_records_the_current_changes(self):
+        self.assertIn("## [0.1.16] - 2026-11-02", TEXT)
         section = TEXT.split("## [0.1.16] - 2026-11-02", 1)[1].split("## [0.1.15]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.16.", prose)
