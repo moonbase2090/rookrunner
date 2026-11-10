@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A merge-commit mismatch error on `rookrunner/trust` now turns into a
+  success once a later pass finds the merge ref matching the same head.
+  Before, the error stayed and the pull request stayed red.
+
 ## [0.1.17] - 2026-11-10
 
 - `diagnose --since` prints one JSON object for a state directory. The
