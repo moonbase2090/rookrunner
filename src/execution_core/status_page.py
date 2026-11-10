@@ -163,7 +163,7 @@ def _answer(text, state):
     if headers.get("host") != _HOST:
         return 400, b"", False
     mode, view = _fetch(state)
-    body = _document(mode, view).encode()
+    body = _document(mode, view, state).encode()
     return 200, body, method == "HEAD"
 
 
@@ -283,7 +283,7 @@ def _owner(value):
     return "not recorded"
 
 
-def _worker_block(mode, view):
+def _worker_block(mode, view, state):
     if mode != "up" or not isinstance(view, dict):
         label = mode if mode in {"busy", "down"} else "down"
         rows = (
@@ -308,7 +308,53 @@ def _worker_block(mode, view):
             ("Last poll", _stamp(poll.get("completed_at"))),
             ("Poll repository", _owner(poll.get("repository"))),
         )
+    rows += _health_pairs(mode, view, state)
     return "<dl>" + "".join(_pair(label, value) for label, value in rows) + "</dl>"
+
+
+_HEALTH_REASONS = frozenset({"stopped", "heartbeat_stale", "absent"})
+
+
+def _health_pairs(mode, view, state):
+    health = _health_observation(mode, view, state)
+    if health is None:
+        return (
+            ("Health", "not shown"),
+            ("Last seen", "not available"),
+            ("Reason", "not available"),
+        )
+    name = health.get("state")
+    if name not in {"available", "worker_unavailable"}:
+        name = "not shown"
+    seen = health.get("last_seen")
+    seen_text = "not recorded" if seen is None else _stamp(seen)
+    reason = health.get("reason")
+    if reason is None:
+        reason_text = "none"
+    elif reason in _HEALTH_REASONS:
+        reason_text = reason
+    else:
+        reason_text = "not shown"
+    return (
+        ("Health", name),
+        ("Last seen", seen_text),
+        ("Reason", reason_text),
+    )
+
+
+def _health_observation(mode, view, state):
+    from .health import observe
+
+    if mode == "up" and isinstance(view, dict) and isinstance(view.get("health"), dict):
+        return view["health"]
+    if mode == "down":
+        return observe(state)
+    if mode == "busy":
+        report = observe(state)
+        if report.get("reason") == "absent":
+            return None
+        return report
+    return None
 
 
 def _text(value):
@@ -467,7 +513,7 @@ def _groups(rows, ungrouped):
     )
 
 
-def _document(mode, view):
+def _document(mode, view, state):
     if mode == "up" and isinstance(view, dict):
         runs = _runs(view.get("runs"))
         queue = _queue(view.get("queue"))
@@ -480,7 +526,7 @@ def _document(mode, view):
         '<meta http-equiv="refresh" content="5">\n'
         "<title>Status</title>\n</head>\n<body>\n"
         "<h1>Worker</h1>\n"
-        f"{_worker_block(mode, view)}\n"
+        f"{_worker_block(mode, view, state)}\n"
         "<h1>Recent runs</h1>\n"
         f"{runs}\n"
         "<h1>Queue</h1>\n"

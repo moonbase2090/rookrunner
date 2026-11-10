@@ -2769,6 +2769,47 @@
         "ungrouped": {
           "type": "integer",
           "minimum": 0
+        },
+        "health": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "worker_unavailable"
+              ]
+            },
+            "last_seen": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "stopped",
+                    "heartbeat_stale",
+                    "absent"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "last_seen",
+            "reason"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2777,7 +2818,8 @@
         "runs",
         "queue",
         "groups",
-        "ungrouped"
+        "ungrouped",
+        "health"
       ],
       "additionalProperties": false
     },

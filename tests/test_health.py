@@ -1,13 +1,19 @@
 # SPDX-License-Identifier: MIT
 
+import contextlib
+import io
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
+from execution_core.cli import main
 from execution_core.health import observe, write_heartbeat
+from execution_core.worker import Worker
 
 SEEN = "2026-11-10T02:00:00.000000+00:00"
 LATER = "2026-11-10T02:00:05.000000+00:00"
@@ -112,6 +118,75 @@ class HealthTests(unittest.TestCase):
         path = self.state / "worker-health.json"
         path.write_text(json.dumps(body, sort_keys=True) + "\n")
         os.chmod(path, 0o600)
+
+
+class WorkerPresenceTests(unittest.TestCase):
+    def test_shutdown_records_stopped_and_the_next_process_clears_it(self):
+        with tempfile.TemporaryDirectory(prefix="execution-test-") as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            state = root / "state"
+            first = Worker(repo, state)
+            try:
+                first.start()
+                first.stop.set()
+                first.scheduler.join(timeout=5)
+                if first.scheduler.is_alive():
+                    self.fail("scheduler did not stop")
+                first.stop.clear()
+                live = observe(state)
+            finally:
+                first.close()
+            self.assertEqual(live["state"], "available")
+            self.assertIsNone(live["reason"])
+            stopped = observe(state)
+            self.assertEqual(stopped["state"], "worker_unavailable")
+            self.assertEqual(stopped["reason"], "stopped")
+            self.assertRegex(
+                stopped["last_seen"],
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00$",
+            )
+            second = Worker(repo, state)
+            try:
+                second.start()
+                second.stop.set()
+                second.scheduler.join(timeout=5)
+                if second.scheduler.is_alive():
+                    self.fail("scheduler did not stop")
+                second.stop.clear()
+                cleared = observe(state)
+                text = (state / "worker-health.json").read_text()
+            finally:
+                second.close()
+            self.assertEqual(cleared["state"], "available")
+            self.assertIsNone(cleared["reason"])
+            self.assertNotIn("stopped", text)
+
+
+class HealthCommandTests(unittest.TestCase):
+    def test_health_prints_a_stale_heartbeat(self):
+        with tempfile.TemporaryDirectory(prefix="execution-test-") as directory:
+            state = Path(directory)
+            os.chmod(state, 0o700)
+            (state / "worker-health.json").write_text(
+                json.dumps(
+                    {
+                        "last_seen": "2020-01-01T00:00:00.000000+00:00",
+                        "state": "available",
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            out = io.StringIO()
+            argv = ["execution_core", "--state", str(state), "health"]
+            with contextlib.redirect_stdout(out), mock.patch.object(sys, "argv", argv):
+                main()
+            report = json.loads(out.getvalue())
+            self.assertEqual(report["state"], "worker_unavailable")
+            self.assertEqual(report["reason"], "heartbeat_stale")
+            self.assertEqual(report["last_seen"], "2020-01-01T00:00:00.000000+00:00")
 
 
 if __name__ == "__main__":

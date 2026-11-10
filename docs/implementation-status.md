@@ -37,6 +37,7 @@ describe
 mcp
 dashboard
 status-page
+health
 snapshot
 submit
 follow
