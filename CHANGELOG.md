@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.16. A published release section
+The current package version is 0.1.17. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.17] - 2026-11-10
 
 - `diagnose --since` prints one JSON object for a state directory. The
   window is a duration or an aware timestamp. The object counts runs
@@ -34,8 +36,17 @@ This file does not reconstruct earlier milestones.
   refuses that plan before it stores a run. `workflow.job` requires
   0.1.0, `step.continue-on-error` requires 0.1.6,
   `permissions.id-token-write` requires 0.1.8, and
-  `upload.retention-days` requires 0.1.16. The package version stays
-  0.1.16.
+  `upload.retention-days` requires 0.1.16.
+- The worker writes `worker-health.json` about every five seconds.
+  A missing, stopped, or stale file is reported as `worker_unavailable`
+  with reason `absent`, `stopped`, or `heartbeat_stale`. Records older
+  than 15 seconds are stale. The file is replaced by rename, so a reader
+  never sees a partial record.
+- Jobs that wait for capacity stay on a backlog and run oldest first
+  when a place has room. A later pass does not log another skip for
+  them.
+- The package version is 0.1.17. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.16] - 2026-11-02
 
