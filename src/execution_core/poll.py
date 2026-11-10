@@ -1379,6 +1379,8 @@ class Pass:
         names = {place["name"] for place in self.places}
         seen = []
         for entry in self.state["submissions"]:
+            if self._is_capacity_wait(entry):
+                continue
             host = entry.get("host")
             if host in names or host in seen:
                 continue

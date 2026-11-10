@@ -487,6 +487,7 @@ class PlacementTests(unittest.TestCase):
         second = self._poll(places, jobs=[JOB, LINT], clock=later_clock)
         self.assertEqual(second["submitted"], [])
         self.assertNotIn("no_host", [item.get("reason") for item in second["skipped"]])
+        self.assertEqual(second["skipped"], [{"reason": "host_full", "host": "alpha"}])
         self.assertEqual(second["waiting"], first["waiting"])
         self.assertEqual(len(self._saved()["submissions"]), 2)
 
