@@ -88,6 +88,7 @@ class ChangelogTests(unittest.TestCase):
         unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.16]", 1)[0]
         prose = " ".join(unreleased.split())
         self.assertIn("`check` compares one selected job", prose)
+        self.assertIn("directory of local reusable workflows and local actions", prose)
         self.assertIn("names the capability and the minimum engine version", prose)
         self.assertIn("`step.continue-on-error` requires 0.1.6", prose)
         self.assertIn("`permissions.id-token-write` requires 0.1.8", prose)

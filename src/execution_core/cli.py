@@ -499,7 +499,7 @@ def report_check(args):
     except OSError:
         _check_failure("INVALID_PARAMS", "workflow file could not be read")
     try:
-        result = check_workflow(workflow, args.job_id, version)
+        result = check_workflow(workflow, args.job_id, version, action_root=args.repository)
     except PlanError as error:
         _check_failure(error.kind, str(error), error.field)
     except ValueError as error:
@@ -1207,6 +1207,13 @@ def main():
     )
     check.add_argument("--workflow", required=True, help="path of the workflow file to read")
     check.add_argument("--job-id", required=True, help="job to check, including the jobs it needs")
+    check.add_argument(
+        "--repository",
+        help=(
+            "directory of local reusable workflows and local actions. "
+            "Omit it to check one file that does not call them."
+        ),
+    )
     check.add_argument(
         "--engine-version",
         help=(

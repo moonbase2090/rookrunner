@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 from execution_core import __version__
@@ -175,6 +176,29 @@ class CapabilityFloorTests(unittest.TestCase):
         self.assertIn("minimum engine version 0.1.6", result["message"])
         self.assertIn("deployed engine 0.1.5", result["message"])
 
+    def test_a_repository_shows_a_called_job_the_file_alone_cannot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            called = root / ".github" / "workflows" / "called.yml"
+            called.parent.mkdir(parents=True)
+            called.write_text(
+                "on: workflow_call\njobs:\n  inner:\n    steps:\n"
+                "      - run: echo hi\n        continue-on-error: true\n"
+            )
+            caller = root / ".github" / "workflows" / "caller.yml"
+            caller.write_text(
+                "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+            )
+            with self.assertRaises(PlanError):
+                check_workflow(caller.read_bytes(), "call", "0.1.16")
+            result = check_workflow(caller.read_bytes(), "call", "0.1.5", action_root=root)
+        self.assertEqual(result["missing"][0]["capability"], "step.continue-on-error")
+        self.assertEqual(result["missing"][0]["minimum_engine"], "0.1.6")
+        self.assertEqual(
+            result["missing"][0]["field"],
+            "jobs.call.call.jobs.inner.steps.0.continue-on-error",
+        )
+
     def test_a_called_job_is_part_of_the_same_floor(self):
         plan = {
             "jobs": [
@@ -292,6 +316,37 @@ class CapabilityFloorCommandTests(unittest.TestCase):
         self.assertEqual(result["missing"][0]["capability"], "step.continue-on-error")
         self.assertEqual(result["missing"][0]["minimum_engine"], "0.1.6")
         self.assertIn("minimum engine version 0.1.6", result["message"])
+
+    def test_check_uses_the_repository_for_a_called_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            called = root / ".github" / "workflows" / "called.yml"
+            called.parent.mkdir(parents=True)
+            called.write_text(
+                "on: workflow_call\njobs:\n  inner:\n    steps:\n"
+                "      - run: echo hi\n        continue-on-error: true\n"
+            )
+            caller = root / ".github" / "workflows" / "caller.yml"
+            caller.write_text(
+                "on: push\njobs:\n  call:\n    uses: ./.github/workflows/called.yml\n"
+            )
+            completed = _run(
+                "--state",
+                tmp,
+                "check",
+                "--workflow",
+                str(caller),
+                "--job-id",
+                "call",
+                "--repository",
+                str(root),
+                "--engine-version",
+                "0.1.5",
+            )
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["missing"][0]["capability"], "step.continue-on-error")
+        self.assertEqual(result["missing"][0]["minimum_engine"], "0.1.6")
 
     def test_check_accepts_a_job_the_named_engine_can_run(self):
         path = ROOT / "tests" / "_floor_run.yml"

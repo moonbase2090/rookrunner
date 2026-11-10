@@ -9,7 +9,9 @@ This file does not reconstruct earlier milestones.
 
 - `check` compares one selected job with the capability floor of the
   deployed engine. `--engine-version` names that engine. Omitting it
-  uses the version `worker.describe` reports. A missing capability
+  uses the version `worker.describe` reports. `--repository` is the
+  directory of local reusable workflows and local actions. Omitting it
+  checks one file. A missing capability
   names the capability and the minimum engine version. Submission
   refuses that plan before it stores a run. `workflow.job` requires
   0.1.0, `step.continue-on-error` requires 0.1.6,

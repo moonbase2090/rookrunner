@@ -86,7 +86,8 @@ acceptance. A selected job includes its required dependency closure. Job
 selection must never silently omit required work.
 
 `check` plans that selected job and compares the capabilities the plan uses
-with the floor of one engine version. The floor of a version is the syntax
+with the floor of one engine version. `--repository` is the directory of
+local reusable workflows and local actions. Omitting it checks one file. The floor of a version is the syntax
 the release accepts. `--engine-version` names the deployed engine. Omitting
 it uses the `version` field from `worker.describe` on `--state`, which is
 the engine that worker is running. Submission runs the same comparison
