@@ -94,6 +94,20 @@ def check_mapping(run_state, exit_code, error=None):
     return "completed", "failure"
 
 
+def post_commit_status(decision):
+    """Return whether a check decision also posts a commit status.
+
+    A neutral setup check still posts ``error``. The status API has no
+    neutral state, and omitting it would leave a pending status in place.
+    """
+
+    if not isinstance(decision, dict) or decision.get("status_recorded") is True:
+        return False
+    if decision.get("check_conclusion") == "neutral":
+        return decision.get("state") == "error"
+    return True
+
+
 def check_summary(run_state, exit_code, error=None):
     """The check output summary: the run state and, when present, the exit code."""
 

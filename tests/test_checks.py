@@ -443,7 +443,7 @@ class CliCheckTests(unittest.TestCase):
         validate_response("run.status", json.loads(result.stdout))
         self._assert_secret_absent(result, jwt)
 
-    def test_setup_failure_posts_a_neutral_check_without_failed_status(self):
+    def test_setup_failure_posts_a_neutral_check_and_an_error_status(self):
         run = self._insert(
             state="failed",
             exit_code=None,
@@ -451,18 +451,27 @@ class CliCheckTests(unittest.TestCase):
         )
         result = self._cli(run["run_id"])
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            [item["path"] for item in self.server.requests],
+            [
+                f"/app/installations/{INSTALL}/access_tokens",
+                "/repos/moonbase2090/rookrunner/check-runs",
+                f"/repos/moonbase2090/rookrunner/statuses/{HEAD}",
+            ],
+        )
         check = json.loads(self.server.requests[1]["body"])
         self.assertEqual(check["status"], "completed")
         self.assertEqual(check["conclusion"], "neutral")
+        status = json.loads(self.server.requests[2]["body"])
+        self.assertEqual(status["state"], "error")
+        self.assertNotEqual(status["state"], "failure")
         with sqlite3.connect(self.state / "runs.sqlite3") as connection:
             recorded_check = connection.execute(
                 "SELECT check_run_id, status, conclusion FROM check_posts"
             ).fetchone()
-        self.assertEqual(recorded_check, (CHECK_ID, "completed", "neutral"))
-        self.assertEqual(len(self.server.requests), 2)
-        with sqlite3.connect(self.state / "runs.sqlite3") as connection:
             recorded_status = connection.execute("SELECT state FROM status_posts").fetchone()
-        self.assertIsNone(recorded_status)
+        self.assertEqual(recorded_check, (CHECK_ID, "completed", "neutral"))
+        self.assertEqual(recorded_status, ("error",))
         validate_response("run.status", json.loads(result.stdout))
 
     def test_failed_check_posts_the_stored_log_tail_as_output_text(self):

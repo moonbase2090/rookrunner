@@ -35,6 +35,31 @@ The first time a workflow is seen, the poll records the latest due minute and do
 
 A due minute runs on the first poll at or after that minute. The engine does not choose the interval. The owner poll is every 5 minutes, so a shorter cron still runs at most once per poll.
 
+## Stuck submissions
+
+A poll submission stays active until a final commit status is recorded.
+A setup failure's final status is `error`. The next poll posts it, and
+a neutral check posts that `error` status as well. `submissions list`
+prints the submissions that still have no final status. `--all` includes
+the rest. `--poll-state` selects the directory that holds `poll.json`
+and defaults to `--state`. `--dry-run` reads and does not post, submit,
+or write `poll.json`.
+
+```bash
+python3 -m execution_core --state "$STATE" submissions list --dry-run
+python3 -m execution_core --state "$STATE" submissions inspect KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
+```
+
+`repair` posts the missing final status. For a setup failure that is
+still reported as needing another try, that status is `error`. `abandon`
+posts `error` and does not post `success`. `retry` submits one successor
+of a failed push or pull request. The successor key is stable, and
+repeating the command does not create another run. A live `repair` or
+`abandon` also needs `--repository owner/name` and `--credential-file`.
+
 ## Project boundaries
 
 This is an independent repository under Moonbase2090. `execution-platform` is a temporary directory name.
@@ -142,6 +167,7 @@ In another terminal, from the same checkout:
 ```bash
 export PYTHONPATH="$PWD/src"
 python3 -m execution_core --state "$PWD/.execution-state" describe
+python3 -m execution_core --state "$PWD/.execution-state" diagnose --since 24h
 python3 -m execution_core --state "$PWD/.execution-state" submit --backend development --key example-1 --delay-ms 500
 python3 -m execution_core --state "$PWD/.execution-state" list
 python3 -m execution_core --state "$PWD/.execution-state" get RUN_ID
@@ -161,7 +187,14 @@ with a different name conflicts. `--backend development`
 may be included on that command and is not sent. `follow` prints one JSON
 envelope per state change and per nonempty log page, and exits zero only when
 the run is `succeeded` with exit code 0. `get` and `logs` stay one-shot.
-Successful submission only means acceptance. Stop the worker with Ctrl-C.
+Successful submission only means acceptance. `diagnose --since` reads the
+state directory and prints one JSON object. `--since` is a duration
+(`30s`, `5m`, `2h`, `7d`, `1w`) or an aware ISO-8601 timestamp. The object
+lists runs accepted in that window and the journal of runs that were
+skipped or not admitted, with the reason. The worker and the poll write
+that journal as the decision happens. Token-shaped and secret-shaped text
+is replaced with `***`. The object is at most 256 KiB. Stop the worker
+with Ctrl-C.
 State remains on disk for restart. It contains synthetic fixture input and output;
 do not place credentials in fixtures or commit state directories.
 

@@ -52,7 +52,9 @@ before the run is recorded cancelled. If the container is still present, the
 run is lost and a new workflow attempt is refused until this process stops.
 Restart records the container beside the attempt, removes only that
 container, and does not launch the interrupted attempt again. A submission
-that would exceed the configured disk budget is refused. Active runs and
+that would exceed the configured disk budget is refused. A refused
+submission, and a workflow event that does not match ``on``, are appended
+to ``skip-journal.jsonl``. Active runs and
 their evidence stay. A finished workflow attempt publishes a manifest of
 the regular files it wrote under its workspace. Selected upload files are
 named there, including unchanged files. A missing selected file fails a
@@ -90,6 +92,7 @@ from .artifacts import ArtifactError, file_identity, named_manifest, read_bytes
 from .upload import load_uploads
 from .attempt import AttemptError, materialize_attempt
 from .concurrency import MAX_PENDING, decide, eligible, group_keys, resolve_groups
+from .diagnose import DiagnoseError, append_skip
 from .disk import (
     DEFAULT_DISK_BUDGET,
     FINISHED_RUN_FOLDER_COUNT,
@@ -834,6 +837,8 @@ class Worker:
                         "runs.sqlite3-shm",
                         "runs.sqlite3-journal",
                         Path("actions") / "pins.json",
+                        "skip-journal.jsonl",
+                        "skip-journal.lock",
                     )
                 ]
             )
@@ -2153,6 +2158,124 @@ class Worker:
         shutil.rmtree(target)
         self.state_usage.sync_parent_directories(target)
 
+    def _journal_fault(self, params, fault):
+        if fault.kind not in {
+            "QUEUE_FULL",
+            "STORAGE_FULL",
+            "WORKER_NOT_READY",
+            "CAPABILITY_UNSUPPORTED",
+            "SOURCE_UNSTABLE",
+            "ACTION_UNAVAILABLE",
+            "INVALID_PARAMS",
+        }:
+            return
+        self._journal_skip("not_admitted", fault.kind, str(fault), params)
+
+    def _journal_not_triggered(self, params):
+        self._journal_skip(
+            "skipped",
+            "not_triggered",
+            "workflow on did not match this event",
+            params,
+        )
+
+    def _journal_skip(self, outcome, reason, detail, params):
+        record = {"at": now(), "outcome": outcome, "reason": reason, "detail": detail}
+        if isinstance(params, dict):
+            for source, dest in (
+                ("submission_key", "submission_key"),
+                ("workflow", "workflow"),
+                ("job_id", "job_id"),
+                ("event_name", "event"),
+            ):
+                value = params.get(source)
+                if isinstance(value, str):
+                    record[dest] = value
+        with contextlib.suppress(OSError, DiagnoseError):
+            append_skip(self.state, record)
+            usage = getattr(self, "state_usage", None)
+            if usage is not None:
+                usage.sync_files(
+                    (self.state / "skip-journal.jsonl", self.state / "skip-journal.lock")
+                )
+
+    def _submit_dispatch(self, p):
+        if isinstance(p, dict) and is_integer(p.get("version")) and int(p["version"]) == 1:
+            return self.submit_workflow(p)
+        fields(p, ("version", "submission_key", "backend", "fixture"))
+        self.version(p)
+        if p["backend"] != "development":
+            raise Fault(
+                "CAPABILITY_UNSUPPORTED", "only explicit development fixtures are supported"
+            )
+        key = p["submission_key"]
+        if not utf8_string(key, 1, 128):
+            invalid("submission_key must be a UTF-8 string of 1 to 128 characters")
+        fixture = p["fixture"]
+        fields(fixture, (), ("exit_code", "delay_ms", "output"))
+        fixture = {
+            "exit_code": integer(fixture.get("exit_code", 0), 0, 255, "exit_code"),
+            "delay_ms": integer(fixture.get("delay_ms", 0), 0, 5000, "delay_ms"),
+            "output": fixture.get("output", "development fixture completed\n"),
+        }
+        if (
+            not utf8_string(fixture["output"], 0, MAX_LOG_PAGE)
+            or len(fixture["output"].encode()) > MAX_LOG_PAGE
+        ):
+            invalid("output must be UTF-8 text of at most 65536 bytes")
+        normalized = canonical({"backend": "development", "fixture": fixture})
+        existing = self.db.execute(
+            "SELECT request, record FROM runs WHERE submission_key=?", (key,)
+        ).fetchone()
+        if existing:
+            if existing[0] != normalized:
+                raise Fault("IDEMPOTENCY_CONFLICT", _conflict_message(existing[0], normalized))
+            return json.loads(existing[1])
+        if self.stop.is_set() or self.execution_error is not None:
+            raise Fault(
+                "WORKER_NOT_READY",
+                "worker cannot accept new execution; inspect worker.describe",
+            )
+        queued = self.db.execute(
+            "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
+        ).fetchone()[0]
+        if queued >= MAX_QUEUE:
+            raise Fault("QUEUE_FULL", "queued run limit reached")
+        digest = hashlib.sha256(normalized.encode()).hexdigest()
+        record = {
+            "run_id": str(uuid.uuid4()),
+            "worker_id": self.worker_id,
+            "submission_key": key,
+            "state": "queued",
+            "exit_code": None,
+            "input": {"kind": "development_fixture", "digest": digest, "snapshot_id": digest},
+            "backend": {"name": "development", "version": __version__},
+            "compatibility_notes": [
+                "Synthetic fixture only; no repository source or workflow execution."
+            ],
+            "accepted_at": now(),
+            "started_at": None,
+            "finished_at": None,
+            "attempt_id": None,
+            "cancel_requested": False,
+            "error": None,
+            "cleanup": "not_started",
+        }
+        incoming = (
+            len(normalized.encode())
+            + len(canonical(record).encode())
+            + len(fixture["output"].encode())
+        )
+        if self._over_budget(incoming):
+            raise Fault("STORAGE_FULL", _STORAGE_FULL)
+        with self.db:
+            self.db.execute(
+                "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
+                (record["run_id"], key, normalized, canonical(record), b""),
+            )
+        self._sync_state_files()
+        return record
+
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
@@ -2195,81 +2318,18 @@ class Worker:
                 described["runner_image"] = self.runner_image_digest
             return described
         if method == "run.submit":
-            if isinstance(p, dict) and is_integer(p.get("version")) and int(p["version"]) == 1:
-                return self.submit_workflow(p)
-            fields(p, ("version", "submission_key", "backend", "fixture"))
-            self.version(p)
-            if p["backend"] != "development":
-                raise Fault(
-                    "CAPABILITY_UNSUPPORTED", "only explicit development fixtures are supported"
-                )
-            key = p["submission_key"]
-            if not utf8_string(key, 1, 128):
-                invalid("submission_key must be a UTF-8 string of 1 to 128 characters")
-            fixture = p["fixture"]
-            fields(fixture, (), ("exit_code", "delay_ms", "output"))
-            fixture = {
-                "exit_code": integer(fixture.get("exit_code", 0), 0, 255, "exit_code"),
-                "delay_ms": integer(fixture.get("delay_ms", 0), 0, 5000, "delay_ms"),
-                "output": fixture.get("output", "development fixture completed\n"),
-            }
+            try:
+                result = self._submit_dispatch(p)
+            except Fault as fault:
+                self._journal_fault(p, fault)
+                raise
             if (
-                not utf8_string(fixture["output"], 0, MAX_LOG_PAGE)
-                or len(fixture["output"].encode()) > MAX_LOG_PAGE
+                isinstance(result, dict)
+                and result.get("triggered") is False
+                and "run_id" not in result
             ):
-                invalid("output must be UTF-8 text of at most 65536 bytes")
-            normalized = canonical({"backend": "development", "fixture": fixture})
-            existing = self.db.execute(
-                "SELECT request, record FROM runs WHERE submission_key=?", (key,)
-            ).fetchone()
-            if existing:
-                if existing[0] != normalized:
-                    raise Fault("IDEMPOTENCY_CONFLICT", _conflict_message(existing[0], normalized))
-                return json.loads(existing[1])
-            if self.stop.is_set() or self.execution_error is not None:
-                raise Fault(
-                    "WORKER_NOT_READY",
-                    "worker cannot accept new execution; inspect worker.describe",
-                )
-            queued = self.db.execute(
-                "SELECT count(*) FROM runs WHERE json_extract(record, '$.state')='queued'"
-            ).fetchone()[0]
-            if queued >= MAX_QUEUE:
-                raise Fault("QUEUE_FULL", "queued run limit reached")
-            digest = hashlib.sha256(normalized.encode()).hexdigest()
-            record = {
-                "run_id": str(uuid.uuid4()),
-                "worker_id": self.worker_id,
-                "submission_key": key,
-                "state": "queued",
-                "exit_code": None,
-                "input": {"kind": "development_fixture", "digest": digest, "snapshot_id": digest},
-                "backend": {"name": "development", "version": __version__},
-                "compatibility_notes": [
-                    "Synthetic fixture only; no repository source or workflow execution."
-                ],
-                "accepted_at": now(),
-                "started_at": None,
-                "finished_at": None,
-                "attempt_id": None,
-                "cancel_requested": False,
-                "error": None,
-                "cleanup": "not_started",
-            }
-            incoming = (
-                len(normalized.encode())
-                + len(canonical(record).encode())
-                + len(fixture["output"].encode())
-            )
-            if self._over_budget(incoming):
-                raise Fault("STORAGE_FULL", _STORAGE_FULL)
-            with self.db:
-                self.db.execute(
-                    "INSERT INTO runs(id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
-                    (record["run_id"], key, normalized, canonical(record), b""),
-                )
-            self._sync_state_files()
-            return record
+                self._journal_not_triggered(p)
+            return result
         if method == "run.get":
             fields(p, ("run_id",))
             return self.get(p["run_id"])
@@ -2640,12 +2700,15 @@ class Worker:
                 return self._check_decision(
                     record, context, status_sha, state, check_status, check_conclusion, error
                 )
-            if is_setup_failure(error):
-                return {"action": "retry", "state": state}
             if state in TERMINAL_STATUS and self._status_recorded(
                 record["run_id"], context, status_sha, state
             ):
                 return {"action": "skip", "state": state}
+            # A setup failure has no workflow result. ``retry`` means the
+            # final ``error`` status is not recorded yet. Once it is, the
+            # check above returns ``skip`` and the poll can retire the run.
+            if is_setup_failure(error):
+                return {"action": "retry", "state": state}
             return {"action": "post", "state": state}
         # A poll can post pending, then the run finishes before the record
         # call. Store that pending post. A terminal state is stored only

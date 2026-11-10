@@ -466,8 +466,27 @@ Explicit retries consult this metadata and verify the worker run again; normal
 poll passes do not query retired runs. Older key-only lists are read as completed
 keys without retry metadata.
 
-Durable format migrations, doctor diagnostics, external backend supervision, and
-release compatibility guarantees remain later milestones. The v0 schemas and
+`diagnose --since` is a local read of the state directory. It is not a
+worker method, and the capability version stays 12. `--since` is a
+duration (`30s`, `5m`, `2h`, `7d`, `1w`) or an aware ISO-8601 timestamp.
+The command prints one JSON object. `runs.accepted` counts stored runs
+whose `accepted_at` is at or after that instant. `skips` lists journal
+lines from `skip-journal.jsonl` in that same window. A line is
+`not_admitted` when the worker refuses a submission before a run is
+stored, and `skipped` when a workflow event does not match `on` or the
+poll does not start a run. `reason` is a short code and `detail` says
+why. The journal is written on every such decision. The file stays at
+most 1 MiB; older lines are dropped. A symlink is refused. The printed
+object is at most 256 KiB. When the matching lines do not fit, the newest
+lines that fit are kept, `truncated` is true, and `omitted_reasons`
+counts the rest. Token prefixes, bearer tokens, private-key blocks, and
+`token` or `secret` assignments are replaced with `***` in the journal
+and again in the object. A local poll and its worker share the state
+directory. An ssh worker records admission on the remote state directory;
+the poll records its own skips in the local state directory.
+
+Durable format migrations, external backend supervision, and release
+compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
 
 ## Explicit retry of a failed poll submission
@@ -501,3 +520,31 @@ already-polled tip does not silently drop the requested job. Current event and
 workflow filters still apply. This is not a replay of retained event input or a
 browser rerun operation. Success still requires terminal `succeeded` and
 `exit_code=0` for the identified input snapshot.
+
+## Final status for a poll submission
+
+Every submitted poll run reaches a final commit status. A setup failure
+posts `error`. The poll pass posts that status and retires the
+submission. A neutral check uses conclusion `neutral` and still posts
+commit status `error`. Once `error` is recorded, `run.status` returns
+`skip`. When a successor for that submission key is already recorded,
+the pass posts nothing for the original and retires it as superseded.
+
+`submissions list` prints active submissions that have no recorded
+final commit status. `--all` includes the others. `submissions inspect
+KEY` prints one submission, active or completed. `submissions repair
+KEY` posts the missing final status, including `error` when the worker
+still returns `retry` for a setup failure, then retires the submission.
+It posts `success` only when that is the worker's final state. It does
+not post when a successor owns the context. `submissions abandon KEY`
+posts `error`, never `success`, and retires the submission with
+`abandoned` set. A queued or running run is cancelled first; a run that
+is still active after cancel is left in place and nothing is posted.
+`submissions retry KEY` submits one successor of a failed push or
+pull-request run under the same derived key as `poll --retry-failed`.
+Repeating it returns that successor and does not create another run.
+
+Each command accepts `--dry-run`. A dry run does not post, submit, or
+write `poll.json`. `--poll-state` selects the directory that holds
+`poll.json` and defaults to `--state`. A live `repair` or `abandon`
+reads `--credential-file` only when it posts.
