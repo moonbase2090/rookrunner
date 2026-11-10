@@ -168,7 +168,7 @@ class DiskUsageTests(unittest.TestCase):
             tracked = StateUsage(root)
             first = root / "a"
             first.mkdir()
-            (first / "data").write_bytes(b"z" * 4000)
+            (first / "data").write_bytes(b"z" * 40000)
             tracked.add(first)
             second = root / "b"
             second.mkdir()
@@ -179,13 +179,13 @@ class DiskUsageTests(unittest.TestCase):
             shutil.rmtree(first)
             tracked.sync_parent_directories(first)
             self.assertEqual(tracked.total, usage(root))
-            self.assertLess(both - tracked.total, 4000)
+            self.assertLess(both - tracked.total, 40000)
             one_name = tracked.total
             tracked.remove(second)
             shutil.rmtree(second)
             tracked.sync_parent_directories(second)
             self.assertEqual(tracked.total, usage(root))
-            self.assertGreaterEqual(one_name - tracked.total, 4000)
+            self.assertGreaterEqual(one_name - tracked.total, 40000)
 
     def test_a_path_deleted_outside_the_tracker_is_released(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -194,14 +194,14 @@ class DiskUsageTests(unittest.TestCase):
             tracked = StateUsage(root)
             payload = root / "one"
             payload.mkdir()
-            (payload / "data").write_bytes(b"q" * 4000)
+            (payload / "data").write_bytes(b"q" * 40000)
             tracked.add(payload)
             held = tracked.total
             shutil.rmtree(payload)
             freed = tracked.remove(payload)
             self.assertEqual(tracked.total, usage(root))
-            self.assertGreaterEqual(held - tracked.total, 4000)
-            self.assertGreaterEqual(freed, 4000)
+            self.assertGreaterEqual(held - tracked.total, 40000)
+            self.assertGreaterEqual(freed, 40000)
 
     def test_sync_path_of_a_missing_path_releases_what_was_tracked(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -210,13 +210,13 @@ class DiskUsageTests(unittest.TestCase):
             tracked = StateUsage(root)
             payload = root / "one"
             payload.mkdir()
-            (payload / "data").write_bytes(b"w" * 4000)
+            (payload / "data").write_bytes(b"w" * 40000)
             tracked.add(payload)
             held = tracked.total
             shutil.rmtree(payload)
             tracked.sync_path(payload)
             self.assertEqual(tracked.total, usage(root))
-            self.assertGreaterEqual(held - tracked.total, 4000)
+            self.assertGreaterEqual(held - tracked.total, 40000)
 
 
 class DiskBudgetTests(unittest.TestCase):
