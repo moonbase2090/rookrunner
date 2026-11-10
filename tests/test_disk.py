@@ -174,16 +174,18 @@ class DiskUsageTests(unittest.TestCase):
             second.mkdir()
             os.link(first / "data", second / "data")
             tracked.add(second)
+            both = tracked.total
             tracked.remove(first)
             shutil.rmtree(first)
             tracked.sync_parent_directories(first)
             self.assertEqual(tracked.total, usage(root))
-            self.assertGreaterEqual(tracked.total, 4000)
+            self.assertLess(both - tracked.total, 4000)
+            one_name = tracked.total
             tracked.remove(second)
             shutil.rmtree(second)
             tracked.sync_parent_directories(second)
             self.assertEqual(tracked.total, usage(root))
-            self.assertLess(tracked.total, 4000)
+            self.assertGreaterEqual(one_name - tracked.total, 4000)
 
     def test_a_path_deleted_outside_the_tracker_is_released(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -194,11 +196,11 @@ class DiskUsageTests(unittest.TestCase):
             payload.mkdir()
             (payload / "data").write_bytes(b"q" * 4000)
             tracked.add(payload)
-            self.assertGreaterEqual(tracked.total, 4000)
+            held = tracked.total
             shutil.rmtree(payload)
             freed = tracked.remove(payload)
             self.assertEqual(tracked.total, usage(root))
-            self.assertLess(tracked.total, 4000)
+            self.assertGreaterEqual(held - tracked.total, 4000)
             self.assertGreaterEqual(freed, 4000)
 
     def test_sync_path_of_a_missing_path_releases_what_was_tracked(self):
@@ -210,10 +212,11 @@ class DiskUsageTests(unittest.TestCase):
             payload.mkdir()
             (payload / "data").write_bytes(b"w" * 4000)
             tracked.add(payload)
+            held = tracked.total
             shutil.rmtree(payload)
             tracked.sync_path(payload)
             self.assertEqual(tracked.total, usage(root))
-            self.assertLess(tracked.total, 4000)
+            self.assertGreaterEqual(held - tracked.total, 4000)
 
 
 class DiskBudgetTests(unittest.TestCase):
