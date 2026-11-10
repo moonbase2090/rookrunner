@@ -11,6 +11,7 @@ reason ``absent``. A record written at shutdown is reason ``stopped``. An
 executing a job. A later ``available`` record clears ``worker_unavailable``.
 """
 
+import errno
 import json
 import os
 import re
@@ -38,14 +39,29 @@ def write_heartbeat(state, *, alive, now=None):
     if not alive:
         record["reason"] = "stopped"
     payload = (json.dumps(record, sort_keys=True) + "\n").encode()
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
+    if path.is_symlink():
+        raise OSError(errno.ELOOP, "health file is a symlink", str(path))
+    temp = root / (".%s.%d.tmp" % (HEARTBEAT_NAME, os.getpid()))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.write(fd, payload)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.chmod(path, 0o600)
+        os.unlink(temp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(temp, flags, 0o600)
+    try:
+        try:
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+        raise
     return record
 
 

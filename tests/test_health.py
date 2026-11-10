@@ -111,6 +111,15 @@ class HealthTests(unittest.TestCase):
             write_heartbeat(self.state, alive=True, now=AT)
         self.assertEqual(real.read_text(), "kept\n")
 
+    def test_a_failed_write_keeps_the_previous_record_whole(self):
+        write_heartbeat(self.state, alive=True, now=AT)
+        before = (self.state / "worker-health.json").read_bytes()
+        with mock.patch("execution_core.health.os.fsync", side_effect=OSError("disk")):
+            with self.assertRaises(OSError):
+                write_heartbeat(self.state, alive=False, now=FIVE)
+        self.assertEqual((self.state / "worker-health.json").read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["worker-health.json"])
+
     def _plant(self, *, state, last_seen, reason=None):
         body = {"last_seen": last_seen, "state": state}
         if reason is not None:
@@ -162,6 +171,34 @@ class WorkerPresenceTests(unittest.TestCase):
             self.assertEqual(cleared["state"], "available")
             self.assertIsNone(cleared["reason"])
             self.assertNotIn("stopped", text)
+
+    def test_a_duplicate_start_that_fails_leaves_the_live_worker_available(self):
+        with tempfile.TemporaryDirectory(prefix="execution-test-") as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            state = root / "state"
+            live = Worker(repo, state)
+            try:
+                live.start()
+                duplicate = Worker(repo, state)
+                with self.assertRaises(Exception):
+                    duplicate.start()
+                after = observe(state)
+            finally:
+                live.close()
+            self.assertEqual(after["state"], "available")
+            self.assertIsNone(after["reason"])
+
+    def test_closing_a_worker_that_never_started_writes_no_health_file(self):
+        with tempfile.TemporaryDirectory(prefix="execution-test-") as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            state = root / "state"
+            state.mkdir(mode=0o700)
+            Worker(repo, state).close()
+            self.assertFalse((state / "worker-health.json").exists())
 
 
 class HealthCommandTests(unittest.TestCase):

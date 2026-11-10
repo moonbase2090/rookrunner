@@ -682,6 +682,7 @@ class Worker:
         self.server = None
         self.scheduler = None
         self.heartbeat = None
+        self.beating = False
         self.execution_error = None
         self.runner_image_error = None
         self.live = {}
@@ -860,6 +861,7 @@ class Worker:
             self.scheduler = threading.Thread(target=self.schedule, daemon=True)
             self.scheduler.start()
             self._beat_health(True)
+            self.beating = True
             thread = threading.Thread(
                 target=self._heartbeat_loop, name="worker-health", daemon=True
             )
@@ -874,7 +876,9 @@ class Worker:
         if self.heartbeat is not None:
             self.heartbeat.join()
             self.heartbeat = None
-        self._beat_health(False)
+        if self.beating:
+            self._beat_health(False)
+            self.beating = False
         if self.scheduler:
             self.scheduler.join()
             self.scheduler = None
