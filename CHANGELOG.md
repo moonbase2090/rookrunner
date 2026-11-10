@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `diagnose --since` prints one JSON object for a state directory. The
+  window is a duration or an aware timestamp. The object counts runs
+  accepted in that window and lists why later runs were skipped or not
+  admitted. Those decisions are written to `skip-journal.jsonl` as they
+  happen. Token-shaped and secret-shaped text is replaced with `***`.
+  The object is at most 256 KiB, and the journal file is at most 1 MiB.
+
 ## [0.1.16] - 2026-11-02
 
 - A repeated poll submission that returns an earlier storage-full setup
