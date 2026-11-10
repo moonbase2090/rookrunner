@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""The README states the license, the milestones, and the untrusted refusal."""
+"""The README states the license, points at implementation status, and the untrusted refusal."""
 
 import unittest
 from pathlib import Path
@@ -15,9 +15,11 @@ class ReadmeTests(unittest.TestCase):
         self.assertNotIn("project license remain undecided", PROSE)
         self.assertNotIn("A project license must be selected", PROSE)
 
-    def test_milestones_match_the_roadmap(self):
-        self.assertIn("M3 is implemented", PROSE)
-        self.assertIn("are not yet published", PROSE)
+    def test_status_points_at_the_implementation_status(self):
+        self.assertIn("docs/implementation-status.md", README)
+        self.assertIn("This file does not restate it.", PROSE)
+        self.assertNotIn("M3 is implemented", PROSE)
+        self.assertNotIn("are not yet published", PROSE)
         self.assertNotIn("M2 started", PROSE)
         self.assertNotIn("Packaging, MCP, and dashboard work remain", PROSE)
 

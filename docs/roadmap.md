@@ -1,20 +1,22 @@
 # Build milestones
 
 Milestones are proposed scope, not delivery dates. Completion requires recorded evidence.
+What the current tree implements is the [implementation status](implementation-status.md).
+This page does not keep a second status.
 
 Delivery is tracked in Waypoint project `rookrunner` (prefix `RR`). See the
 [epics and story plan](planning/project-plan.md) for owners, acceptance criteria,
 dependencies, delivery horizons, and completion rules. Waypoint holds live status;
-the document records the planning baseline.
+this page records the planning baseline.
 
-| Milestone | Deliverable | Current state |
-| --- | --- | --- |
-| M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch | Draft documents created |
-| M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks | Complete for the development backend; evidence recorded 2026-09-23 |
-| M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle | In progress: source capture implemented; custom engine accepted, planner/runtime pending |
-| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub | NS-30 designed. NS-31 through NS-37 implemented. NS-38 recorded a `check.yml` run that ended `failed`. That gap is closed: a later run ended `succeeded` with exit code 0, and a disposable ruff violation ended `failed`. NS-39 designs owner CI. The credential is the GitHub App Rookrunner-App, App ID 5201333 ([check runs](design/check-runs.md)). The installation and the private key are still pending. NS-40 posts one commit status. NS-41 evaluates `on` for push and pull request. A tag push skips the path filters. Tags under `pull_request` are ignored. NS-42 polls one owner repository. NS-43 recorded those statuses |
-| M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval | Implemented. The plan merged as a80fce6. `src/execution_core/mcp.py` and `src/execution_core/dashboard.py` are on main. |
-| M4 — Downloadable preview | Packaged release and clean-environment acceptance | Not started |
+| Milestone | Deliverable |
+| --- | --- |
+| M0 — Project foundation | Independent repository, PRD, architecture, protocol sketch |
+| M1 — Executable contract | CLI, local worker, persistence, schemas, protocol checks |
+| M2 — Real workflow execution | Owned execution engine, source capture, supervised lifecycle |
+| CI-1 — Dogfood and owner CI | Run this repository's `check.yml` from the CLI, then report push and pull request results for owner repositories to GitHub |
+| M3 — Agent and human access | MCP adapter, dashboard, bounded evidence retrieval |
+| M4 — Downloadable preview | Packaged release and clean-environment acceptance |
 
 Order as of 2026-10-03: M2 finishes NS-29. Then CI-1 runs: dogfood first,
 then owner CI. M3 and M4 follow CI-1. The rationale and deferrals are in
@@ -39,12 +41,12 @@ the [v0 schemas](../schemas/v0/README.md) for machine-readable contracts.
 
 ## M2 — Real workflow execution
 
-The first slice implements [source capture](design/source-capture.md).
+The first slice is [source capture](design/source-capture.md).
 The earlier act pin is superseded by the accepted
 [owned-engine decision](decisions/0003-owned-execution-engine.md).
 See [capture validation](validation/m2-capture.md) and the
 [engine implementation/compatibility plan](design/execution-engine.md).
-Real workflows do not execute yet.
+What this tree runs is the [implementation status](implementation-status.md).
 
 1. Implement owned workflow parsing, capability validation, and a versioned execution plan.
 2. Capture source and verify snapshot behavior with Git-dependent and checkout workflows.
@@ -65,67 +67,24 @@ claim implies complete GitHub Actions compatibility.
 
 ## CI-1 — Dogfood and owner repository CI
 
-Proposed 2026-10-03 from the owner's priorities. The slices are NS-30
-through NS-43 in [next steps](planning/next-steps.md).
+Proposed 2026-10-03 from the owner's priorities. The slices are listed in
+[next steps](planning/next-steps.md). What this tree contains is the
+[implementation status](implementation-status.md).
 
-1. Design the dogfood path, with one document for every `check.yml` gap (NS-30, designed).
-2. Accept read-only `permissions` (NS-31, implemented) and a SHA-pinned `actions/checkout` (NS-32, implemented).
-3. Fill the `github` and `runner` contexts and the default variables (NS-33, implemented).
-4. Resolve remote actions pinned by full commit SHA (NS-34, implemented) and provide Node 24
-   (NS-35, implemented). Run a `node24` `main` entry (NS-36, implemented). Run `post`
-   (NS-37, implemented).
-5. Record this repository's `check.yml` run from the CLI (NS-38, recorded).
-   The identified commit ended `failed`. The gap named in
-   [that record](validation/dogfood-check.md) is closed. A later run of
-   `21a3f5ad5058027fda62b2b9af6bbba9e336bf83` ended `succeeded` with
-   exit code 0. NS-39 designs owner CI. NS-40 posts one commit status.
-   NS-41 evaluates `on` for push and pull request. A tag push skips the
-   path filters. Tags under `pull_request` are ignored. NS-42 polls one
-   owner repository. NS-43 recorded those statuses
-   ([validation](validation/owner-ci-rookrunner.md)). NS-44 evaluates
-   expressions in `run`, `env`, `with`, and step and job `name`,
-   including mixed text. NS-45 evaluates `concurrency` and
-   `cancel-in-progress` on this one worker. With `queue: max`, at most
-   100 runs can be pending in a group. NS-46 names selected workspace
-   files in the artifact manifest and records one local CodeQL SARIF
-   file ([upload artifact](design/upload-artifact.md)). The capability
-   version stays 12. P4 accepts `actions/checkout@v` plus digits as an
-   owned checkout and copies ancestor history when that plan sets
-   `fetch-depth` to the YAML integer `0`
-   ([checkout tag](design/checkout-tag.md)). Omitting `fetch-depth`
-   keeps one parentless synthesized commit and still excludes the
-   original commit. `.github/workflows/check.yml` is unchanged. P6
-   runs the operator-built image when `worker --runner-image` is set
-   and `image` is omitted and every selected job is literal
-   `runs-on: ubuntu-latest`
-   ([runner image](design/runner-image.md)). An explicit `image` still
-   wins. Any other image stays a caller pin. `run_job` still requires
-   a digest and still does not select a default. P5 posts one check
-   run through the Rookrunner GitHub App when `--app-key` is set, then
-   posts the commit status with that installation token. Omitting
-   `--app-key` keeps the NS-40 token file
-   ([check runs](design/check-runs.md)). The plan schema is unchanged.
-   P7 designs secrets, `GITHUB_TOKEN`, and `write` permissions for
-   owner-repository push and pull-request runs on this one local
-   worker ([secrets](design/secrets.md)). p7-mask changes the job
-   mask. p7-trust-gate compares pull-request repository ids and
-   stores the allowlist fields on the event. p7-socket-lock adds the
-   worker secret flags and refuses --docker-socket combined with
-   --app-key or --secrets unless the key-directory probe exits 0.
-   p7-secret-env reads file secrets into step `env` and `with` when
-   `--secrets` is set and the allowlist matches. p7-secret-run
-   rewrites an exact `secrets.NAME` in `run` to `${RR_SECRET_NAME}`
-   for bash and sh when the lexer proves the context. The script
-   contains the rewritten text and does not contain the value.
-   p7-job-token is implemented. MB2090 accepted the amended
-   answers on 2026-10-05.
-   The rest of the provisional list is not numbered
-   yet.
-6. Design owner CI (NS-39, designed). Report runs as commit statuses
-   (NS-40, implemented). Evaluate `on` for push and pull request
-   (NS-41, implemented). Poll owner repositories from an OS-scheduled
-   pass (NS-42, implemented).
-7. Record Rookrunner reporting its own CI (NS-43, recorded).
+1. Design the dogfood path, with one document for every `check.yml` gap.
+2. Accept read-only `permissions` and a SHA-pinned `actions/checkout`.
+3. Fill the `github` and `runner` contexts and the default variables.
+4. Resolve remote actions pinned by full commit SHA, provide Node 24, run a `node24` `main` entry, and run `post`.
+5. Record this repository's `check.yml` run from the CLI. The record is
+   [dogfood check](validation/dogfood-check.md). Related designs are
+   [upload artifact](design/upload-artifact.md),
+   [checkout tag](design/checkout-tag.md),
+   [runner image](design/runner-image.md),
+   [check runs](design/check-runs.md), and
+   [secrets](design/secrets.md).
+6. Design owner CI. Report runs as commit statuses. Evaluate `on` for push and pull request. Poll owner repositories from an OS-scheduled pass.
+7. Record Rookrunner reporting its own CI. The record is
+   [owner CI](validation/owner-ci-rookrunner.md).
 
 Exit evidence:
 
@@ -146,19 +105,17 @@ orders that work.
 
 ## Status page
 
-A local read-only page for the dogfood hosts. It is not paused.
-It is served on 127.0.0.1 and it is not the M3 dashboard.
+A local read-only page for the dogfood hosts. It is a separate surface
+from the M3 dashboard. The design below is the page's scope.
 
 - The worker: up or down, version, runner image, and the last poll.
 - Recent runs: repository, pull request or commit, status, duration, and a link to the check.
 - The queue and the concurrency groups.
 
 The accepted design is [status page](design/status-page.md).
-`status.view` and `poll.record` are implemented. The poll command
-records the last poll at the end of a pass. The page process
-serves 127.0.0.1:8765. These pull requests do not start it on a
-host. The dogfood start record says each box is serving it
-([Dogfood start](validation/dogfood.md)).
+Whether `status.view`, `poll.record`, and the `status-page` command are in
+this tree is the [implementation status](implementation-status.md).
+The dogfood start record is [Dogfood start](validation/dogfood.md).
 
 ## Planned, paused
 

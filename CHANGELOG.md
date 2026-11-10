@@ -13,6 +13,15 @@ This file does not reconstruct earlier milestones.
   admitted. Those decisions are written to `skip-journal.jsonl` as they
   happen. Token-shaped and secret-shaped text is replaced with `***`.
   The object is at most 256 KiB, and the journal file is at most 1 MiB.
+- A poll submission reaches a final commit status. A setup failure posts
+  `error`, including when its check conclusion is `neutral`, and a later
+  decision is `skip` once that `error` is recorded. A successor for the
+  same submission is retired without another post.
+- `submissions list` shows poll submissions that have no final commit
+  status. `inspect`, `abandon`, `retry`, and `repair` act on one
+  submission. Each command accepts `--dry-run`. `repair` posts the
+  missing final status, including `error` after a setup failure.
+  `abandon` posts `error` and does not post `success`.
 
 ## [0.1.16] - 2026-11-02
 

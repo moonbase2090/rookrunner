@@ -214,10 +214,9 @@ the job id. The state mapping is NS-40: `queued` and `running` post
 `pending`, `succeeded` with exit code 0 posts `success`, ordinary failed
 runs post `failure`, and `cancelled`, `lost`, or any other state posts
 `error`. Nothing else posts `success`. A failed run with
-`error.kind` `SETUP_FAILED` is deferred for another poll when only the
-commit-status API is available. With the App Check Runs path, it posts
-a neutral check and omits the commit status because that API has no
-neutral state.
+`error.kind` `SETUP_FAILED` posts `error`. With the App Check Runs
+path, the check conclusion is `neutral` and the commit status is
+still `error`, because that API has no neutral state.
 
 GitHub allows 1,000 statuses per SHA and context. NS-40 records each
 posted state and sends nothing when the same terminal state is posted
