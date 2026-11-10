@@ -7,6 +7,16 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll submission reaches a final commit status. A setup failure posts
+  `error`, including when its check conclusion is `neutral`, and a later
+  decision is `skip` once that `error` is recorded. A successor for the
+  same submission is retired without another post.
+- `submissions list` shows poll submissions that have no final commit
+  status. `inspect`, `abandon`, `retry`, and `repair` act on one
+  submission. Each command accepts `--dry-run`. `repair` posts the
+  missing final status, including `error` after a setup failure.
+  `abandon` posts `error` and does not post `success`.
+
 ## [0.1.16] - 2026-11-02
 
 - A repeated poll submission that returns an earlier storage-full setup

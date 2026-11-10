@@ -145,15 +145,18 @@ is not uploaded. There are no annotations, images, actions, or
 | `lost`, or any other state | `status` `completed`, `conclusion` `failure` |
 
 Nothing else is `success`. Setup errors use `neutral` because they do
-not represent failed workflow steps. For a neutral setup check, no
-commit status is posted because the commit-status API has no neutral
-state. The Checks API has no `error` conclusion. `waiting`,
-`pending`, and `requested` are not sent. GitHub reserves those for
-GitHub Actions.
+not represent failed workflow steps. The commit status posted for that
+run is `error`. The status API has no neutral state, and leaving the
+previous pending status in place would not resolve. The Checks API has
+no `error` conclusion. `waiting`, `pending`, and `requested` are not
+sent. GitHub reserves those for GitHub Actions.
 
 When only the commit-status API is configured, `run.status` returns
-`retry` for a setup failure and posts nothing. The poller leaves it
-unrecorded so a later pass can try again.
+`retry` for a setup failure until `error` is recorded, then `skip`.
+The poll pass posts that `error` and retires the submission. If a
+successor for the same key is already recorded, the pass retires the
+original without posting. `submissions repair` posts the same missing
+final status without waiting for the next pass.
 
 A completed check sends `completed_at` as the post time. One create
 and one later update stay under GitHub's limit of 1,000 check runs

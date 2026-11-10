@@ -134,7 +134,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, UTC
 
-from .checks import post_check_flow
+from .checks import post_check_flow, post_commit_status
 from .reconcile import post_with_retry
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
@@ -215,6 +215,36 @@ def retry_submission_key(key):
     """The key of the one retry of a submission. It matches the explicit retry key."""
 
     return "poll-" + hashlib.sha256(("retry\0" + key).encode()).hexdigest()
+
+
+def has_successor(state, entry):
+    """Return whether a derived retry of ``entry`` is already recorded.
+
+    The successor owns the status context. Posting again for the original
+    would replace that result.
+    """
+
+    if not isinstance(state, dict) or not isinstance(entry, dict):
+        return False
+    key = entry.get("key")
+    if not isinstance(key, str):
+        return False
+    successor = retry_submission_key(key)
+    for other in state.get("submissions") or []:
+        if not isinstance(other, dict) or other is entry:
+            continue
+        if other.get("key") == successor or other.get("retry_of") == key:
+            return True
+    completed = state.get("completed") or {}
+    if isinstance(completed, list):
+        return successor in completed
+    if not isinstance(completed, dict):
+        return False
+    if successor in completed:
+        return True
+    return any(
+        isinstance(meta, dict) and meta.get("retry_of") == key for meta in completed.values()
+    )
 
 
 def resubmit_after_setup_refusal(caller, params, submitted):
@@ -2859,7 +2889,17 @@ class Pass:
 
     def _retire_submission(self, entry):
         key = entry["key"]
-        retry_fields = ("run_id", "event", "status_sha", "host", "retry_base")
+        retry_fields = (
+            "run_id",
+            "event",
+            "status_sha",
+            "host",
+            "retry_base",
+            "context",
+            "tested_commit",
+            "superseded",
+            "abandoned",
+        )
         self.completed[key] = (
             {field: entry[field] for field in retry_fields if field in entry}
             if entry.get("event") in {"push", "pull_request"}
@@ -2911,10 +2951,29 @@ class Pass:
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
             )
             return can_retire
-        if decision["action"] == "retry":
+        # A later successor owns this context. Retire the original without
+        # posting so its error cannot replace that result.
+        setup_final = decision["action"] == "retry" or (
+            decision.get("check_conclusion") == "neutral" and decision.get("state") == "error"
+        )
+        if setup_final and has_successor(self.state, entry):
+            entry["superseded"] = True
             self.result["statuses"].append(
-                {"run_id": entry["run_id"], "state": decision["state"], "action": "retry"}
+                {
+                    "run_id": entry["run_id"],
+                    "state": decision.get("state"),
+                    "action": "superseded",
+                }
             )
+            return can_retire
+        if decision["action"] == "retry":
+            if decision.get("state") != "error":
+                raise PollError("WORKER_ERROR", "setup failure did not map to error")
+            if post_with_retry(lambda: self._post(entry, "error"), sleep=self.sleep):
+                self.result["statuses"].append(
+                    {"run_id": entry["run_id"], "state": "error", "action": "posted"}
+                )
+                return can_retire
             return False
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
@@ -3006,10 +3065,7 @@ class Pass:
                 check_text=decision.get("check_text"),
                 check_run_id=decision.get("check_run_id"),
                 status_state=state,
-                post_status_request=(
-                    decision.get("status_recorded") is not True
-                    and decision.get("check_conclusion") != "neutral"
-                ),
+                post_status_request=post_commit_status(decision),
                 app_key=self.app_key,
                 state_dir=self.state_dir,
                 repository_root=self._credential_repository(described),
