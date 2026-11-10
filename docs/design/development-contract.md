@@ -380,7 +380,16 @@ for a refused workflow submission is removed because it is not yet evidence
 of a run. Active runs and their snapshots are not deleted. SQLite full errors
 still roll back acceptance the same way. Runs and keys stay until the state
 directory is removed. The budget is worker
-configuration and is not a `worker.describe` limit. GitHub Free artifact
+configuration and is not a `worker.describe` limit. Charged bytes count
+each inode once. `worker.describe` includes `storage`: `budget_bytes`,
+`used_bytes`, `low_watermark_bytes` (60 percent), `high_watermark_bytes`
+(80 percent), and `pressure` of `ok`, `low`, `high`, or `full`. Only
+`full` means another byte would not fit. `status.view` copies that object
+onto `worker`. `storage-plan` prints the same fields plus `dry_run`,
+`freed_bytes`, `used_after_bytes`, and the finished folders a prune would
+remove, each with `kind`, `id`, `bytes`, and `reason` (`age`, `count`, or
+`pressure`). The command reads the state database and does not delete
+directories. GitHub Free artifact
 storage, 500 MB, is an account artifact quota and is not this budget.
 
 CLI results are JSON-RPC envelopes. Exit zero means the requested protocol

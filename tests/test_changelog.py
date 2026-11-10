@@ -83,9 +83,14 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_16_is_the_current_version_and_unreleased_is_empty(self):
+    def test_0_1_16_is_the_current_version_and_unreleased_records_storage(self):
         self.assertIn("The current package version is 0.1.16.", TEXT)
-        self.assertIn("## [Unreleased]\n\n## [0.1.16] - 2026-11-02", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.16]", 1)[0]
+        prose = " ".join(unreleased.split())
+        self.assertIn("counts each inode once", prose)
+        self.assertIn("60% and 80% watermarks", prose)
+        self.assertIn("`storage-plan --dry-run`", prose)
+        self.assertIn("does not delete them", prose)
         section = TEXT.split("## [0.1.16] - 2026-11-02", 1)[1].split("## [0.1.15]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.16.", prose)

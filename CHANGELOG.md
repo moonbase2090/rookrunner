@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Worker storage counts each inode once. A second hard link no longer makes a mostly empty budget look full.
+- `worker.describe` and `status.view` report the disk budget, charged bytes, 60% and 80% watermarks, and pressure (`ok`, `low`, `high`, or `full`).
+- `storage-plan --dry-run` lists finished folders a prune would remove and the bytes those folders hold. The command does not delete them.
+
 ## [0.1.16] - 2026-11-02
 
 - A repeated poll submission that returns an earlier storage-full setup

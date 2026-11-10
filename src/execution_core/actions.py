@@ -481,7 +481,15 @@ class ActionStore:
         except OSError as exc:
             raise ActionStorageFull() from exc
         if used + incoming > self.budget:
-            raise ActionStorageFull()
+            tracker = self._usage_tracker
+            if tracker is not None:
+                try:
+                    tracker.refresh()
+                    used = tracker.total
+                except OSError as exc:
+                    raise ActionStorageFull() from exc
+            if used + incoming > self.budget:
+                raise ActionStorageFull()
         self.objects.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.objects, 0o700)
         temporary = self.objects / f".tmp-{uuid.uuid4().hex}"

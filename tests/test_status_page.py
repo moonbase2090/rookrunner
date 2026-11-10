@@ -239,6 +239,7 @@ class StatusPageTests(unittest.TestCase):
         self.assertIn("<dt>Last poll</dt><dd>not recorded</dd>", body)
         self.assertIn("<dt>Poll repository</dt><dd>not recorded</dd>", body)
         self.assertIn("<dt>Runner image</dt><dd>not set</dd>", body)
+        self.assertRegex(body, r"<dt>Storage</dt><dd>\d+/\d+ (ok|low|high|full)</dd>")
         self.assertIn("<dt>Ready</dt><dd>true</dd>", body)
         self.assertNotIn("<form", body)
         self.assertNotIn("<button", body)

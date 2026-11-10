@@ -21,6 +21,13 @@ https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-ca
 
 GitHub retains workflow artifacts and logs for 90 days by default.
 https://docs.github.com/en/actions/reference/limits
+
+Each inode is counted once. A second hard link to a file already under the
+state directory does not add that file's size again. Symlinks are counted by
+their own length and are not followed. Admission stops only when the charged
+bytes would exceed the budget. The low watermark is 60 percent of the budget
+and the high watermark is 80 percent. Crossing a watermark reports pressure
+and does not by itself refuse work.
 """
 
 import os
@@ -33,58 +40,115 @@ DEFAULT_DISK_BUDGET = 10 * 1024 * 1024 * 1024
 FINISHED_RUN_FOLDER_SECONDS = 90 * 24 * 60 * 60
 # Newest finished run folders kept while they are younger than that age.
 FINISHED_RUN_FOLDER_COUNT = 100
+LOW_WATERMARK_PERCENT = 60
+HIGH_WATERMARK_PERCENT = 80
+
+
+def low_watermark(budget):
+    """Byte count at which storage pressure is first reported."""
+
+    return budget * LOW_WATERMARK_PERCENT // 100
+
+
+def high_watermark(budget):
+    """Byte count at which storage pressure is high. Admission still runs."""
+
+    return budget * HIGH_WATERMARK_PERCENT // 100
+
+
+def storage_pressure(used, budget):
+    """`ok`, `low`, `high`, or `full` for one used/budget pair.
+
+    `full` is the only level that means another byte would not fit.
+    `low` and `high` are visible while admission can still succeed.
+    """
+
+    if used >= budget:
+        return "full"
+    high = high_watermark(budget)
+    low = low_watermark(budget)
+    if high > 0 and used >= high:
+        return "high"
+    if low > 0 and used >= low:
+        return "low"
+    return "ok"
+
+
+def storage_report(used, budget):
+    """Diagnostics for describe, status, and the storage plan."""
+
+    return {
+        "budget_bytes": budget,
+        "used_bytes": used,
+        "low_watermark_bytes": low_watermark(budget),
+        "high_watermark_bytes": high_watermark(budget),
+        "pressure": storage_pressure(used, budget),
+    }
 
 
 def usage(root):
-    """Byte size of every directory entry under root.
+    """Byte size of one inode under root, counted once.
 
-    Symlinks are counted by their own length and are not followed. Each hard
-    link is counted once per directory entry. An unreadable entry raises
-    OSError so the caller can fail closed.
+    Symlinks are counted by their own length and are not followed. An
+    unreadable entry raises OSError so the caller can fail closed.
     """
 
-    return _measure(root)
+    return _scan(root).total
 
 
-def _measure(root, directories=None, subtree_sizes=None):
+class _Scan:
+    def __init__(self):
+        self.total = 0
+        self.sizes = {}
+        self.links = {}
+        self.directories = {}
+
+
+def _scan(root):
     root = Path(root)
-    total = 0
+    scan = _Scan()
     seen_directories = set()
-    pending = [Path(root)]
-    entry_sizes = {}
+    pending = [root]
     while pending:
         current = pending.pop()
         info = current.lstat()
-        total += info.st_size
-        entry_sizes[current] = info.st_size
-        if not stat.S_ISDIR(info.st_mode):
+        ident = (info.st_dev, info.st_ino)
+        is_dir = stat.S_ISDIR(info.st_mode)
+        if is_dir and ident in seen_directories:
+            scan.links[ident] = scan.links.get(ident, 0) + 1
             continue
-        if directories is not None:
-            directories[current] = info.st_size
-        identity = (info.st_dev, info.st_ino)
-        if identity in seen_directories:
+        if ident not in scan.sizes:
+            scan.sizes[ident] = info.st_size
+            scan.links[ident] = 1
+            scan.total += info.st_size
+        else:
+            scan.links[ident] = scan.links.get(ident, 0) + 1
+        if not is_dir:
             continue
-        seen_directories.add(identity)
+        seen_directories.add(ident)
+        scan.directories[current] = info.st_size
         with os.scandir(current) as entries:
             pending.extend(Path(entry.path) for entry in entries)
-    if subtree_sizes is not None:
-        totals = dict(entry_sizes)
-        for path in sorted(entry_sizes, key=lambda item: len(item.parts), reverse=True):
-            if path != root:
-                totals[path.parent] += totals[path]
-        subtree_sizes.update(totals)
-    return total
+    return scan
 
 
 class StateUsage:
-    """Maintain a state-tree byte total with targeted filesystem updates."""
+    """Maintain a state-tree byte total with targeted filesystem updates.
+
+    An inode already included in the total is not charged again when a later
+    add or refresh sees another name for it. File growth updates the charged
+    size in place.
+    """
 
     def __init__(self, root):
         self.root = Path(root)
         self._lock = threading.RLock()
-        self._directories = {}
-        self._total = _measure(self.root, self._directories)
-        self._paths = {}
+        scan = _scan(self.root)
+        self._sizes = scan.sizes
+        self._links = scan.links
+        self._directories = scan.directories
+        self._total = scan.total
+        self._file_inodes = {}
 
     @property
     def total(self):
@@ -92,76 +156,76 @@ class StateUsage:
             return self._total
 
     def add(self, path):
-        path = Path(path)
-        directories = {}
-        size = _measure(path, directories)
+        scan = _scan(path)
         with self._lock:
-            old = self._paths.get(path)
-            self._total += size if old is None else size - old
-            self._paths[path] = size
-            self._directories.update(directories)
+            self._integrate(scan)
+            self._directories.update(scan.directories)
             self._sync_ancestor_directories(path)
-        return size
+        return scan.total
 
     def sync_path(self, path):
         path = Path(path)
-        directories = {}
         try:
-            size = _measure(path, directories)
+            scan = _scan(path)
         except FileNotFoundError:
-            size = 0
+            return 0
         with self._lock:
-            self._total += size - self._paths.get(path, 0)
-            self._paths[path] = size
-            self._directories.update(directories)
+            self._integrate(scan)
+            self._directories.update(scan.directories)
             self._sync_ancestor_directories(path)
-        return size
+        return scan.total
 
     def remove(self, path):
         path = Path(path)
         try:
-            size = usage(path)
+            scan = _scan(path)
         except FileNotFoundError:
-            with self._lock:
-                size = self._paths.pop(path, 0)
-                self._total -= size
-                for tracked in tuple(self._paths):
-                    if path in tracked.parents:
-                        del self._paths[tracked]
-                for directory in tuple(self._directories):
-                    if directory == path or path in directory.parents:
-                        del self._directories[directory]
-            return size
+            return 0
         with self._lock:
-            old = self._paths.get(path)
-            if old is not None:
-                self._total += size - old
-            self._total -= size
-            self._paths.pop(path, None)
-            for tracked in tuple(self._paths):
-                if tracked == path or path in tracked.parents:
-                    del self._paths[tracked]
+            freed = 0
+            for ident, count in scan.links.items():
+                known = self._links.get(ident, 0)
+                left = known - count
+                if left <= 0:
+                    freed += self._sizes.pop(ident, 0)
+                    self._links.pop(ident, None)
+                else:
+                    self._links[ident] = left
+            self._total -= freed
+            for recorded in tuple(self._file_inodes):
+                if recorded == path or path in recorded.parents:
+                    del self._file_inodes[recorded]
             for directory in tuple(self._directories):
                 if directory == path or path in directory.parents:
                     del self._directories[directory]
-        return size
+        return freed
 
     def sync_files(self, paths):
         """Reconcile a small set of mutable files without walking the tree."""
 
-        sizes = {}
+        noted = []
+        missing = []
         for path in map(Path, paths):
             try:
                 info = path.lstat()
             except FileNotFoundError:
-                size = 0
-            else:
-                size = info.st_size
-            sizes[path] = size
+                missing.append(path)
+                continue
+            noted.append((path, (info.st_dev, info.st_ino), info.st_size))
         with self._lock:
-            for path, size in sizes.items():
-                self._total += size - self._paths.get(path, 0)
-                self._paths[path] = size
+            for path in missing:
+                ident = self._file_inodes.pop(path, None)
+                if ident is None:
+                    continue
+                known = self._links.get(ident, 0) - 1
+                if known <= 0:
+                    self._total -= self._sizes.pop(ident, 0)
+                    self._links.pop(ident, None)
+                else:
+                    self._links[ident] = known
+            for path, ident, size in noted:
+                self._file_inodes[path] = ident
+                self._note_inode(ident, size, 1)
                 self._sync_ancestor_directories(path)
 
     def sync_parent_directories(self, path):
@@ -171,28 +235,46 @@ class StateUsage:
             self._sync_ancestor_directories(Path(path))
 
     def remember_entries(self, paths):
-        """Record paths already covered by the initial full measurement."""
+        """Record files already covered by the initial full measurement."""
 
-        sizes = {}
+        found = []
         for path in map(Path, paths):
             try:
-                size = path.lstat().st_size
+                info = path.lstat()
             except FileNotFoundError:
-                size = 0
-            sizes[path] = size
+                continue
+            if stat.S_ISREG(info.st_mode):
+                found.append((path, (info.st_dev, info.st_ino)))
         with self._lock:
-            self._paths.update(sizes)
+            self._file_inodes.update(found)
 
     def refresh(self):
-        directories = {}
-        paths = {}
-        total = _measure(self.root, directories, paths)
+        scan = _scan(self.root)
         with self._lock:
-            self._total = total
-            self._directories = directories
-            for path in self._paths:
-                self._paths[path] = paths.get(path, 0)
-        return total
+            self._total = scan.total
+            self._sizes = scan.sizes
+            self._links = scan.links
+            self._directories = scan.directories
+            alive = set(scan.sizes)
+            for path, ident in tuple(self._file_inodes.items()):
+                if ident not in alive:
+                    del self._file_inodes[path]
+        return scan.total
+
+    def _integrate(self, scan):
+        for ident, size in scan.sizes.items():
+            self._note_inode(ident, size, scan.links.get(ident, 1))
+
+    def _note_inode(self, ident, size, links_if_new):
+        previous = self._sizes.get(ident)
+        if previous is None:
+            self._sizes[ident] = size
+            self._links[ident] = links_if_new
+            self._total += size
+            return
+        if size != previous:
+            self._total += size - previous
+            self._sizes[ident] = size
 
     def _sync_ancestor_directories(self, path):
         current = Path(path).parent
@@ -203,8 +285,7 @@ class StateUsage:
                 current = current.parent
                 continue
             if stat.S_ISDIR(info.st_mode):
-                size = info.st_size
-                previous = self._directories.get(current)
-                self._total += size if previous is None else size - previous
-                self._directories[current] = size
+                ident = (info.st_dev, info.st_ino)
+                self._directories[current] = info.st_size
+                self._note_inode(ident, info.st_size, 1)
             current = current.parent

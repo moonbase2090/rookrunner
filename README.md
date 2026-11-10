@@ -106,6 +106,11 @@ export PYTHONPATH="$PWD/src"
 python3 -m execution_core --state "$PWD/.execution-state" worker --repository "$PWD"
 ```
 
+`worker.describe` and the status page report storage pressure before the
+disk budget refuses a submission. `storage-plan --dry-run` lists finished
+folders a prune would remove and the bytes those folders hold. It does not
+delete them.
+
 Job containers use Docker network `none` by default. `worker --network bridge`
 opts in to egress. Service containers start only with that opt-in.
 GitHub-hosted runners have public internet access by default
