@@ -85,6 +85,19 @@ validates the entire submitted workflow under an explicit selection policy befor
 acceptance. A selected job includes its required dependency closure. Job
 selection must never silently omit required work.
 
+`check` plans that selected job and compares the capabilities the plan uses
+with the floor of one engine version. The floor of a version is the syntax
+the release accepts. `--engine-version` names the deployed engine. Omitting
+it uses the `version` field from `worker.describe` on `--state`, which is
+the engine that worker is running. Submission runs the same comparison
+against the package version of the worker process and refuses before the
+run is stored. A missing capability is named with the first release that
+accepts it. `workflow.job` is 0.1.0. `step.continue-on-error` is 0.1.6.
+`permissions.id-token-write` is 0.1.8. `upload.retention-days` is 0.1.16.
+Syntax no release accepts is still a plan error and is not given a minimum
+version. The plan capability version stays 12. This floor is not the
+`worker.describe` protocol list.
+
 An execution plan records workflow/source identities, engine and capability
 versions, normalized jobs/steps, event context, environment/shell defaults, image
 identities, and limits. Worker acceptance transactionally binds that plan to its

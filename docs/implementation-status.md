@@ -39,6 +39,7 @@ dashboard
 status-page
 snapshot
 submit
+check
 follow
 get
 cancel
@@ -103,6 +104,7 @@ status page | execution_core.status_page:serve
 source capture | execution_core.snapshot:SourceCapture
 snapshot verification | execution_core.verify:verify_snapshot
 workflow planner | execution_core.plan:plan_workflow
+capability floor | execution_core.capabilities:check_workflow
 workflow runner | execution_core.run:run_job
 runner image readiness | execution_core.run:runner_image_readiness
 owner poll | execution_core.poll:poll_once
