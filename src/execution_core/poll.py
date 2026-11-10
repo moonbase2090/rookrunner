@@ -26,6 +26,7 @@ Local rules, not GitHub-equivalence claims:
 - A pull request's activity is ``opened`` the first time it is seen
   and ``synchronize`` when its head or merge SHA changes.
 - A missing ``refs/pull/<number>/merge`` is recorded and runs nothing.
+- Each skip is appended to ``skip-journal.jsonl`` in this state directory.
 - A selected workflow that is not a tracked file in the tested commit
   is recorded as skipped and the pass continues. The tip is still
   stored. A workflow that is not a regular file, and any other capture
@@ -135,6 +136,7 @@ import urllib.request
 from datetime import datetime, timedelta, UTC
 
 from .checks import post_check_flow, post_commit_status
+from .diagnose import DiagnoseError, append_skip, record_skip
 from .reconcile import post_with_retry
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
@@ -1225,9 +1227,7 @@ class Pass:
                 self._post_placed()
             self.result["stopped"] = self.budget.stopped
             if self.retry_entry is not None and not self.retry_applied:
-                self.result["skipped"].append(
-                    {"reason": "retry_not_submitted", "key": self.retry_failed}
-                )
+                self._skip({"reason": "retry_not_submitted", "key": self.retry_failed})
             self._record_polls()
             _save_state(self.state_dir / "poll.json", self.state)
             return self.result
@@ -1387,12 +1387,26 @@ class Pass:
             total += len(runs)
         return total
 
+    def _skip(self, row):
+        """Record one skip in the pass summary and in the diagnostic journal."""
+
+        self.result["skipped"].append(row)
+        clock = self.clock
+        aware = (
+            isinstance(clock, datetime)
+            and clock.tzinfo is not None
+            and clock.utcoffset() is not None
+        )
+        at = clock.isoformat() if aware else datetime.now(UTC).isoformat()
+        with contextlib.suppress(OSError, DiagnoseError):
+            append_skip(self.state_dir, record_skip(at, row))
+
     def _mark(self, place, reason):
         if place["skip"] is None or reason == "unreachable":
             place["skip"] = reason
         row = {"reason": reason, "host": place["name"]}
         if row not in self.result["skipped"]:
-            self.result["skipped"].append(row)
+            self._skip(row)
 
     def _note_unknown_hosts(self):
         names = {place["name"] for place in self.places}
@@ -1402,7 +1416,7 @@ class Pass:
             if host in names or host in seen:
                 continue
             seen.append(host)
-            self.result["skipped"].append({"reason": "host_unknown", "host": host})
+            self._skip({"reason": "host_unknown", "host": host})
 
     def _choose_place(self):
         for place in self.places:
@@ -1499,7 +1513,7 @@ class Pass:
             row = {"reason": "poll_stamp"}
             if host is not None:
                 row["host"] = host
-            self.result["skipped"].append(row)
+            self._skip(row)
 
     def _object(self, path):
         """GET one JSON object. No credential is sent.
@@ -1798,7 +1812,7 @@ class Pass:
             if not self._pull(item):
                 return
         if self.signoff_seen and not self.signoff_present:
-            self.result["skipped"].append({"reason": "signoff_absent"})
+            self._skip({"reason": "signoff_absent"})
         if self.hold_pulls:
             return
         self.state["etags"]["pulls"] = etag
@@ -2246,7 +2260,7 @@ class Pass:
         row = {"number": number, "head_sha": head_sha, "repository": full_name}
         if row not in self.state["forks"]:
             self.state["forks"].append(row)
-            self.result["skipped"].append({"reason": "fork", "number": number})
+            self._skip({"reason": "fork", "number": number})
             self.result["warnings"].append(self._warning(number, head_sha, reason, False))
             self._checkpoint()
         self.hold_pulls = True
@@ -2256,7 +2270,7 @@ class Pass:
         rows = self.state.setdefault("refusals", [])
         if row not in rows:
             rows.append(row)
-            self.result["skipped"].append({"reason": "untrusted", "number": number})
+            self._skip({"reason": "untrusted", "number": number})
             self.result["warnings"].append(self._warning(number, head_sha, reason, False))
             self._checkpoint()
         self._post_refusal_status(number, head_sha, f"untrusted code: {reason}")
@@ -2369,7 +2383,7 @@ class Pass:
         }
         if row not in rows:
             rows.append(row)
-            self.result["skipped"].append({"reason": "merge_commit_mismatch", "number": number})
+            self._skip({"reason": "merge_commit_mismatch", "number": number})
             self.result["warnings"].append(entry)
             self._checkpoint()
         self._post_trust(number, head_sha, "error", "refused: " + entry["message"])
@@ -2387,7 +2401,7 @@ class Pass:
         if not store or row not in rows:
             if store:
                 rows.append(row)
-            self.result["skipped"].append({"reason": reason, "number": number})
+            self._skip({"reason": reason, "number": number})
             self.result["warnings"].append(entry)
             self._checkpoint()
         self._post_refusal_status(number, head_sha, entry["message"])
@@ -2514,7 +2528,7 @@ class Pass:
         rows = self.state.setdefault("refusals", [])
         if row not in rows:
             rows.append(row)
-            self.result["skipped"].append({"reason": "untrusted", "ref": ref, "sha": sha})
+            self._skip({"reason": "untrusted", "ref": ref, "sha": sha})
             self.result["warnings"].append(self._warning(None, sha, reason, False))
             self._checkpoint()
         self.hold_branches = True
@@ -2523,7 +2537,7 @@ class Pass:
         row = {"number": number, "head_sha": head_sha}
         if row not in self.state["merge_absent"]:
             self.state["merge_absent"].append(row)
-            self.result["skipped"].append({"reason": "merge_ref_absent", "number": number})
+            self._skip({"reason": "merge_ref_absent", "number": number})
             self._checkpoint()
 
     def _submit_jobs(
@@ -2631,7 +2645,7 @@ class Pass:
                 if absent is not None:
                     if claimed is not None and "run_id" not in claimed:
                         self._drop_unstarted(claimed)
-                    self.result["skipped"].append(
+                    self._skip(
                         {
                             "reason": absent,
                             "event": event_name,
@@ -2732,7 +2746,7 @@ class Pass:
                 place = self._choose_place()
                 if place is None:
                     self.unplaced = True
-                    self.result["skipped"].append(
+                    self._skip(
                         {
                             "reason": "no_host",
                             "event": event_name,
@@ -2789,7 +2803,7 @@ class Pass:
                 if absent is not None:
                     if "run_id" not in claimed:
                         self._drop_unstarted(claimed)
-                    self.result["skipped"].append(
+                    self._skip(
                         {
                             "reason": absent,
                             "event": event_name,
@@ -2933,9 +2947,7 @@ class Pass:
             decision = self.caller("run.status", params)
         except PollError as exc:
             if exc.kind == "STATUS_REFUSED" and str(exc) == _SNAPSHOT_UNREADABLE:
-                self.result["skipped"].append(
-                    {"reason": "snapshot_unreadable", "run_id": entry["run_id"]}
-                )
+                self._skip({"reason": "snapshot_unreadable", "run_id": entry["run_id"]})
                 if not self.app_key:
                     if not self._post(
                         entry, "error", description=_SNAPSHOT_UNREADABLE, record=False

@@ -83,10 +83,14 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_16_is_the_current_version_and_unreleased_records_final_status(self):
+    def test_0_1_16_is_the_current_version_and_unreleased_entries(self):
         self.assertIn("The current package version is 0.1.16.", TEXT)
+        self.assertIn("## [Unreleased]", TEXT)
         unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.16]", 1)[0]
         unreleased_prose = " ".join(unreleased.split())
+        self.assertIn("`diagnose --since`", unreleased_prose)
+        self.assertIn("skip-journal.jsonl", unreleased_prose)
+        self.assertIn("256 KiB", unreleased_prose)
         self.assertIn("A poll submission reaches a final commit status.", unreleased_prose)
         self.assertIn("A setup failure posts `error`", unreleased_prose)
         self.assertIn("`submissions list` shows poll submissions", unreleased_prose)
