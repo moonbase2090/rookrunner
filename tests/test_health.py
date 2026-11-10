@@ -114,9 +114,11 @@ class HealthTests(unittest.TestCase):
     def test_a_failed_write_keeps_the_previous_record_whole(self):
         write_heartbeat(self.state, alive=True, now=AT)
         before = (self.state / "worker-health.json").read_bytes()
-        with mock.patch("execution_core.health.os.fsync", side_effect=OSError("disk")):
-            with self.assertRaises(OSError):
-                write_heartbeat(self.state, alive=False, now=FIVE)
+        with (
+            mock.patch("execution_core.health.os.fsync", side_effect=OSError("disk")),
+            self.assertRaises(OSError),
+        ):
+            write_heartbeat(self.state, alive=False, now=FIVE)
         self.assertEqual((self.state / "worker-health.json").read_bytes(), before)
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["worker-health.json"])
 
@@ -182,7 +184,7 @@ class WorkerPresenceTests(unittest.TestCase):
             try:
                 live.start()
                 duplicate = Worker(repo, state)
-                with self.assertRaises(Exception):
+                with self.assertRaises(BlockingIOError):
                     duplicate.start()
                 after = observe(state)
             finally:
