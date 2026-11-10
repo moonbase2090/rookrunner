@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A merge-commit mismatch error on `rookrunner/trust` now turns into a
+  success once a later pass finds the merge ref matching the same head.
+  Before, the error stayed and the pull request stayed red.
 - `diagnose --since` prints one JSON object for a state directory. The
   window is a duration or an aware timestamp. The object counts runs
   accepted in that window and lists why later runs were skipped or not

@@ -1740,6 +1740,7 @@ class Pass:
         if parents == (base_sha, head_sha) or _moved_base_merge(
             self.clone, parents, head_sha, base_ref
         ):
+            self._clear_merge_mismatch(number, head_sha)
             return merge
         self._record_merge_mismatch(number, head_sha)
         return None
@@ -2436,9 +2437,26 @@ class Pass:
         record = stored.get(str(number)) if isinstance(stored, dict) else None
         if not isinstance(record, dict) or record.get("head") != head_sha:
             return
-        if record.get("state") != "failure":
+        if record.get("state") not in ("failure", "error"):
             return
         self._post_trust(number, head_sha, "success", "allowed to run")
+
+    def _clear_merge_mismatch(self, number, head_sha):
+        """Forget a merge-commit mismatch once the merge ref matches this head.
+
+        Only the mismatch's own error status turns into a success. A refusal
+        that stands for another reason stays as it was.
+        """
+
+        row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
+        rows = self.state.get("workflow_refusals")
+        if isinstance(rows, list) and row in rows:
+            rows.remove(row)
+            self._checkpoint()
+        stored = self.state.get("trust_statuses")
+        record = stored.get(str(number)) if isinstance(stored, dict) else None
+        if isinstance(record, dict) and record.get("state") == "error":
+            self._clear_refusal_status(number, head_sha)
 
     def _post_trust(self, number, head_sha, state, description):
         key = str(number)

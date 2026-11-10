@@ -1907,6 +1907,50 @@ class PollTests(unittest.TestCase):
             [("error", "refused: fetched merge commit does not match the listed head")],
         )
 
+    def test_a_merge_mismatch_error_clears_once_the_merge_ref_matches_the_head(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        stale = self._merge_commit(side, head, "stale merge")
+        _git(self.seed, "push", "--force", "origin", f"{stale}:refs/pull/9/merge")
+        first = self.poll()
+        self.assertEqual(first["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        good = self._merge_commit(tip, head, "merge listed base")
+        _git(self.seed, "push", "--force", "origin", f"{good}:refs/pull/9/merge")
+        second = self.poll()
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in second["skipped"]]
+        )
+        self.assertEqual(self.runs(), 1)
+        trust = [
+            json.loads(item["body"])
+            for item in self.posts()
+            if json.loads(item["body"]).get("context") == "rookrunner/trust"
+        ]
+        self.assertEqual(
+            trust,
+            [
+                {
+                    "context": "rookrunner/trust",
+                    "state": "error",
+                    "description": "refused: fetched merge commit does not match the listed head",
+                },
+                {
+                    "context": "rookrunner/trust",
+                    "state": "success",
+                    "description": "allowed to run",
+                },
+            ],
+        )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["trust_statuses"]["9"]["state"], "success")
+        self.assertEqual(saved.get("workflow_refusals", []), [])
+
     def test_a_fork_by_a_non_collaborator_is_still_refused_before_any_fetch(self):
         tip = self._tip()
         head = "ab" * 20
