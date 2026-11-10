@@ -800,6 +800,20 @@ def _report_app_status(args, decision, repository_root):
     sys.exit(1 if recorded is None or "error" in recorded else 0)
 
 
+def report_diagnose(args):
+    from .diagnose import DiagnoseError, bundle
+
+    try:
+        result = bundle(args.state, args.since)
+    except DiagnoseError as error:
+        print(
+            canonical({"error": {"kind": error.kind, "message": str(error)}}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(canonical(result))
+
+
 def report_oidc_publish(args):
     try:
         key_set = load_key_set(args.key_dir)
@@ -1020,6 +1034,19 @@ def main():
         help="newest finished run folders kept while younger than 90 days (default 100)",
     )
     commands.add_parser("describe")
+    diagnose = commands.add_parser(
+        "diagnose",
+        help="print a bounded bundle of skipped and not-admitted runs",
+    )
+    diagnose.add_argument(
+        "--since",
+        required=True,
+        help=(
+            "include decisions at or after this time. "
+            "A duration is 30s, 5m, 2h, 7d, or 1w. "
+            "A timestamp is aware ISO-8601."
+        ),
+    )
     commands.add_parser("mcp", help="stdio MCP adapter for describe, get, list, and logs")
     commands.add_parser(
         "dashboard",
@@ -1358,6 +1385,9 @@ def main():
             return
         if args.command == "oidc":
             report_oidc_publish(args)
+            return
+        if args.command == "diagnose":
+            report_diagnose(args)
             return
         if args.command == "storage-plan":
             report = storage_plan(

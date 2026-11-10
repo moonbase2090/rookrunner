@@ -172,6 +172,7 @@ In another terminal, from the same checkout:
 ```bash
 export PYTHONPATH="$PWD/src"
 python3 -m execution_core --state "$PWD/.execution-state" describe
+python3 -m execution_core --state "$PWD/.execution-state" diagnose --since 24h
 python3 -m execution_core --state "$PWD/.execution-state" submit --backend development --key example-1 --delay-ms 500
 python3 -m execution_core --state "$PWD/.execution-state" list
 python3 -m execution_core --state "$PWD/.execution-state" get RUN_ID
@@ -191,7 +192,14 @@ with a different name conflicts. `--backend development`
 may be included on that command and is not sent. `follow` prints one JSON
 envelope per state change and per nonempty log page, and exits zero only when
 the run is `succeeded` with exit code 0. `get` and `logs` stay one-shot.
-Successful submission only means acceptance. Stop the worker with Ctrl-C.
+Successful submission only means acceptance. `diagnose --since` reads the
+state directory and prints one JSON object. `--since` is a duration
+(`30s`, `5m`, `2h`, `7d`, `1w`) or an aware ISO-8601 timestamp. The object
+lists runs accepted in that window and the journal of runs that were
+skipped or not admitted, with the reason. The worker and the poll write
+that journal as the decision happens. Token-shaped and secret-shaped text
+is replaced with `***`. The object is at most 256 KiB. Stop the worker
+with Ctrl-C.
 State remains on disk for restart. It contains synthetic fixture input and output;
 do not place credentials in fixtures or commit state directories.
 

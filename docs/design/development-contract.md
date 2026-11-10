@@ -471,8 +471,27 @@ Explicit retries consult this metadata and verify the worker run again; normal
 poll passes do not query retired runs. Older key-only lists are read as completed
 keys without retry metadata.
 
-Durable format migrations, doctor diagnostics, external backend supervision, and
-release compatibility guarantees remain later milestones. The v0 schemas and
+`diagnose --since` is a local read of the state directory. It is not a
+worker method, and the capability version stays 12. `--since` is a
+duration (`30s`, `5m`, `2h`, `7d`, `1w`) or an aware ISO-8601 timestamp.
+The command prints one JSON object. `runs.accepted` counts stored runs
+whose `accepted_at` is at or after that instant. `skips` lists journal
+lines from `skip-journal.jsonl` in that same window. A line is
+`not_admitted` when the worker refuses a submission before a run is
+stored, and `skipped` when a workflow event does not match `on` or the
+poll does not start a run. `reason` is a short code and `detail` says
+why. The journal is written on every such decision. The file stays at
+most 1 MiB; older lines are dropped. A symlink is refused. The printed
+object is at most 256 KiB. When the matching lines do not fit, the newest
+lines that fit are kept, `truncated` is true, and `omitted_reasons`
+counts the rest. Token prefixes, bearer tokens, private-key blocks, and
+`token` or `secret` assignments are replaced with `***` in the journal
+and again in the object. A local poll and its worker share the state
+directory. An ssh worker records admission on the remote state directory;
+the poll records its own skips in the local state directory.
+
+Durable format migrations, external backend supervision, and release
+compatibility guarantees remain later milestones. The v0 schemas and
 checks establish the M1 development contract, not compatibility with workflows.
 
 ## Explicit retry of a failed poll submission

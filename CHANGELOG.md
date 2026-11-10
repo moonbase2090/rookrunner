@@ -7,6 +7,12 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `diagnose --since` prints one JSON object for a state directory. The
+  window is a duration or an aware timestamp. The object counts runs
+  accepted in that window and lists why later runs were skipped or not
+  admitted. Those decisions are written to `skip-journal.jsonl` as they
+  happen. Token-shaped and secret-shaped text is replaced with `***`.
+  The object is at most 256 KiB, and the journal file is at most 1 MiB.
 - Worker storage counts each inode once. A second hard link no longer makes a mostly empty budget look full.
 - `worker.describe` and `status.view` report the disk budget, charged bytes, 60% and 80% watermarks, and pressure (`ok`, `low`, `high`, or `full`).
 - `storage-plan --dry-run` lists finished folders a prune would remove and the bytes those folders hold. The command does not delete them.

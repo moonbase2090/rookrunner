@@ -85,6 +85,7 @@ class ChangelogTests(unittest.TestCase):
 
     def test_0_1_16_is_the_current_version_and_unreleased_entries(self):
         self.assertIn("The current package version is 0.1.16.", TEXT)
+        self.assertIn("## [Unreleased]", TEXT)
         unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.16]", 1)[0]
         prose = " ".join(unreleased.split())
         self.assertIn("counts each inode once", prose)
@@ -96,6 +97,9 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("`submissions list` shows poll submissions", prose)
         self.assertIn("`repair` posts the missing final status", prose)
         self.assertIn("`abandon` posts `error` and does not post `success`", prose)
+        self.assertIn("`diagnose --since`", prose)
+        self.assertIn("skip-journal.jsonl", prose)
+        self.assertIn("256 KiB", prose)
         section = TEXT.split("## [0.1.16] - 2026-11-02", 1)[1].split("## [0.1.15]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.16.", prose)
