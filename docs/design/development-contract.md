@@ -57,6 +57,23 @@ was accepted. The `status-page` command binds 127.0.0.1 port 8765
 and calls `status.view` for `GET /` and `HEAD /`. It does not call
 another method.
 
+The worker writes `worker-health.json` in the state directory from a
+thread that does not take the request guard. It rewrites that file
+about every 5 seconds while the process is up, and `status.view`
+rewrites it before returning. `close` records `worker_unavailable`
+with reason `stopped`. The `health` command prints the observation
+of that file and does not need the socket. A missing file is
+`worker_unavailable` with reason `absent` and a null `last_seen`.
+An `available` record older than 15 seconds is `worker_unavailable`
+with reason `heartbeat_stale` and the stored `last_seen`. That age
+does not prove a partitioned worker stopped a job. A later
+`available` record clears `worker_unavailable`. `status.view`
+includes this object as `health`. The status page keeps Worker as
+`up`, `busy`, or `down` and adds Health, Last seen, and Reason.
+On `down` it reads the file. On `busy` with no file it prints
+Health `not shown`. The `worker.health` method sketched for the CI
+dashboard is not added.
+
 `run.artifacts` on a development fixture returns `CAPABILITY_UNSUPPORTED`.
 On a workflow run it returns a page of artifact entries and `next_cursor`.
 An entry has `id`, workspace-relative `path`, `size`, and SHA-256 `digest`.

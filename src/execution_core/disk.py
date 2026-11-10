@@ -225,15 +225,12 @@ class StateUsage:
         with self._lock:
             for path in missing:
                 ident = self._file_inodes.pop(path, None)
-                if ident is None:
-                    continue
-                known = self._links.get(ident, 0) - 1
-                if known <= 0:
-                    self._total -= self._sizes.pop(ident, 0)
-                    self._links.pop(ident, None)
-                else:
-                    self._links[ident] = known
+                if ident is not None:
+                    self._release_name(ident)
             for path, ident, size in noted:
+                replaced = self._file_inodes.get(path)
+                if replaced is not None and replaced != ident:
+                    self._release_name(replaced)
                 self._file_inodes[path] = ident
                 self._note_inode(ident, size, 1)
                 self._sync_ancestor_directories(path)
@@ -270,6 +267,16 @@ class StateUsage:
                 if ident not in alive:
                     del self._file_inodes[path]
         return scan.total
+
+    def _release_name(self, ident):
+        """Drop one recorded name of an inode; free its bytes with the last."""
+
+        known = self._links.get(ident, 0) - 1
+        if known <= 0:
+            self._total -= self._sizes.pop(ident, 0)
+            self._links.pop(ident, None)
+        else:
+            self._links[ident] = known
 
     def _integrate(self, scan):
         for ident, size in scan.sizes.items():

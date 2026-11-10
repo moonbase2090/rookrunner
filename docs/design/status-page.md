@@ -277,6 +277,19 @@ The document has three parts, in this order.
 | Storage | `worker.describe` `storage`, copied into the view | `used/budget pressure`, or `not shown` |
 | Last poll | Metadata written by `poll.record` | The stored timestamp, or `not recorded` |
 | Poll repository | That same stamp | `owner/name`, or `not recorded` |
+| Health | `status.view` `health` when the worker is up; the health file when it is down or busy | `available`, `worker_unavailable`, or `not shown` |
+| Last seen | That observation's `last_seen` | The timestamp, `not recorded`, or `not available` |
+| Reason | That observation's `reason` | `none`, `stopped`, `heartbeat_stale`, `absent`, or `not shown` |
+
+Health does not replace the Worker line. `down` with no health file
+is Health `worker_unavailable`, Last seen `not recorded`, and Reason
+`absent`. `down` with a stopped or stale file prints that reason and
+the stored last-seen time. `busy` with no file is Health `not shown`.
+`busy` with a stale file is `worker_unavailable` and
+`heartbeat_stale`. `up` prints the `health` object from
+`status.view`. A live worker has just refreshed that object, so it
+is `available` with Reason `none`. The page still does not read the
+run database, and it does not print the state-directory path.
 
 `ready` is not "accepting work." On main it stays the scheduler
 flag. The page prints the boolean and does not reinterpret it.

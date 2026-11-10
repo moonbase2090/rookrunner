@@ -1105,6 +1105,10 @@ def main():
         "status-page",
         help="read-only page on 127.0.0.1:8765",
     )
+    commands.add_parser(
+        "health",
+        help="print worker health from the state directory",
+    )
     snapshot = commands.add_parser(
         "snapshot", help="capture Git inputs locally; does not submit a run"
     )
@@ -1429,6 +1433,11 @@ def main():
             from .status_page import serve as serve_page
 
             serve_page(args.state)
+            return
+        if args.command == "health":
+            from .health import observe
+
+            print(canonical(observe(args.state)), flush=True)
             return
         if args.command == "snapshot":
             result = SourceCapture(args.repository, args.state).capture(args.workflow, args.include)

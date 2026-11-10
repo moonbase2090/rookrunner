@@ -138,6 +138,13 @@ class StatusViewTests(unittest.TestCase):
         self.assertIsNone(view["worker"]["readiness_error"])
         self.assertIsNone(view["worker"]["runner_image"])
         self.assertEqual(view["ungrouped"], 0)
+        self.assertEqual(view["health"]["state"], "available")
+        self.assertIsNone(view["health"]["reason"])
+        self.assertRegex(
+            view["health"]["last_seen"],
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00$",
+        )
+        validator("StatusView").validate(view)
 
     def test_a_null_start_is_unstarted(self):
         queued = str(uuid.uuid4())

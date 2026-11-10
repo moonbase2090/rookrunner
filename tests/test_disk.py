@@ -218,6 +218,22 @@ class DiskUsageTests(unittest.TestCase):
             self.assertEqual(tracked.total, usage(root))
             self.assertGreaterEqual(held - tracked.total, 40000)
 
+    def test_a_file_replaced_by_rename_is_charged_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            target = root / "beat.json"
+            target.write_bytes(b"a" * 5000)
+            tracked = StateUsage(root)
+            tracked.remember_entries((target,))
+            for size in (6000, 7000, 8000):
+                staged = root / "beat.tmp"
+                staged.write_bytes(b"b" * size)
+                os.replace(staged, target)
+                tracked.sync_files((target,))
+                tracked.sync_files((staged,))
+                self.assertEqual(tracked.total, usage(root))
+
 
 class DiskBudgetTests(unittest.TestCase):
     def test_fixture_over_budget_does_not_consume_the_key_or_evidence(self):

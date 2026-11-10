@@ -102,6 +102,7 @@ from .disk import (
     usage,
 )
 from .expr import ExprError
+from .health import HEARTBEAT_NAME, HEARTBEAT_SECONDS, observe, write_heartbeat
 from .node24 import MOUNT as _NODE24_MOUNT
 from .node24 import inspect_node24
 from .capabilities import assess
@@ -685,6 +686,8 @@ class Worker:
         self.lock = None
         self.server = None
         self.scheduler = None
+        self.heartbeat = None
+        self.beating = False
         self.execution_error = None
         self.runner_image_error = None
         self.live = {}
@@ -838,6 +841,7 @@ class Worker:
                         "runs.sqlite3-wal",
                         "runs.sqlite3-shm",
                         "runs.sqlite3-journal",
+                        HEARTBEAT_NAME,
                         Path("actions") / "pins.json",
                         "skip-journal.jsonl",
                         "skip-journal.lock",
@@ -863,12 +867,25 @@ class Worker:
             self.server.settimeout(0.2)
             self.scheduler = threading.Thread(target=self.schedule, daemon=True)
             self.scheduler.start()
+            self._beat_health(True)
+            self.beating = True
+            thread = threading.Thread(
+                target=self._heartbeat_loop, name="worker-health", daemon=True
+            )
+            thread.start()
+            self.heartbeat = thread
         except BaseException:
             self.close()
             raise
 
     def close(self):
         self.stop.set()
+        if self.heartbeat is not None:
+            self.heartbeat.join()
+            self.heartbeat = None
+        if self.beating:
+            self._beat_health(False)
+            self.beating = False
         if self.scheduler:
             self.scheduler.join()
             self.scheduler = None
@@ -886,6 +903,24 @@ class Worker:
         if self.lock is not None:
             os.close(self.lock)
             self.lock = None
+
+    def _heartbeat_loop(self):
+        while not self.stop.wait(HEARTBEAT_SECONDS):
+            self._beat_health(True)
+
+    def _beat_health(self, alive):
+        try:
+            write_heartbeat(self.state, alive=alive)
+        except OSError:
+            return
+        usage = self.state_usage
+        if usage is not None:
+            usage.sync_files((self.state / HEARTBEAT_NAME,))
+
+    def _health_view(self):
+        if not self.stop.is_set():
+            self._beat_health(True)
+        return observe(self.state)
 
     def _records(self):
         return [json.loads(row[0]) for row in self.db.execute("SELECT record FROM runs").fetchall()]
@@ -2637,6 +2672,7 @@ class Worker:
             "queue": queue,
             "groups": groups,
             "ungrouped": ungrouped,
+            "health": self._health_view(),
         }
 
     def record_poll(self, p):

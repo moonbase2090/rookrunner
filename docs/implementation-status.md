@@ -38,6 +38,7 @@ describe
 mcp
 dashboard
 status-page
+health
 snapshot
 submit
 check
@@ -136,6 +137,7 @@ concurrency | execution_core.concurrency:decide
 disk budget | execution_core.disk:DEFAULT_DISK_BUDGET
 status reconcile | execution_core.reconcile:reconcile
 oidc discovery publish | execution_core.oidc_keys:publish
+worker health | execution_core.health:observe
 ```
 
 ## Reading the milestones

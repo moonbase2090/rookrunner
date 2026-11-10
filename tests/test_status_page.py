@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import socket
@@ -241,6 +242,9 @@ class StatusPageTests(unittest.TestCase):
         self.assertIn("<dt>Runner image</dt><dd>not set</dd>", body)
         self.assertRegex(body, r"<dt>Storage</dt><dd>\d+/\d+ (ok|low|high|full)</dd>")
         self.assertIn("<dt>Ready</dt><dd>true</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>available</dd>", body)
+        self.assertIn("<dt>Reason</dt><dd>none</dd>", body)
+        self.assertNotIn("worker_unavailable", body)
         self.assertNotIn("<form", body)
         self.assertNotIn("<button", body)
         self.assertNotIn("run.cancel", body)
@@ -291,6 +295,9 @@ class StatusPageTests(unittest.TestCase):
         head, body = self.exchange(GET)
         self.assertIn("200", head.split("\r\n", 1)[0])
         self.assertIn("<dt>Worker</dt><dd>down</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>worker_unavailable</dd>", body)
+        self.assertIn("<dt>Last seen</dt><dd>not recorded</dd>", body)
+        self.assertIn("<dt>Reason</dt><dd>absent</dd>", body)
         self.assertIn("not available", body)
         self.assertNotIn(run_id, body)
         self.assertNotIn(str(self.state), body)
@@ -303,10 +310,61 @@ class StatusPageTests(unittest.TestCase):
         self.assertEqual(fake.methods, ["status.view"])
         self.assertIn("<dt>Worker</dt><dd>busy</dd>", body)
         self.assertNotIn("<dt>Worker</dt><dd>down</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>not shown</dd>", body)
+        self.assertNotIn("worker_unavailable", body)
         self.assertIn("not available", body)
         self.assertNotIn("0.1.16", body)
         self.assertIn('content="5"', head + body)
         self.assertNotIn("Access-Control-Allow-Origin", head)
+
+    def test_a_stopped_heartbeat_is_named_when_the_socket_is_gone(self):
+        run_id = "22222222-2222-4222-8222-222222222222"
+        seen = "2026-11-10T02:00:00.000000+00:00"
+        self.state.mkdir(mode=0o700)
+        (self.state / "runs.sqlite3").write_bytes(run_id.encode())
+        (self.state / "worker-health.json").write_text(
+            json.dumps(
+                {"last_seen": seen, "reason": "stopped", "state": "worker_unavailable"},
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        _head, body = self.exchange(GET)
+        self.assertIn("<dt>Worker</dt><dd>down</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>worker_unavailable</dd>", body)
+        self.assertIn(f"<dt>Last seen</dt><dd>{seen}</dd>", body)
+        self.assertIn("<dt>Reason</dt><dd>stopped</dd>", body)
+        self.assertNotIn(run_id, body)
+        self.assertNotIn(str(self.state), body)
+
+    def test_a_stale_heartbeat_is_named_when_the_socket_is_gone(self):
+        seen = "2020-01-01T00:00:00.000000+00:00"
+        self.state.mkdir(mode=0o700)
+        (self.state / "worker-health.json").write_text(
+            json.dumps({"last_seen": seen, "state": "available"}, sort_keys=True) + "\n"
+        )
+        _head, body = self.exchange(GET)
+        self.assertIn("<dt>Worker</dt><dd>down</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>worker_unavailable</dd>", body)
+        self.assertIn(f"<dt>Last seen</dt><dd>{seen}</dd>", body)
+        self.assertIn("<dt>Reason</dt><dd>heartbeat_stale</dd>", body)
+        self.assertNotIn(str(self.state), body)
+
+    def test_a_stale_heartbeat_stays_busy_when_the_call_times_out(self):
+        seen = "2020-01-01T00:00:00.000000+00:00"
+        self.state.mkdir(mode=0o700)
+        (self.state / "worker-health.json").write_text(
+            json.dumps({"last_seen": seen, "state": "available"}, sort_keys=True) + "\n"
+        )
+        fake = _FakeSocket(error=TimeoutError("slow"))
+        with mock.patch("execution_core.cli.call", fake):
+            _head, body = self.exchange(GET)
+        self.assertIn("<dt>Worker</dt><dd>busy</dd>", body)
+        self.assertNotIn("<dt>Worker</dt><dd>down</dd>", body)
+        self.assertIn("<dt>Health</dt><dd>worker_unavailable</dd>", body)
+        self.assertIn(f"<dt>Last seen</dt><dd>{seen}</dd>", body)
+        self.assertIn("<dt>Reason</dt><dd>heartbeat_stale</dd>", body)
+        self.assertNotIn(str(self.state), body)
 
     def test_a_group_named_main_is_escaped(self):
         self.start_worker()
