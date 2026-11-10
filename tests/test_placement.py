@@ -6,6 +6,7 @@ Tests drive a real poll pass. A stand-in ssh is first on PATH for the
 ssh place. No test contacts GitHub or opens a listen port.
 """
 
+from datetime import datetime, UTC
 import json
 import os
 from argparse import Namespace
@@ -271,7 +272,7 @@ class PlacementTests(unittest.TestCase):
             place["ssh"] = ssh
         return place
 
-    def _poll(self, places, image=X86, jobs=None):
+    def _poll(self, places, image=X86, jobs=None, clock=None):
         return poll_once(
             repository="acme/demo",
             clone=self.clone,
@@ -282,7 +283,32 @@ class PlacementTests(unittest.TestCase):
             state=self.poll_state,
             caller=None,
             places=places,
+            clock=clock,
         )
+
+    def _fill(self, worker):
+        reply = worker.response(
+            _request(
+                "run.submit",
+                {
+                    "version": 0,
+                    "submission_key": "fill-capacity",
+                    "backend": "development",
+                    "fixture": {"output": "fill\n"},
+                },
+            )
+        )
+        self.assertNotIn("error", reply)
+        self.assertEqual(reply["result"]["state"], "queued")
+        return reply["result"]["run_id"]
+
+    def _succeed(self, worker, run_id):
+        record = worker.get(run_id)
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        record["finished_at"] = "2026-10-09T00:00:02+00:00"
+        with worker.guard, worker.db:
+            worker.save(record)
 
     def _runs(self, worker):
         return worker.db.execute("SELECT count(*) FROM runs").fetchone()[0]
@@ -416,6 +442,79 @@ class PlacementTests(unittest.TestCase):
         result = self._poll([self._place("mac", worker)], image="example.invalid/runner@" + X86)
         self.assertEqual(result["submitted"][0]["host"], "mac")
         self.assertEqual(self._runs(worker), 1)
+
+    def test_capacity_pressure_waits_once_and_admits_the_oldest_job_first(self):
+        alpha = self._worker("alpha")
+        filled = self._fill(alpha)
+        first_clock = datetime(2026, 10, 9, tzinfo=UTC)
+        later_clock = datetime(2026, 10, 9, 0, 5, tzinfo=UTC)
+        places = [self._place("alpha", alpha)]
+        first = self._poll(places, jobs=[JOB, LINT], clock=first_clock)
+        self.assertEqual(first["submitted"], [])
+        self.assertEqual(first["skipped"], [{"reason": "host_full", "host": "alpha"}])
+        self.assertEqual(
+            first["waiting"],
+            [
+                {
+                    "reason": "capacity",
+                    "since": "2026-10-09T00:00:00+00:00",
+                    "event": "push",
+                    "ref": "refs/heads/main",
+                    "workflow": JOB[0],
+                    "job_id": "check",
+                },
+                {
+                    "reason": "capacity",
+                    "since": "2026-10-09T00:00:00+00:00",
+                    "event": "push",
+                    "ref": "refs/heads/main",
+                    "workflow": LINT[0],
+                    "job_id": "lint",
+                },
+            ],
+        )
+        self.assertNotIn(str(self.poll_state), json.dumps(first["waiting"]))
+        saved = self._saved()
+        self.assertEqual(saved["tips"]["refs/heads/main"], self._tip())
+        waiting = [item for item in saved["submissions"] if "waiting" in item]
+        self.assertEqual(
+            [item["waiting"]["request"]["job_id"] for item in waiting], ["check", "lint"]
+        )
+        self.assertEqual(waiting[0]["waiting"]["since"], "2026-10-09T00:00:00+00:00")
+        self.assertEqual(waiting[0]["waiting"]["reason"], "capacity")
+        self.assertNotIn("host", waiting[0])
+
+        second = self._poll(places, jobs=[JOB, LINT], clock=later_clock)
+        self.assertEqual(second["submitted"], [])
+        self.assertNotIn("no_host", [item.get("reason") for item in second["skipped"]])
+        self.assertEqual(second["skipped"], [{"reason": "host_full", "host": "alpha"}])
+        self.assertEqual(second["waiting"], first["waiting"])
+        self.assertEqual(len(self._saved()["submissions"]), 2)
+
+        self._succeed(alpha, filled)
+        third = self._poll(places, jobs=[JOB, LINT], clock=later_clock)
+        self.assertEqual(len(third["submitted"]), 1)
+        self.assertEqual(third["submitted"][0]["host"], "alpha")
+        self.assertEqual([item["job_id"] for item in third["waiting"]], ["lint"])
+        self.assertEqual(third["waiting"][0]["since"], "2026-10-09T00:00:00+00:00")
+        self.assertNotIn("no_host", [item.get("reason") for item in third["skipped"]])
+        admitted = next(
+            item
+            for item in self._saved()["submissions"]
+            if item.get("run_id") == third["submitted"][0]["run_id"]
+        )
+        self.assertEqual(admitted.get("waiting"), None)
+        self.assertNotIn("waiting", admitted)
+        still = [item for item in self._saved()["submissions"] if "waiting" in item]
+        self.assertEqual(still[0]["waiting"]["request"]["job_id"], "lint")
+
+        self._succeed(alpha, third["submitted"][0]["run_id"])
+        fourth = self._poll(places, jobs=[JOB, LINT], clock=later_clock)
+        self.assertEqual(len(fourth["submitted"]), 1)
+        self.assertEqual(fourth["waiting"], [])
+        self.assertNotIn("no_host", [item.get("reason") for item in fourth["skipped"]])
+        self.assertEqual([item for item in self._saved()["submissions"] if "waiting" in item], [])
+        self.assertEqual(self._runs(alpha), 3)
 
     def test_no_ready_place_records_nothing(self):
         alpha = self._worker("alpha")

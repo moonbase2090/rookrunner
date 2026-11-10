@@ -397,7 +397,16 @@ for a refused workflow submission is removed because it is not yet evidence
 of a run. Active runs and their snapshots are not deleted. SQLite full errors
 still roll back acceptance the same way. Runs and keys stay until the state
 directory is removed. The budget is worker
-configuration and is not a `worker.describe` limit. GitHub Free artifact
+configuration and is not a `worker.describe` limit. Charged bytes count
+each inode once. `worker.describe` includes `storage`: `budget_bytes`,
+`used_bytes`, `low_watermark_bytes` (60 percent), `high_watermark_bytes`
+(80 percent), and `pressure` of `ok`, `low`, `high`, or `full`. Only
+`full` means another byte would not fit. `status.view` copies that object
+onto `worker`. `storage-plan` prints the same fields plus `dry_run`,
+`freed_bytes`, `used_after_bytes`, and the finished folders a prune would
+remove, each with `kind`, `id`, `bytes`, and `reason` (`age`, `count`, or
+`pressure`). The command reads the state database and does not delete
+directories. GitHub Free artifact
 storage, 500 MB, is an account artifact quota and is not this budget.
 
 CLI results are JSON-RPC envelopes. Exit zero means the requested protocol
@@ -450,9 +459,13 @@ local socket in `state`. A place with `ssh` uses the same BatchMode
 client as `--ssh-host`. A new job goes to the first place whose image
 matches, whose worker is ready, whose origin names the polled
 repository, and whose queued plus running runs are under `cap`. A place
-that does not match is named in the poll summary. A job with no such
-place is left unrecorded. A key already recorded for a place stays on
-that place. `--place` is not combined with `--ssh-host` or
+that does not match is named in the poll summary. A job with no ready
+place is left unrecorded. A job whose ready places are all at `cap` is
+recorded on the poll backlog with `waiting.since` and
+`waiting.reason` `capacity`. The pass summary lists that backlog in
+`waiting` and does not repeat a `no_host` skip for it. The oldest
+waiting job is submitted when a place has room. A key already recorded
+for a place stays on that place. `--place` is not combined with `--ssh-host` or
 `--remote-state`. Omitting `--place` keeps the single-worker path above.
 One invocation is still one repository. The operator runs one invocation
 per repository. Linux hosts still have no poll timer.

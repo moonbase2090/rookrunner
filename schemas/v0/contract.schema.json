@@ -1314,6 +1314,43 @@
         }
       ]
     },
+    "StorageReport": {
+      "type": "object",
+      "properties": {
+        "budget_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "used_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "low_watermark_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high_watermark_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pressure": {
+          "enum": [
+            "ok",
+            "low",
+            "high",
+            "full"
+          ]
+        }
+      },
+      "required": [
+        "budget_bytes",
+        "used_bytes",
+        "low_watermark_bytes",
+        "high_watermark_bytes",
+        "pressure"
+      ],
+      "additionalProperties": false
+    },
     "DescribeResult": {
       "type": "object",
       "properties": {
@@ -1427,6 +1464,9 @@
         "retention": {
           "const": "runs and submission keys retained indefinitely; terminal attempt directories removed"
         },
+        "storage": {
+          "$ref": "#/$defs/StorageReport"
+        },
         "node24": {
           "type": "object",
           "properties": {
@@ -1457,7 +1497,8 @@
         "methods",
         "capabilities",
         "limits",
-        "retention"
+        "retention",
+        "storage"
       ],
       "additionalProperties": false
     },
@@ -2702,13 +2743,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "storage": {
+              "$ref": "#/$defs/StorageReport"
             }
           },
           "required": [
             "version",
             "ready",
             "readiness_error",
-            "runner_image"
+            "runner_image",
+            "storage"
           ],
           "additionalProperties": false
         },

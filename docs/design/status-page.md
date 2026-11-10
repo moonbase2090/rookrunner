@@ -274,6 +274,7 @@ The document has three parts, in this order.
 | Ready | `worker.describe` `ready` | `true` or `false` |
 | Readiness | `readiness_error` | The string, `none`, or `not shown` |
 | Runner image | `worker.describe` `runner_image` | The digest, `not set`, or `not shown` |
+| Storage | `worker.describe` `storage`, copied into the view | `used/budget pressure`, or `not shown` |
 | Last poll | Metadata written by `poll.record` | The stored timestamp, or `not recorded` |
 | Poll repository | That same stamp | `owner/name`, or `not recorded` |
 | Health | `status.view` `health` when the worker is up; the health file when it is down or busy | `available`, `worker_unavailable`, or `not shown` |
@@ -304,7 +305,10 @@ runs`, is printed. Any other shape is `not shown`.
 `runner_image` is printed only when it matches
 `^sha256:[0-9a-f]{64}$`. A missing flag is null in the view and
 `not set` on the page. Any other value is `not shown`. The page
-does not read the unit file and does not print
+prints `storage` as `used_bytes/budget_bytes pressure` when both
+counts are non-negative integers and pressure is `ok`, `low`,
+`high`, or `full`. Any other shape is `not shown`. The page
+does not print a host path. It does not read the unit file and does not print
 `input.image_digest`. A submit that passed `image` can differ.
 That pin stays on the record for `run.get`.
 
@@ -609,6 +613,13 @@ run states are not rewritten.
         "ready": True,
         "readiness_error": None,
         "runner_image": "sha256:" + ("ab" * 32),
+        "storage": {
+            "budget_bytes": 10737418240,
+            "used_bytes": 0,
+            "low_watermark_bytes": 6442450944,
+            "high_watermark_bytes": 8589934592,
+            "pressure": "ok",
+        },
     },
     "poll": {
         "completed_at": None,

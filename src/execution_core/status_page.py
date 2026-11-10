@@ -283,6 +283,23 @@ def _owner(value):
     return "not recorded"
 
 
+def _storage(value):
+    if not isinstance(value, dict):
+        return "not shown"
+    used = value.get("used_bytes")
+    budget = value.get("budget_bytes")
+    pressure = value.get("pressure")
+    if (
+        type(used) is not int
+        or used < 0
+        or type(budget) is not int
+        or budget < 0
+        or pressure not in {"ok", "low", "high", "full"}
+    ):
+        return "not shown"
+    return f"{used}/{budget} {pressure}"
+
+
 def _worker_block(mode, view, state):
     if mode != "up" or not isinstance(view, dict):
         label = mode if mode in {"busy", "down"} else "down"
@@ -292,6 +309,7 @@ def _worker_block(mode, view, state):
             ("Ready", "not available"),
             ("Readiness", "not available"),
             ("Runner image", "not available"),
+            ("Storage", "not available"),
             ("Last poll", "not available"),
             ("Poll repository", "not available"),
         )
@@ -305,6 +323,7 @@ def _worker_block(mode, view, state):
             ("Ready", ready),
             ("Readiness", _readiness(worker.get("readiness_error"))),
             ("Runner image", _image(worker.get("runner_image"))),
+            ("Storage", _storage(worker.get("storage"))),
             ("Last poll", _stamp(poll.get("completed_at"))),
             ("Poll repository", _owner(poll.get("repository"))),
         )

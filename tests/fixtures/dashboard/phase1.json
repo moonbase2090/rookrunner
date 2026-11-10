@@ -764,7 +764,14 @@
             "version": "0.1.11",
             "ready": true,
             "readiness_error": null,
-            "runner_image": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+            "runner_image": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "storage": {
+              "budget_bytes": 10737418240,
+              "used_bytes": 4096,
+              "low_watermark_bytes": 6442450944,
+              "high_watermark_bytes": 8589934592,
+              "pressure": "ok"
+            }
           },
           "poll": {
             "completed_at": "2026-10-23T11:59:00Z",

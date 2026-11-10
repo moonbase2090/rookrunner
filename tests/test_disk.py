@@ -21,11 +21,14 @@ from execution_core.disk import (
     FINISHED_RUN_FOLDER_COUNT,
     FINISHED_RUN_FOLDER_SECONDS,
     StateUsage,
+    high_watermark,
+    low_watermark,
+    storage_pressure,
     usage,
 )
 from execution_core.protocol import canonical
 from execution_core.run import ContainerLease
-from execution_core.worker import Worker, _BudgetWatch, now
+from execution_core.worker import Worker, _BudgetWatch, now, storage_plan
 from schema_support import validate_response, validator
 
 
@@ -60,7 +63,7 @@ class DiskUsageTests(unittest.TestCase):
     def test_default_is_ten_gibibytes_of_documented_cache_storage(self):
         self.assertEqual(DEFAULT_DISK_BUDGET, 10 * 1024 * 1024 * 1024)
 
-    def test_usage_counts_entries_and_does_not_follow_symlinks(self):
+    def test_usage_counts_each_inode_once_and_does_not_follow_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "state"
             root.mkdir()
@@ -70,10 +73,8 @@ class DiskUsageTests(unittest.TestCase):
 
             linked = root / "linked"
             os.link(data, linked)
-            self.assertEqual(
-                usage(root),
-                root.lstat().st_size + data.lstat().st_size + linked.lstat().st_size,
-            )
+            self.assertEqual(usage(root), root.lstat().st_size + data.lstat().st_size)
+            self.assertLess(usage(root), root.lstat().st_size + (2 * data.lstat().st_size))
 
             outside = Path(directory) / "outside"
             outside.write_bytes(b"x" * 50000)
@@ -123,6 +124,115 @@ class DiskUsageTests(unittest.TestCase):
             self.assertEqual(worker.disk_budget, 10 * 1024 * 1024 * 1024)
             worker = Worker(directory, state, disk_budget=0)
             self.assertEqual(worker.disk_budget, 0)
+
+    def test_watermarks_are_sixty_and_eighty_percent(self):
+        budget = 100
+        self.assertEqual(low_watermark(budget), 60)
+        self.assertEqual(high_watermark(budget), 80)
+        self.assertEqual(storage_pressure(59, budget), "ok")
+        self.assertEqual(storage_pressure(60, budget), "low")
+        self.assertEqual(storage_pressure(79, budget), "low")
+        self.assertEqual(storage_pressure(80, budget), "high")
+        self.assertEqual(storage_pressure(99, budget), "high")
+        self.assertEqual(storage_pressure(100, budget), "full")
+
+    def test_add_after_refresh_does_not_count_the_same_bytes_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "snapshots" / "one"
+            payload.mkdir(parents=True)
+            (payload / "data").write_bytes(b"x" * 4000)
+            tracked.refresh()
+            tracked.add(payload)
+            self.assertEqual(tracked.total, usage(root))
+
+    def test_sync_path_of_an_existing_directory_does_not_inflate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            payload = root / "snapshots" / "one"
+            payload.mkdir(parents=True)
+            (payload / "data").write_bytes(b"y" * 4000)
+            tracked = StateUsage(root)
+            before = tracked.total
+            tracked.sync_path(payload)
+            self.assertEqual(tracked.total, before)
+            self.assertEqual(tracked.total, usage(root))
+
+    def test_removing_one_of_two_hard_links_keeps_the_bytes_charged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            first = root / "a"
+            first.mkdir()
+            (first / "data").write_bytes(b"z" * 40000)
+            tracked.add(first)
+            second = root / "b"
+            second.mkdir()
+            os.link(first / "data", second / "data")
+            tracked.add(second)
+            both = tracked.total
+            tracked.remove(first)
+            shutil.rmtree(first)
+            tracked.sync_parent_directories(first)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertLess(both - tracked.total, 40000)
+            one_name = tracked.total
+            tracked.remove(second)
+            shutil.rmtree(second)
+            tracked.sync_parent_directories(second)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertGreaterEqual(one_name - tracked.total, 40000)
+
+    def test_a_path_deleted_outside_the_tracker_is_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "one"
+            payload.mkdir()
+            (payload / "data").write_bytes(b"q" * 40000)
+            tracked.add(payload)
+            held = tracked.total
+            shutil.rmtree(payload)
+            freed = tracked.remove(payload)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertGreaterEqual(held - tracked.total, 40000)
+            self.assertGreaterEqual(freed, 40000)
+
+    def test_sync_path_of_a_missing_path_releases_what_was_tracked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            tracked = StateUsage(root)
+            payload = root / "one"
+            payload.mkdir()
+            (payload / "data").write_bytes(b"w" * 40000)
+            tracked.add(payload)
+            held = tracked.total
+            shutil.rmtree(payload)
+            tracked.sync_path(payload)
+            self.assertEqual(tracked.total, usage(root))
+            self.assertGreaterEqual(held - tracked.total, 40000)
+
+    def test_a_file_replaced_by_rename_is_charged_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            target = root / "beat.json"
+            target.write_bytes(b"a" * 5000)
+            tracked = StateUsage(root)
+            tracked.remember_entries((target,))
+            for size in (6000, 7000, 8000):
+                staged = root / "beat.tmp"
+                staged.write_bytes(b"b" * size)
+                os.replace(staged, target)
+                tracked.sync_files((target,))
+                tracked.sync_files((staged,))
+                self.assertEqual(tracked.total, usage(root))
 
 
 class DiskBudgetTests(unittest.TestCase):
@@ -240,6 +350,69 @@ class DiskBudgetTests(unittest.TestCase):
                     worker.disk_budget = usage(worker.state) + 10
                     self.assertFalse(worker._over_budget(10))
                     self.assertTrue(worker._over_budget(11))
+            finally:
+                worker.close()
+
+    def test_a_mostly_empty_budget_accepts_work_when_names_share_inodes(self):
+        payload = 670_000
+        budget = 4_000_000
+        self.assertGreater(6 * payload, budget)
+        self.assertLess(payload * 5, budget)
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state, disk_budget=budget)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                shared = state / "shared"
+                shared.write_bytes(b"x" * payload)
+                for index in range(5):
+                    os.link(shared, state / f"name-{index}")
+                worker.state_usage.refresh()
+                self.assertLess(usage(state), payload * 2)
+                self.assertGreater(6 * payload, budget)
+                described = worker.response(b'{"jsonrpc":"2.0","id":1,"method":"worker.describe"}')
+                validate_response("worker.describe", described)
+                storage = described["result"]["storage"]
+                self.assertEqual(storage["pressure"], "ok")
+                self.assertLess(storage["used_bytes"], payload * 2)
+                self.assertLess(storage["used_bytes"], storage["low_watermark_bytes"])
+                self.assertEqual(storage["low_watermark_bytes"], 2_400_000)
+                self.assertEqual(storage["high_watermark_bytes"], 3_200_000)
+                self.assertEqual(worker.state_usage.total, usage(state))
+                self.assertNotIn("disk_budget", described["result"]["limits"])
+                accepted = _submit(worker, "shared-inodes")
+                self.assertEqual(accepted["result"]["state"], "queued")
+                self.assertEqual(worker.state_usage.total, usage(state))
+            finally:
+                worker.close()
+
+    def test_high_pressure_still_accepts_a_small_fixture(self):
+        budget = 1_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            worker = Worker(directory, state, disk_budget=budget)
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                gap = 850_000 - worker.state_usage.total
+                self.assertGreater(gap, 0)
+                filler = state / "filler"
+                filler.write_bytes(b"x" * gap)
+                worker.state_usage.sync_path(filler)
+                described = worker.response(b'{"jsonrpc":"2.0","id":1,"method":"worker.describe"}')
+                validate_response("worker.describe", described)
+                storage = described["result"]["storage"]
+                self.assertEqual(storage["pressure"], "high")
+                self.assertGreaterEqual(storage["used_bytes"], 800_000)
+                self.assertLess(storage["used_bytes"], budget)
+                view = worker.response(
+                    b'{"jsonrpc":"2.0","id":1,"method":"status.view","params":{}}'
+                )
+                self.assertNotIn("error", view)
+                self.assertEqual(view["result"]["worker"]["storage"]["pressure"], "high")
+                accepted = _submit(worker, "high-ok", output="z\n")
+                self.assertEqual(accepted["result"]["state"], "queued")
             finally:
                 worker.close()
 
@@ -1306,3 +1479,98 @@ class FinishedFolderTests(unittest.TestCase):
                 self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 3)
             finally:
                 worker.close()
+
+    def test_storage_plan_dry_run_lists_an_old_folder_and_leaves_it(self):
+        limit = 90 * 24 * 60 * 60
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                old_name, old_path = _snapshot(state, b"o" * 1000)
+                young_name, young_path = _snapshot(state, b"y" * 1000)
+                _store(
+                    worker,
+                    "old-plan",
+                    "succeeded",
+                    old_name,
+                    _stamp(limit + 5),
+                    "confirmed_no_external_resources",
+                )
+                _store(
+                    worker,
+                    "young-plan",
+                    "succeeded",
+                    young_name,
+                    _stamp(10),
+                    "confirmed_no_external_resources",
+                )
+                worker.close()
+                report = storage_plan(state)
+                self.assertTrue(report["dry_run"])
+                self.assertEqual(report["budget_bytes"], 10 * 1024 * 1024 * 1024)
+                self.assertEqual(report["low_watermark_bytes"], 6442450944)
+                self.assertEqual(report["high_watermark_bytes"], 8589934592)
+                listed = [item["id"] for item in report["folders"]]
+                self.assertIn(old_name, listed)
+                self.assertNotIn(young_name, listed)
+                old = next(item for item in report["folders"] if item["id"] == old_name)
+                self.assertEqual(old["kind"], "snapshot")
+                self.assertEqual(old["reason"], "age")
+                self.assertEqual(old["bytes"], usage(old_path))
+                self.assertGreater(report["freed_bytes"], 1000)
+                self.assertEqual(
+                    report["used_after_bytes"], report["used_bytes"] - report["freed_bytes"]
+                )
+                self.assertTrue(old_path.is_dir())
+                self.assertTrue(young_path.is_dir())
+                self.assertNotIn(str(state), json.dumps(report))
+                cli = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "execution_core",
+                        "--state",
+                        str(state),
+                        "storage-plan",
+                        "--dry-run",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env={
+                        **os.environ,
+                        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(cli.returncode, 0, cli.stderr)
+                printed = json.loads(cli.stdout)
+                self.assertEqual(printed["folders"], report["folders"])
+                self.assertTrue(old_path.is_dir())
+            finally:
+                if worker.db is not None:
+                    worker.close()
+
+    def test_storage_plan_names_pressure_while_a_young_folder_would_not_fit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker, state = self._worker(directory)
+            try:
+                name, path = _snapshot(state, b"p" * 5000)
+                _store(
+                    worker,
+                    "pressure-plan",
+                    "succeeded",
+                    name,
+                    _stamp(10),
+                    "confirmed_no_external_resources",
+                )
+                worker.close()
+                report = storage_plan(state, disk_budget=1)
+                listed = next(item for item in report["folders"] if item["id"] == name)
+                self.assertEqual(listed["reason"], "pressure")
+                self.assertGreater(listed["bytes"], 5000)
+                self.assertEqual(report["pressure"], "full")
+                self.assertTrue(path.is_dir())
+                self.assertNotIn(str(state), json.dumps(report))
+            finally:
+                if worker.db is not None:
+                    worker.close()
