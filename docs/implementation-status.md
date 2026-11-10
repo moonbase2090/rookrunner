@@ -33,6 +33,7 @@ A second word is that command's subcommand.
 
 ```status-commands
 worker
+storage-plan
 describe
 mcp
 dashboard
