@@ -209,7 +209,6 @@ def _make_immutable(root):
         if path.is_symlink():
             raise ValueError("release tree contains a symlink")
         os.chmod(path, 0o555 if path.is_dir() else 0o444)
-    os.chmod(root, 0o555)
 
 
 def install(bundle_path, root):
@@ -229,6 +228,7 @@ def install(bundle_path, root):
         _verify_staged(staging, manifest)
         _make_immutable(staging)
         os.rename(staging, destination)
+        os.chmod(destination, 0o555)
     print(destination)
     return destination
 
