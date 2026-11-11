@@ -37,7 +37,13 @@ def run_poller_canary(poll, caller, *, expected_engine_commit, timeout=900, slee
         if not isinstance(record, dict):
             raise ValueError("canary worker returned an invalid run record")
     if record.get("state") != "succeeded" or type(record.get("exit_code")) is not int:
-        raise ValueError("canary workflow did not succeed")
+        error = record.get("error")
+        error_kind = error.get("kind") if isinstance(error, dict) else None
+        raise ValueError(
+            "canary workflow did not reach a terminal run record "
+            f"(state={record.get('state')}, exit_code={record.get('exit_code')}, "
+            f"error_kind={error_kind})"
+        )
     if record["exit_code"] != 0:
         raise ValueError("canary workflow did not exit successfully")
     input_record = record.get("input")
