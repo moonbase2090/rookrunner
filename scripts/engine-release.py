@@ -160,7 +160,12 @@ def _extract_source(source_archive, destination):
             name = PurePosixPath(member.name)
             if name.is_absolute() or ".." in name.parts:
                 raise ValueError("source archive contains an unsupported entry")
-            if member.name != "LICENSE" and name.parts[:2] != ("src", "execution_core"):
+            expected_directory = name.parts in {("src",), ("src", "execution_core")}
+            expected_file = member.name == "LICENSE" or name.parts[:2] == (
+                "src",
+                "execution_core",
+            )
+            if not expected_directory and not expected_file:
                 raise ValueError("source archive contains an unexpected path")
             if member.isdir():
                 continue
