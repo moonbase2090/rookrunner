@@ -1,17 +1,22 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.18. A published release section
+The current package version is 0.1.19. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.19] - 2026-11-11
 
 - A job that waited for capacity is checked out again before it is submitted
   when the worker uses the poll clone. Before, a later pass could leave the
   clone on another commit, so the worker snapshotted the wrong commit and
   its final status was refused as `base_commit does not equal the tested
   commit`.
+- The package version is 0.1.19. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
+
 ## [0.1.18] - 2026-11-10
 
 - A pull request head that already ran also clears a merge-mismatch error
