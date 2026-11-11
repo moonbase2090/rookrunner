@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""The release workflow verifies the tag and publishes three assets."""
+"""The release workflow verifies the tag and publishes four assets."""
 
 import os
 import shutil
@@ -62,6 +62,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(WORKFLOW.count("sh .github/release-version.sh"), 2)
         self.assertEqual(WORKFLOW.count('"$RELEASE_WHEEL"'), 2)
         self.assertEqual(WORKFLOW.count('"$RELEASE_SDIST"'), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE"'), 2)
+        self.assertEqual(WORKFLOW.count('"dist/$RELEASE_ENGINE_BUNDLE"'), 1)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE" \\\n'), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE" \\\n            > SHA256SUMS'), 2)
         self.assertIn('"$RELEASE_TITLE"', WORKFLOW)
         self.assertIn('"$RELEASE_NOTES"', WORKFLOW)
         self.assertNotIn("execution_core-0.1.0", WORKFLOW)
@@ -265,36 +269,54 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
     def test_release_names_come_from_the_tag_and_must_match_pyproject(self):
-        def run(tag):
-            env = os.environ.copy()
-            env["GITHUB_REF_NAME"] = tag
-            env.pop("GITHUB_ENV", None)
-            return subprocess.run(
-                ["sh", ".github/release-version.sh"],
-                cwd=ROOT,
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
+        with tempfile.TemporaryDirectory(prefix="release-version-") as temporary:
+            root = Path(temporary) / "repo"
+            github = _repo(root, "release-version@example.invalid")
+            shutil.copy(ROOT / ".github" / "release-version.sh", github / "release-version.sh")
+            shutil.copy(
+                ROOT / ".github" / "v0.1.19-release-notes.md",
+                github / "v0.1.19-release-notes.md",
             )
+            (root / "pyproject.toml").write_text('[project]\nversion = "0.1.19"\n')
+            _git(root, "add", ".")
+            _git(root, "commit", "--amend", "--no-edit")
+            _git(root, "tag", "v0.1.19")
 
-        match = run("v0.1.19")
-        self.assertEqual(match.returncode, 0, match.stderr)
-        self.assertIn(
-            "RELEASE_WHEEL=execution_core-0.1.19-py3-none-any.whl",
-            match.stdout,
-        )
-        self.assertIn("RELEASE_SDIST=execution_core-0.1.19.tar.gz", match.stdout)
-        self.assertIn("RELEASE_TITLE=v0.1.19 preview", match.stdout)
-        self.assertIn(
-            "RELEASE_NOTES=.github/v0.1.19-release-notes.md",
-            match.stdout,
-        )
-        mismatch = run("v0.1.0")
-        self.assertNotEqual(mismatch.returncode, 0)
-        self.assertIn("does not match", mismatch.stderr)
-        bare = run("0.1.19")
-        self.assertNotEqual(bare.returncode, 0)
+            def run(tag):
+                env = os.environ.copy()
+                env["GITHUB_REF_NAME"] = tag
+                env.pop("GITHUB_ENV", None)
+                return subprocess.run(
+                    ["sh", ".github/release-version.sh"],
+                    cwd=root,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            match = run("v0.1.19")
+            self.assertEqual(match.returncode, 0, match.stderr)
+            self.assertIn(
+                "RELEASE_WHEEL=execution_core-0.1.19-py3-none-any.whl",
+                match.stdout,
+            )
+            self.assertIn("RELEASE_SDIST=execution_core-0.1.19.tar.gz", match.stdout)
+            commit = _git(root, "rev-parse", "refs/tags/v0.1.19^{commit}").stdout.strip()
+            self.assertIn(
+                f"RELEASE_ENGINE_BUNDLE=rookrunner-engine-0.1.19-{commit}.tar.gz",
+                match.stdout,
+            )
+            self.assertIn("RELEASE_TITLE=v0.1.19 preview", match.stdout)
+            self.assertIn(
+                "RELEASE_NOTES=.github/v0.1.19-release-notes.md",
+                match.stdout,
+            )
+            mismatch = run("v0.1.0")
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("does not match", mismatch.stderr)
+            bare = run("0.1.19")
+            self.assertNotEqual(bare.returncode, 0)
 
 
 if __name__ == "__main__":

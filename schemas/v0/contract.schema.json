@@ -1351,6 +1351,63 @@
       ],
       "additionalProperties": false
     },
+    "EngineRelease": {
+      "type": "object",
+      "properties": {
+        "manifest_version": {
+          "const": 1
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$",
+          "minLength": 40,
+          "maxLength": 64
+        },
+        "package_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "source_archive_sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "state_format_version": {
+          "const": 1
+        },
+        "protocol_versions": {
+          "const": [
+            0,
+            1
+          ]
+        },
+        "planner_capability_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supported_workflow_features": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "manifest_version",
+        "source_commit",
+        "package_version",
+        "source_archive_sha256",
+        "source_tree_sha256",
+        "state_format_version",
+        "protocol_versions",
+        "planner_capability_version",
+        "supported_workflow_features"
+      ],
+      "additionalProperties": false
+    },
     "DescribeResult": {
       "type": "object",
       "properties": {
@@ -1389,6 +1446,19 @@
               "type": "null"
             }
           ]
+        },
+        "engine_release": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineRelease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_format_version": {
+          "const": 1
         },
         "methods": {
           "const": [
@@ -1494,6 +1564,8 @@
         "version",
         "ready",
         "readiness_error",
+        "engine_release",
+        "state_format_version",
         "methods",
         "capabilities",
         "limits",

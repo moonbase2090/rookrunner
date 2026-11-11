@@ -34,8 +34,14 @@ jobs:
           python-version: "3.12"
           enable-cache: false
 
+      - name: Sync the locked runtime dependencies
+        run: uv sync --locked
+
       - name: Build the wheel and the tarball
-        run: uv build --out-dir dist
+        run: |
+          set -eu
+          uv build --out-dir dist
+          .venv/bin/python scripts/engine-release.py build --output-dir dist
 
       - name: Write SHA256SUMS
         run: |
@@ -44,8 +50,9 @@ jobs:
           sha256sum \
             "$RELEASE_WHEEL" \
             "$RELEASE_SDIST" \
+            "$RELEASE_ENGINE_BUNDLE" \
             > SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 2
+          test "$(wc -l < SHA256SUMS)" -eq 3
 
   publish:
     needs: build
@@ -75,8 +82,14 @@ jobs:
           python-version: "3.12"
           enable-cache: false
 
+      - name: Sync the locked runtime dependencies
+        run: uv sync --locked
+
       - name: Build the wheel and the tarball
-        run: uv build --out-dir dist
+        run: |
+          set -eu
+          uv build --out-dir dist
+          .venv/bin/python scripts/engine-release.py build --output-dir dist
 
       - name: Write SHA256SUMS
         run: |
@@ -85,8 +98,9 @@ jobs:
           sha256sum \
             "$RELEASE_WHEEL" \
             "$RELEASE_SDIST" \
+            "$RELEASE_ENGINE_BUNDLE" \
             > SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 2
+          test "$(wc -l < SHA256SUMS)" -eq 3
 
       - name: Check release text
         env:
@@ -104,7 +118,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          test "$(wc -l < dist/SHA256SUMS)" -eq 2
+          test "$(wc -l < dist/SHA256SUMS)" -eq 3
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
@@ -113,4 +127,5 @@ jobs:
             --notes-file "$RELEASE_NOTES" \
             "dist/$RELEASE_WHEEL" \
             "dist/$RELEASE_SDIST" \
+            "dist/$RELEASE_ENGINE_BUNDLE" \
             dist/SHA256SUMS

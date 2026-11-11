@@ -139,6 +139,9 @@ disk budget | execution_core.disk:DEFAULT_DISK_BUDGET
 status reconcile | execution_core.reconcile:reconcile
 oidc discovery publish | execution_core.oidc_keys:publish
 worker health | execution_core.health:observe
+engine release manifest | execution_core.release_manifest:installed_manifest
+engine fleet inspection | execution_core.engine_fleet:inspect_fleet
+versioned worker state | execution_core.state_format:ensure_state_format
 ```
 
 ## Reading the milestones
