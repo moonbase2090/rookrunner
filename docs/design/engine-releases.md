@@ -1,9 +1,8 @@
 # Engine release and rollout design
 
-Status: RR-51's artifact, inspection, and canary requirements are accepted.
-The implementation choices below define the current implementation. The
-production cohort rollout invocation remains proposed pending the owner's
-choice of how the existing poller should be triggered.
+Status: RR-51's artifact, inspection, canary, and rollout requirements are
+accepted. The operator-local gate command and default poller adapter below are
+the accepted rollout interface.
 
 ## Artifact and identity
 
@@ -47,6 +46,16 @@ input digest, final status disposition, and a clean second poll. Remaining
 units switch only after that gate passes. A failed canary leaves other units on
 their previous release. The prior release directory is retained for rollback.
 
+The gate runs on the operator machine and writes one JSON object to stdout.
+Evidence includes the installed engine commit, canary run id and tested commit,
+terminal state and exit code, input digest and its verification result, final
+status disposition, and second-poll result. The rollout command rejects any
+evidence that does not report the requested engine commit, a successful run
+with exit code zero, a verified digest, a posted final status, and a clean
+second poll. The default adapter accepts explicit repository, workflow, clone,
+poll-state, and credential-file inputs, then calls the existing local poller
+against the canary worker over SSH. Credentials stay on the operator machine.
+
 CI builds the bundle from the exact checked-out commit, installs it into a
 temporary host layout, upgrades a copy of pre-versioned state, and exercises
 the same canary gate. The canary uses disposable state and execution resources.
@@ -61,8 +70,13 @@ state receives format version 1; unknown versions are refused. `worker.describe`
 reports the release identity, and `scripts/engine-release.py inspect` reads a
 credential-free SSH inventory and emits an allowlisted per-unit drift report.
 
-CI installs the exact commit bundle into a temporary host layout and runs a
-Docker-backed canary with a pre-d8 state copy and local GitHub API fixture. It
-checks terminal success and exit code, snapshot digest, final success status,
-and an idempotent clean poll. Production cohort activation after a canary is
-not yet automated.
+`scripts/engine-release.py rollout` installs the bundle on every selected
+cohort unit without activation, restarts one canary, runs an operator-local
+structured gate, and activates remaining units only after the gate passes.
+Its default `scripts/engine-release-canary.py` adapter runs the local poller
+against that worker using explicit repo, workflow, clone, state, and
+credential-file arguments. CI exercises the same canary acceptance helper
+against a Docker-backed worker, a pre-d8 state copy, and a local GitHub API
+fixture. It checks terminal success and exit code, verified snapshot digest,
+final success status, and an idempotent clean second poll; it does not contact
+live hosts.

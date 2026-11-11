@@ -64,6 +64,36 @@ verifies a packaged manifest before opening state and refuses startup if the
 manifest or installed source does not match. An unpackaged development
 checkout has no manifest and remains usable.
 
+## Roll out to a cohort
+
+Keep a credential-free JSON fleet inventory on the operator machine. The
+default canary adapter uses the local poller and credential file, and reaches
+the selected worker over SSH. `--state` is the operator-local poll state; the
+remote worker state comes from the canary unit's inventory entry.
+
+```sh
+.venv/bin/python scripts/engine-release.py rollout dist/rookrunner-engine-<version>-<commit>.tar.gz \
+  --inventory fleet.json \
+  --cohort stable \
+  --canary-unit worker-a \
+  --repo owner/repository \
+  --workflow .github/workflows/check.yml \
+  --job check \
+  --clone /path/to/operator-local/clone \
+  --state /path/to/operator-local/poll-state \
+  --credential-file /path/to/operator-local/status-token
+```
+
+The command installs the bundle on every unit in the selected cohort without
+activating it. It activates and restarts the canary first. The local poller
+adapter submits one real workflow, waits for `succeeded` with exit code zero,
+posts the final success status (which verifies the worker's snapshot digest),
+then requires a clean poll with no repeated status. Only then does it activate
+and restart the remaining units. A custom `--gate-command` may replace the
+adapter; it must write one JSON evidence object with the same verified fields.
+If the gate fails, rollout stops before activating other units. Previous
+release directories remain installed for operator rollback.
+
 The worker service remains bound to its configured repository and state
 directory. Keep the state directory at mode `0700`; the worker socket is mode
 `0600`. A host copy of the worker unit must set `NoNewPrivileges=yes`. The

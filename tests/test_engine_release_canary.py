@@ -10,13 +10,13 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
-import time
 import unittest
 from http.server import ThreadingHTTPServer
 
 from execution_core.poll import PollError, poll_once
 from execution_core.protocol import canonical
 from execution_core.verify import verify_snapshot
+from execution_core.engine_canary import run_poller_canary
 from execution_core.worker import Worker
 from test_poll import TOKEN, WORKFLOW, _Handler, _git
 
@@ -152,41 +152,31 @@ class EngineReleaseCanaryTests(unittest.TestCase):
 
         tip = _git(self.remote, "rev-parse", "refs/heads/main").stdout.strip()
         self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
-        initial = self.poll()
-        self.assertEqual(1, len(initial["submitted"]))
-        run_id = initial["submitted"][0]["run_id"]
-        deadline = time.monotonic() + 180
-        record = self.worker.get(run_id)
-        while record["state"] in {"queued", "running"} and time.monotonic() < deadline:
-            time.sleep(0.2)
-            record = self.worker.get(run_id)
-        self.assertEqual("succeeded", record["state"], record)
-        self.assertEqual(0, record["exit_code"])
-
-        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
-        verified = verify_snapshot(snapshot, record["input"]["digest"])
-        self.assertEqual(tip, verified["base_commit"])
-
-        final = self.poll()
-        self.assertEqual(
-            [{"run_id": run_id, "state": "success", "action": "posted"}],
-            final["statuses"],
+        evidence = run_poller_canary(
+            self.poll,
+            self.caller,
+            expected_engine_commit=manifest["source_commit"],
+            timeout=180,
         )
+        self.assertEqual("succeeded", evidence["run_state"])
+        self.assertEqual(0, evidence["exit_code"])
+        self.assertEqual(tip, evidence["commit_sha"])
+        self.assertTrue(evidence["input_digest_verified"])
+        self.assertEqual("posted", evidence["status_disposition"])
+        self.assertEqual("clean", evidence["second_poll"])
+
+        record = self.worker.get(evidence["run_id"])
+        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+        verified = verify_snapshot(snapshot, evidence["input_digest"])
+        self.assertEqual(tip, verified["base_commit"])
         status_posts = [
             request
             for request in self.server.requests
             if request["method"] == "POST" and request["path"].endswith("/statuses/" + tip)
         ]
         self.assertEqual("success", json.loads(status_posts[-1]["body"])["state"])
-        post_count = len(status_posts)
-        clean = self.poll()
-        self.assertEqual([], clean["statuses"])
-        status_posts = [
-            request
-            for request in self.server.requests
-            if request["method"] == "POST" and request["path"].endswith("/statuses/" + tip)
-        ]
-        self.assertEqual(post_count, len(status_posts))
+        posted_states = [json.loads(request["body"])["state"] for request in status_posts]
+        self.assertEqual(1, posted_states.count("success"))
 
 
 if __name__ == "__main__":

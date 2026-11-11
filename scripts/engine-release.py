@@ -282,6 +282,26 @@ def main(argv=None):
     activate_command.add_argument("--root", type=Path, required=True)
     inspect_command = commands.add_parser("inspect")
     inspect_command.add_argument("--inventory", type=Path, required=True)
+    rollout_command = commands.add_parser(
+        "rollout", help="install a release bundle and activate a cohort after a canary gate"
+    )
+    rollout_command.add_argument("bundle", type=Path)
+    rollout_command.add_argument("--inventory", type=Path, required=True)
+    rollout_command.add_argument("--cohort", required=True)
+    rollout_command.add_argument("--canary-unit", required=True)
+    rollout_command.add_argument(
+        "--gate-command", help="operator-local executable that writes one JSON evidence object"
+    )
+    rollout_command.add_argument("--gate-arg", action="append", default=[])
+    rollout_command.add_argument("--repo", help="GitHub repository for the default poller gate")
+    rollout_command.add_argument("--workflow", help="workflow path for the default poller gate")
+    rollout_command.add_argument("--job", help="workflow job id for the default poller gate")
+    rollout_command.add_argument("--clone", type=Path, help="operator-local repository clone")
+    rollout_command.add_argument("--state", type=Path, help="operator-local poller state")
+    rollout_command.add_argument("--credential-file", type=Path)
+    rollout_command.add_argument("--api-base", default="https://api.github.com")
+    rollout_command.add_argument("--image")
+    rollout_command.add_argument("--canary-timeout", type=int, default=900)
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -297,6 +317,81 @@ def main(argv=None):
             report = inspect_fleet(args.inventory)
             print(json.dumps(report, sort_keys=True, separators=(",", ":")))
             return 1 if any(unit["status"] != "ok" for unit in report) else 0
+        elif args.command == "rollout":
+            sys.path.insert(0, str(ROOT / "src"))
+            from execution_core.engine_fleet import _load_inventory
+            from execution_core.engine_rollout import rollout
+
+            manifest, _source = _read_bundle(args.bundle)
+            engine_commit = manifest["source_commit"]
+            if args.gate_command:
+                gate_command = [args.gate_command, *args.gate_arg]
+            else:
+                if args.gate_arg:
+                    raise ValueError("--gate-arg requires --gate-command")
+                required = (
+                    args.repo,
+                    args.workflow,
+                    args.job,
+                    args.clone,
+                    args.state,
+                    args.credential_file,
+                )
+                if any(value is None for value in required):
+                    raise ValueError(
+                        "default canary gate requires --repo, --workflow, --job, --clone, "
+                        "--state, and --credential-file"
+                    )
+                cohorts, units = _load_inventory(args.inventory)
+                if args.cohort not in cohorts:
+                    raise ValueError("rollout cohort is unknown")
+                canary = next(
+                    (
+                        unit
+                        for unit in units
+                        if unit["name"] == args.canary_unit and unit["cohort"] == args.cohort
+                    ),
+                    None,
+                )
+                if canary is None:
+                    raise ValueError("canary unit must belong to the rollout cohort")
+                gate_command = [
+                    sys.executable,
+                    str(ROOT / "scripts/engine-release-canary.py"),
+                    "--repo",
+                    args.repo,
+                    "--workflow",
+                    args.workflow,
+                    "--job",
+                    args.job,
+                    "--clone",
+                    str(args.clone),
+                    "--state",
+                    str(args.state),
+                    "--credential-file",
+                    str(args.credential_file),
+                    "--ssh-host",
+                    canary["host"],
+                    "--remote-state",
+                    canary["state_dir"],
+                    "--expected-engine-commit",
+                    engine_commit,
+                    "--api-base",
+                    args.api_base,
+                ]
+                if args.image:
+                    gate_command.extend(["--image", args.image])
+                gate_command.extend(["--timeout", str(args.canary_timeout)])
+            report = rollout(
+                args.bundle,
+                ROOT / "scripts/engine-release.py",
+                args.inventory,
+                cohort=args.cohort,
+                canary_unit=args.canary_unit,
+                engine_commit=engine_commit,
+                gate_command=gate_command,
+            )
+            print(json.dumps(report, sort_keys=True, separators=(",", ":")))
     except (OSError, ValueError, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f"engine-release: {error}", file=sys.stderr)
         return 2
