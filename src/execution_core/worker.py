@@ -2963,6 +2963,10 @@ class Worker:
                     client, _ = self.server.accept()
                 except TimeoutError:
                     continue
+                except OSError:
+                    if self.stop.is_set():
+                        break
+                    raise
                 with client:
                     client.settimeout(1)
                     try:

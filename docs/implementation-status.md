@@ -59,6 +59,7 @@ submissions inspect
 submissions abandon
 submissions retry
 submissions repair
+submissions capacity
 call
 oidc
 oidc publish
@@ -144,7 +145,7 @@ worker health | execution_core.health:observe
 
 The command list includes the development-contract commands (`worker`,
 `describe`, `submit`, `get`, `list`, `logs`, `cancel`, `follow`) and the
-workflow, poll, dashboard, MCP, and status-page commands. The feature list
+workflow, poll, dashboard, MCP, status-page, and capacity-report commands. The feature list
 includes capture, the planner, `run_job`, and the owner-repository poll path.
 The package block is the version and build backend in this tree.
 `doctor` is an absent command.
