@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""The release workflow verifies the tag and publishes three assets."""
+"""The release workflow verifies the tag and publishes four assets."""
 
 import os
 import shutil
@@ -62,6 +62,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(WORKFLOW.count("sh .github/release-version.sh"), 2)
         self.assertEqual(WORKFLOW.count('"$RELEASE_WHEEL"'), 2)
         self.assertEqual(WORKFLOW.count('"$RELEASE_SDIST"'), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE"'), 2)
+        self.assertEqual(WORKFLOW.count('"dist/$RELEASE_ENGINE_BUNDLE"'), 1)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE" \\\n'), 2)
+        self.assertEqual(WORKFLOW.count('"$RELEASE_ENGINE_BUNDLE" \\\n            > SHA256SUMS'), 2)
         self.assertIn('"$RELEASE_TITLE"', WORKFLOW)
         self.assertIn('"$RELEASE_NOTES"', WORKFLOW)
         self.assertNotIn("execution_core-0.1.0", WORKFLOW)
@@ -285,6 +289,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             match.stdout,
         )
         self.assertIn("RELEASE_SDIST=execution_core-0.1.19.tar.gz", match.stdout)
+        commit = _git(ROOT, "rev-parse", "refs/tags/v0.1.19^{commit}").stdout.strip()
+        self.assertIn(
+            f"RELEASE_ENGINE_BUNDLE=rookrunner-engine-0.1.19-{commit}.tar.gz", match.stdout
+        )
         self.assertIn("RELEASE_TITLE=v0.1.19 preview", match.stdout)
         self.assertIn(
             "RELEASE_NOTES=.github/v0.1.19-release-notes.md",

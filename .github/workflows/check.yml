@@ -30,3 +30,25 @@ jobs:
 
       - name: Unit tests
         run: PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+
+      - name: Build and install the immutable engine release
+        run: |
+          set -eu
+          artifact_dir="$RUNNER_TEMP/engine-artifact"
+          host_root="$RUNNER_TEMP/rookrunner-host"
+          .venv/bin/python scripts/engine-release.py build --output-dir "$artifact_dir"
+          artifact=$(find "$artifact_dir" -maxdepth 1 -type f -name 'rookrunner-engine-*.tar.gz' -print -quit)
+          test -n "$artifact"
+          .venv/bin/python scripts/engine-release.py install "$artifact" --root "$host_root"
+          .venv/bin/python scripts/engine-release.py activate "$GITHUB_SHA" --root "$host_root"
+          echo "ROOKRUNNER_RELEASE_ROOT=$host_root" >> "$GITHUB_ENV"
+
+      - name: Run the installed engine canary against pre-d8 state
+        env:
+          ROOKRUNNER_CANARY_IMAGE: ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+          ROOKRUNNER_EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -eu
+          docker pull "$ROOKRUNNER_CANARY_IMAGE"
+          PYTHONPATH="$ROOKRUNNER_RELEASE_ROOT/engine/src:$PWD/tests" \
+            .venv/bin/python -m unittest test_engine_release_canary -v
