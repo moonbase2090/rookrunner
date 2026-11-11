@@ -1,11 +1,21 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.19. A published release section
+The current package version is 0.1.20. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.20] - 2026-11-11
+
+- `submissions capacity` reports the capacity waits persisted in poll state for
+  one repository: stable keys, queue depth, the oldest wait age and each wait.
+  It reads poll state and does not contact a worker. With
+  `--alert-after-seconds N` it reports `clear` or `breached` and exits 0 or 1;
+  invalid or missing state reports `unknown` and exits 2.
+- The package version is 0.1.20. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.19] - 2026-11-11
 
