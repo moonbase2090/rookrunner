@@ -130,7 +130,7 @@ from .run import (
     runner_image_readiness,
 )
 from .release_manifest import PROTOCOL_VERSIONS, STATE_FORMAT_VERSION, installed_manifest
-from .state_format import ensure_state_format
+from .state_format import check_existing_state_format, ensure_state_format
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -779,6 +779,7 @@ class Worker:
             self._create_private_db()
             self.db = sqlite3.connect(self.state / "runs.sqlite3", check_same_thread=False)
             self.db.row_factory = sqlite3.Row
+            check_existing_state_format(self.db)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             self.db.executescript("""

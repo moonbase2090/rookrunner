@@ -22,6 +22,8 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_NAME = "engine-manifest.json"
 _COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
+_MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
+_MAX_ARCHIVE_FILES = 10_000
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -155,8 +157,12 @@ def _read_bundle(bundle_path):
 
 def _extract_source(source_archive, destination):
     destination.mkdir(parents=True)
+    total_size = 0
     with tarfile.open(fileobj=io.BytesIO(source_archive), mode="r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        if len(members) > _MAX_ARCHIVE_FILES:
+            raise ValueError("source archive has too many entries")
+        for member in members:
             name = PurePosixPath(member.name)
             if name.is_absolute() or ".." in name.parts:
                 raise ValueError("source archive contains an unsupported entry")
@@ -173,6 +179,9 @@ def _extract_source(source_archive, destination):
                 raise ValueError("source archive contains an unsupported entry")
             if member.size > 32 * 1024 * 1024:
                 raise ValueError("source archive entry is too large")
+            total_size += member.size
+            if total_size > _MAX_ARCHIVE_BYTES:
+                raise ValueError("source archive is too large")
             target = destination.joinpath(*name.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             stream = tar.extractfile(member)
@@ -215,9 +224,15 @@ def install(bundle_path, root):
     manifest, source = _read_bundle(bundle_path)
     commit = manifest["source_commit"]
     root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("engine root must be a real directory")
     releases = root / "releases"
     releases.mkdir(mode=0o755, exist_ok=True)
+    if releases.is_symlink() or not releases.is_dir():
+        raise ValueError("release root must be a real directory")
     destination = releases / commit
+    if destination.is_symlink():
+        raise ValueError("release destination must not be a symlink")
     if destination.exists():
         _verify_staged(destination, manifest)
         print(destination)
@@ -236,6 +251,8 @@ def install(bundle_path, root):
 def activate(root, commit):
     if not _COMMIT.fullmatch(commit):
         raise ValueError("engine commit must be a full Git object id")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("engine root must be a real directory")
     release = root / "releases" / commit
     if not release.is_dir() or release.is_symlink():
         raise ValueError("requested engine release is not installed")

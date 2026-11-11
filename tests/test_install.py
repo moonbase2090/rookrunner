@@ -35,6 +35,7 @@ class InstallDocTests(unittest.TestCase):
     def test_host_installs_an_immutable_release_and_selects_it_by_symlink(self):
         self.assertIn("rookrunner-engine-<version>-<full-commit>.tar.gz", TEXT)
         self.assertIn("scripts/engine-release.py build", TEXT)
+        self.assertIn("pyyaml==6.0.3", TEXT)
         self.assertIn("engine-release.py install", TEXT)
         self.assertIn("engine-release.py activate", TEXT)
         self.assertIn("/var/lib/rookrunner/releases/<commit>", TEXT)

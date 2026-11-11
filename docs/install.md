@@ -32,12 +32,14 @@ uv sync --locked
 
 Copy the bundle and `scripts/engine-release.py` to the host. Install it into a
 commit-addressed directory, then atomically select it through the `engine`
-symlink:
+symlink. The host's `/usr/bin/python3` needs PyYAML 6.0.3 for the installer
+verification and worker runtime.
 
 ```sh
-python3 engine-release.py install rookrunner-engine-<version>-<commit>.tar.gz \
+/usr/bin/python3 -m pip install 'pyyaml==6.0.3'
+/usr/bin/python3 engine-release.py install rookrunner-engine-<version>-<commit>.tar.gz \
   --root /var/lib/rookrunner
-python3 engine-release.py activate <commit> --root /var/lib/rookrunner
+/usr/bin/python3 engine-release.py activate <commit> --root /var/lib/rookrunner
 systemctl restart rookrunner-worker.service
 ```
 
