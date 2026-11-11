@@ -574,3 +574,25 @@ Each command accepts `--dry-run`. A dry run does not post, submit, or
 write `poll.json`. `--poll-state` selects the directory that holds
 `poll.json` and defaults to `--state`. A live `repair` or `abandon`
 reads `--credential-file` only when it posts.
+
+## Capacity wait report
+
+`submissions capacity` reads one poll state's `poll.json` and reports its
+persisted capacity waits for the bound repository. Each row includes the
+stable submission key, enqueue time, age, event, ref, workflow, and job ID.
+The summary includes the repository, observation time, queue depth, and oldest
+wait age. The command does not contact a worker or write poll state.
+
+`--alert-after-seconds N` marks the alert `breached` when the oldest wait's
+whole-second age is greater than or equal to `N`; otherwise it reports `clear`.
+`N` must be positive. Without a threshold, the alert is `not_configured`.
+`clear` and `not_configured` exit 0, and `breached` exits 1. Invalid state
+or a nonpositive integer threshold exits 2 with alert `unknown`. A
+non-integer threshold is rejected by the CLI with exit 2. A future enqueue
+time is invalid state.
+
+An external scheduled monitor can run the report and deliver notifications.
+The report describes persisted poll state at its read time. It does not
+establish poller liveness, current worker availability, resource slot use, or
+fairness across repositories. `--poll-state` selects a separate poll-state
+directory when it differs from `--state`.

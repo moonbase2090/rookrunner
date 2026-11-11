@@ -1,7 +1,9 @@
 # Capacity wait observability proposal
 
-Status: proposed, awaiting owner decision. This note does not change accepted
-behavior.
+Status: accepted direction, implementation in progress (2026-11-11). The
+owner accepted a per-repository read-only report with external scheduled age
+checks. Status-page metrics, slot/resource accounting, and cross-repository
+fairness remain out of scope.
 
 ## Current behavior
 
@@ -17,7 +19,7 @@ records that boundary. The [PRD](../prd.md#non-goals) also excludes global
 fairness. Each repository has a separate poll state file, so independent
 pollers cannot coordinate a cross-repository queue or fairness policy.
 
-## Proposed direction
+## Accepted direction
 
 Add a read-only capacity report to the existing `submissions` operator
 command. Read one atomic `poll.json` image through `submissions.load_poll_state`
@@ -71,15 +73,13 @@ snapshot because a wait may be admitted before the pass ends.
 | Run a resident poll status service | Could evaluate age continuously, but adds a process, access boundary, freshness rules, and deployment work. No such service is accepted. |
 | Add a shared scheduler for multiple repositories | Could own cross-repository fairness, but needs shared reservations, project identity, and a chosen policy. The current PRD excludes this milestone. |
 
-## Scope decisions needed
+## Follow-up boundaries
 
-1. Accept a per-repository read-only monitor command as the first observability
-   step, with status-page metrics and cross-repository fairness deferred.
-2. Name the operator monitor and its cadence before claiming that alerts are
+1. Name the operator monitor and its cadence before claiming that alerts are
    delivered. The command reports a breach; it does not send notifications.
-3. Decide whether slot use belongs in a later design. The current place `cap`
+2. Decide whether slot use belongs in a later design. The current place `cap`
    counts queued and running jobs in one poller's view. It is not a CPU, memory,
    or shared-host reservation.
 
-Until those decisions are accepted, this proposal does not authorize changes
-to the worker status page, global scheduling, or runtime behavior.
+This accepted scope does not authorize changes to the worker status page or
+global scheduling.
