@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.18, 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -83,11 +83,17 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_17_is_the_current_version_and_its_entries_are_released(self):
-        self.assertIn("The current package version is 0.1.17.", TEXT)
-        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.17]", 1)[0]
-        self.assertNotIn("`diagnose --since`", unreleased)
-        self.assertNotIn("The package version is 0.1.17.", unreleased)
+    def test_0_1_18_is_the_current_version_and_unreleased_is_empty(self):
+        self.assertIn("The current package version is 0.1.18.", TEXT)
+        self.assertIn("## [Unreleased]\n\n## [0.1.18] - 2026-11-10", TEXT)
+        section = TEXT.split("## [0.1.18] - 2026-11-10", 1)[1].split("## [0.1.17]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.18.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("clears a merge-mismatch error", prose)
+        self.assertIn("A merge-commit mismatch error on `rookrunner/trust`", prose)
+
+    def test_0_1_17_records_the_current_changes(self):
         section = TEXT.split("## [0.1.17] - 2026-11-10", 1)[1].split("## [0.1.16]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.17.", prose)

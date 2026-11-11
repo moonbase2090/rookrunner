@@ -230,7 +230,7 @@ class StatusPageTests(unittest.TestCase):
         with mock.patch("execution_core.cli.call", wrapped):
             head, body = self.exchange(GET)
         self.assertEqual(seen, ["status.view"])
-        self.assertIn("0.1.17", body)
+        self.assertIn("0.1.18", body)
         self.assertIn("12s", body)
         self.assertIn("succeeded", body)
         self.assertIn("<td>succeeded</td><td>0</td><td>12s</td>", body)
@@ -313,7 +313,7 @@ class StatusPageTests(unittest.TestCase):
         self.assertIn("<dt>Health</dt><dd>not shown</dd>", body)
         self.assertNotIn("worker_unavailable", body)
         self.assertIn("not available", body)
-        self.assertNotIn("0.1.17", body)
+        self.assertNotIn("0.1.18", body)
         self.assertIn('content="5"', head + body)
         self.assertNotIn("Access-Control-Allow-Origin", head)
 
