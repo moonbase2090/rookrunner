@@ -26,11 +26,14 @@ fi
 
 wheel="execution_core-${version}-py3-none-any.whl"
 sdist="execution_core-${version}.tar.gz"
+commit=$(git rev-parse "refs/tags/${tag}^{commit}")
+engine_bundle="rookrunner-engine-${version}-${commit}.tar.gz"
 title="${tag} preview"
 
 printf 'RELEASE_VERSION=%s\n' "$version"
 printf 'RELEASE_WHEEL=%s\n' "$wheel"
 printf 'RELEASE_SDIST=%s\n' "$sdist"
+printf 'RELEASE_ENGINE_BUNDLE=%s\n' "$engine_bundle"
 printf 'RELEASE_TITLE=%s\n' "$title"
 printf 'RELEASE_NOTES=%s\n' "$notes"
 
@@ -39,6 +42,7 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     printf 'RELEASE_VERSION=%s\n' "$version"
     printf 'RELEASE_WHEEL=%s\n' "$wheel"
     printf 'RELEASE_SDIST=%s\n' "$sdist"
+    printf 'RELEASE_ENGINE_BUNDLE=%s\n' "$engine_bundle"
     printf 'RELEASE_TITLE=%s\n' "$title"
     printf 'RELEASE_NOTES=%s\n' "$notes"
   } >> "$GITHUB_ENV"

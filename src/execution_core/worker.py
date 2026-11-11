@@ -129,6 +129,8 @@ from .run import (
     run_job,
     runner_image_readiness,
 )
+from .release_manifest import PROTOCOL_VERSIONS, STATE_FORMAT_VERSION, installed_manifest
+from .state_format import check_existing_state_format, ensure_state_format
 from .protocol import (
     MAX_CURSOR,
     MAX_JSON_DEPTH,
@@ -696,6 +698,7 @@ class Worker:
         self._pending_concurrency_cancels = []
         self.socket_path = self.state / "worker.sock"
         self.state_usage = None
+        self.engine_manifest = None
 
     def _refuse_reset_history(self):
         """Fail closed when the run database cannot hold prior history.
@@ -755,6 +758,9 @@ class Worker:
                 continue
 
     def start(self):
+        # Verify a packaged engine before it can touch worker state. Checkouts
+        # have no manifest and remain usable for development.
+        self.engine_manifest = installed_manifest()
         # Never change permissions on a pre-existing shared or foreign directory.
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = self.state.lstat()
@@ -773,6 +779,7 @@ class Worker:
             self._create_private_db()
             self.db = sqlite3.connect(self.state / "runs.sqlite3", check_same_thread=False)
             self.db.row_factory = sqlite3.Row
+            check_existing_state_format(self.db)
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             self.db.executescript("""
@@ -815,6 +822,7 @@ class Worker:
             if "name" not in columns:
                 self.db.execute("ALTER TABLE artifacts ADD COLUMN name TEXT")
             with self.db:
+                ensure_state_format(self.db)
                 root = self.db.execute(
                     "SELECT value FROM metadata WHERE key='repository'"
                 ).fetchone()
@@ -2338,10 +2346,12 @@ class Worker:
             self.runner_image_error = runner_image_readiness(self.runner_image)
             readiness_error = self.execution_error or self.runner_image_error
             described = {
-                "protocol_versions": [0, 1],
+                "protocol_versions": list(PROTOCOL_VERSIONS),
                 "worker_id": self.worker_id,
                 "repository": self.repository,
                 "version": __version__,
+                "engine_release": self.engine_manifest,
+                "state_format_version": STATE_FORMAT_VERSION,
                 "ready": not self.stop.is_set() and readiness_error is None,
                 "readiness_error": readiness_error,
                 "methods": METHODS,

@@ -93,6 +93,7 @@ class ChangelogTests(unittest.TestCase):
         self.assertIn("The package version is 0.1.20.", prose)
         self.assertIn("This change does not create a tag.", prose)
         self.assertIn("`submissions capacity` reports the capacity waits persisted", prose)
+        self.assertIn("cohort rollout activates the remaining units only after the canary", prose)
 
     def test_0_1_19_records_the_current_changes(self):
         section = TEXT.split("## [0.1.19] - 2026-11-11", 1)[1].split("## [0.1.18]", 1)[0]

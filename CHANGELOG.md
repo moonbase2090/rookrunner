@@ -14,6 +14,10 @@ This file does not reconstruct earlier milestones.
   It reads poll state and does not contact a worker. With
   `--alert-after-seconds N` it reports `clear` or `breached` and exits 0 or 1;
   invalid or missing state reports `unknown` and exits 2.
+- Engine releases are an immutable bundle that is published with each release.
+  A worker refuses to start on a state format it does not know. Read-only fleet
+  inspection reports each unit's engine, and a cohort rollout activates the
+  remaining units only after the canary unit passes its gate.
 - The package version is 0.1.20. A wheel and a source tarball can be
   built from this tree. This change does not create a tag.
 
