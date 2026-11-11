@@ -1752,8 +1752,12 @@ class Pass:
         skips the gate. An entry from poll state written before the gate,
         or from a run that ``--allow-untrusted`` let through, goes through
         the gate again, and a refusal posts no signoff.
+
+        A stored entry also means this head's merge was accepted, so a
+        merge-mismatch error left on the head from an earlier pass is cleared.
         """
 
+        self._clear_merge_mismatch(number, head_sha)
         if seen.get("commits") != "trusted":
             base = item.get("base")
             base_ref = base.get("ref") if isinstance(base, dict) else None

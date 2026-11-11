@@ -1951,6 +1951,42 @@ class PollTests(unittest.TestCase):
         self.assertEqual(saved["trust_statuses"]["9"]["state"], "success")
         self.assertEqual(saved.get("workflow_refusals", []), [])
 
+    def test_a_head_that_already_ran_clears_a_mismatch_error_left_on_it(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        self.poll()
+        self.assertEqual(self.runs(), 1)
+        path = self.state / "poll.json"
+        saved = json.loads(path.read_text())
+        saved["trust_statuses"] = {
+            "9": {
+                "head": head,
+                "state": "error",
+                "description": "refused: fetched merge commit does not match the listed head",
+            }
+        }
+        saved["workflow_refusals"] = [
+            {"number": 9, "head_sha": head, "reason": "merge_commit_mismatch"}
+        ]
+        saved["etags"] = {}
+        path.write_text(json.dumps(saved))
+        before = len(self.posts())
+        self.poll()
+        trust = [
+            json.loads(item["body"])
+            for item in self.posts()[before:]
+            if json.loads(item["body"]).get("context") == "rookrunner/trust"
+        ]
+        self.assertEqual(
+            trust,
+            [{"context": "rookrunner/trust", "state": "success", "description": "allowed to run"}],
+        )
+        after = json.loads(path.read_text())
+        self.assertEqual(after["trust_statuses"]["9"]["state"], "success")
+        self.assertEqual(after["workflow_refusals"], [])
+
     def test_a_fork_by_a_non_collaborator_is_still_refused_before_any_fetch(self):
         tip = self._tip()
         head = "ab" * 20
