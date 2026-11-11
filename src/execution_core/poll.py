@@ -1467,6 +1467,9 @@ class Pass:
         except OSError:
             same = False
         if same:
+            # A job that waited for capacity runs after later passes moved this
+            # clone. The worker snapshots its HEAD, so put the tested commit back.
+            _checkout(self.clone, sha)
             return
         pack = _git(
             self.clone,

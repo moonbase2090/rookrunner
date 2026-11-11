@@ -20,7 +20,7 @@ import threading
 import unittest
 
 from execution_core.cli import _places_from_args, _run_poll
-from execution_core.poll import PollError, poll_once
+from execution_core.poll import Pass, PollError, poll_once
 from execution_core.protocol import canonical
 from execution_core.worker import Worker
 from test_poll import TOKEN, _Handler, _git
@@ -515,6 +515,20 @@ class PlacementTests(unittest.TestCase):
         self.assertNotIn("no_host", [item.get("reason") for item in fourth["skipped"]])
         self.assertEqual([item for item in self._saved()["submissions"] if "waiting" in item], [])
         self.assertEqual(self._runs(alpha), 3)
+
+    def test_a_waiting_job_is_checked_out_again_when_it_shares_the_worker_clone(self):
+        # A job that waited for capacity is submitted after later passes moved the
+        # clone the worker snapshots. The worker would capture the wrong commit.
+        tip = self._tip()
+        elsewhere = self._advance()
+        _git(self.clone, "fetch", "--quiet", "origin")
+        _git(self.clone, "checkout", "--detach", "--force", "--quiet", elsewhere)
+        pending = Pass.__new__(Pass)
+        pending.clone = self.clone
+        pending.ssh_host = None
+        pending.remote_repository = str(self.clone)
+        pending._place_checkout(tip)
+        self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.strip(), tip)
 
     def test_no_ready_place_records_nothing(self):
         alpha = self._worker("alpha")

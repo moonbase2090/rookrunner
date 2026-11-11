@@ -83,9 +83,11 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_18_is_the_current_version_and_unreleased_is_empty(self):
+    def test_0_1_18_is_the_current_version_and_its_entries_are_released(self):
         self.assertIn("The current package version is 0.1.18.", TEXT)
-        self.assertIn("## [Unreleased]\n\n## [0.1.18] - 2026-11-10", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.18]", 1)[0]
+        self.assertNotIn("The package version is 0.1.18.", unreleased)
+        self.assertNotIn("clears a merge-mismatch error", unreleased)
         section = TEXT.split("## [0.1.18] - 2026-11-10", 1)[1].split("## [0.1.17]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.18.", prose)
