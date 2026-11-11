@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
+from datetime import UTC, datetime
 import os
 from pathlib import Path
 import re
@@ -653,6 +654,7 @@ def report_submissions(args):
     from .submissions import (
         abandon_submission,
         bound_repository,
+        capacity_report,
         inspect_submission,
         list_submissions,
         load_poll_state,
@@ -663,6 +665,25 @@ def report_submissions(args):
     )
 
     directory = args.poll_state or args.state
+    command = args.submissions_command
+    if command == "capacity":
+        try:
+            result = capacity_report(
+                directory,
+                alert_after_seconds=args.alert_after_seconds,
+                now=datetime.now(UTC),
+            )
+        except PollError as error:
+            print(
+                canonical(
+                    {"alert": "unknown", "error": {"kind": error.kind, "message": str(error)}}
+                ),
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(canonical(result))
+        sys.exit(1 if result["alert"] == "breached" else 0)
+
     db_path = Path(args.state) / "runs.sqlite3"
     caller = _worker_caller(args.state)
 
@@ -686,7 +707,6 @@ def report_submissions(args):
         finally:
             token = None
 
-    command = args.submissions_command
     try:
         if command == "list":
             result = list_submissions(
@@ -888,7 +908,11 @@ def _add_key_dir(parser):
 
 def main():
     parser = argparse.ArgumentParser(description="Rookrunner development execution contract")
-    parser.add_argument("--state", required=True, help="private worker state directory")
+    parser.add_argument(
+        "--state",
+        required=True,
+        help="private state directory; used as poll state for submissions capacity",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     worker = commands.add_parser("worker")
     worker.add_argument("--repository", required=True)
@@ -1233,7 +1257,7 @@ def main():
     rec.add_argument("--api-base", default=DEFAULT_API_BASE)
     submissions = commands.add_parser(
         "submissions",
-        help="list stuck poll submissions, and inspect, abandon, retry, or repair one",
+        help="inspect poll submissions and report capacity waits",
     )
     submission_commands = submissions.add_subparsers(dest="submissions_command", required=True)
 
@@ -1243,17 +1267,18 @@ def main():
             "--poll-state",
             help="directory holding poll.json; default is --state",
         )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="read and decide; post nothing, submit nothing, and write nothing",
-        )
-        parser.add_argument("--repository", help="GitHub repository as owner/name")
-        parser.add_argument(
-            "--credential-file",
-            help="operator token file read only when a status is posted",
-        )
-        parser.add_argument("--api-base", default=DEFAULT_API_BASE)
+        if name != "capacity":
+            parser.add_argument(
+                "--dry-run",
+                action="store_true",
+                help="read and decide; post nothing, submit nothing, and write nothing",
+            )
+            parser.add_argument("--repository", help="GitHub repository as owner/name")
+            parser.add_argument(
+                "--credential-file",
+                help="operator token file read only when a status is posted",
+            )
+            parser.add_argument("--api-base", default=DEFAULT_API_BASE)
         if name == "list":
             parser.add_argument(
                 "--all",
@@ -1266,6 +1291,14 @@ def main():
 
     _submission_parser("list", "list poll submissions that have no final commit status", key=False)
     _submission_parser("inspect", "show one poll submission and its worker status", key=True)
+    capacity = _submission_parser(
+        "capacity", "report persisted capacity waits for one repository", key=False
+    )
+    capacity.add_argument(
+        "--alert-after-seconds",
+        type=int,
+        help="mark the alert breached when the oldest wait reaches this positive age",
+    )
     _submission_parser(
         "abandon",
         "post error for one submission and retire it; never post success",

@@ -4,7 +4,8 @@ import io
 import json
 import sqlite3
 import sys
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from execution_core.checks import post_commit_status
 from execution_core.poll import PollError
 from execution_core.submissions import (
     abandon_submission,
+    capacity_report,
     list_submissions,
     recorded_status_states,
     repair_submission,
@@ -39,6 +41,19 @@ def _entry(key=KEY, run_id="run-setup", event="push"):
         "status_sha": SHA,
         "context": CONTEXT,
         "pending": True,
+    }
+
+
+def _capacity_entry(key, since, workflow, job_id, ref="refs/heads/main"):
+    return {
+        "key": key,
+        "event": "push",
+        "waiting": {
+            "since": since,
+            "reason": "capacity",
+            "ref": ref,
+            "request": {"workflow": workflow, "job_id": job_id},
+        },
     }
 
 
@@ -527,6 +542,100 @@ class OutcomeTests(unittest.TestCase):
             )
 
 
+class CapacityReportTests(unittest.TestCase):
+    def test_report_orders_waits_and_marks_threshold_equality_breached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            oldest = _capacity_entry(
+                "poll-" + "aa" * 32,
+                "2026-11-11T11:59:30Z",
+                "workflows/build.yml",
+                "build",
+            )
+            newer = _capacity_entry(
+                "poll-" + "bb" * 32,
+                "2026-11-11T12:00:00+00:00",
+                "workflows/test.yml",
+                "test",
+                "refs/heads/release",
+            )
+            path = _write_poll(directory, [newer, oldest, _entry()])
+            before = path.read_bytes()
+
+            result = capacity_report(
+                directory,
+                alert_after_seconds=60,
+                now=datetime(2026, 11, 11, 12, 0, 30, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["repository"], "acme/demo")
+            self.assertEqual(result["queue_depth"], 2)
+            self.assertEqual(result["oldest_since"], "2026-11-11T11:59:30+00:00")
+            self.assertEqual(result["oldest_age_seconds"], 60)
+            self.assertEqual(result["alert_after_seconds"], 60)
+            self.assertEqual(result["alert"], "breached")
+            self.assertEqual(
+                result["waits"],
+                [
+                    {
+                        "key": oldest["key"],
+                        "since": "2026-11-11T11:59:30+00:00",
+                        "age_seconds": 60,
+                        "event": "push",
+                        "ref": "refs/heads/main",
+                        "workflow": "workflows/build.yml",
+                        "job_id": "build",
+                    },
+                    {
+                        "key": newer["key"],
+                        "since": "2026-11-11T12:00:00+00:00",
+                        "age_seconds": 30,
+                        "event": "push",
+                        "ref": "refs/heads/release",
+                        "workflow": "workflows/test.yml",
+                        "job_id": "test",
+                    },
+                ],
+            )
+            clear = capacity_report(
+                directory,
+                alert_after_seconds=61,
+                now=datetime(2026, 11, 11, 12, 0, 30, tzinfo=UTC),
+            )
+            self.assertEqual(clear["alert"], "clear")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_empty_queue_has_no_oldest_age_and_no_enabled_alert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [])
+
+            result = capacity_report(
+                directory,
+                now=datetime(2026, 11, 11, 12, 0, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["queue_depth"], 0)
+            self.assertIsNone(result["oldest_since"])
+            self.assertIsNone(result["oldest_age_seconds"])
+            self.assertIsNone(result["alert_after_seconds"])
+            self.assertEqual(result["alert"], "not_configured")
+            self.assertEqual(result["waits"], [])
+
+    def test_future_wait_time_is_invalid_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(
+                directory,
+                [_capacity_entry("poll-" + "aa" * 32, "2026-11-11T12:00:01Z", "w.yml", "job")],
+            )
+
+            with self.assertRaises(PollError) as raised:
+                capacity_report(
+                    directory,
+                    now=datetime(2026, 11, 11, 12, 0, tzinfo=UTC),
+                )
+
+            self.assertEqual(raised.exception.kind, "STATE_INVALID")
+
+
 class CliTests(unittest.TestCase):
     def _argv(self, directory, *extra):
         return [
@@ -564,6 +673,87 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result["state"], "error")
             post_status.assert_not_called()
             self.assertEqual(path.read_bytes(), before)
+
+    def test_capacity_command_reports_breach_without_worker_or_state_write(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as worker_state,
+        ):
+            path = _write_poll(
+                directory,
+                [_capacity_entry(KEY, "2026-11-11T11:59:00Z", "workflows/ci.yml", "check")],
+            )
+            before = path.read_bytes()
+            out = io.StringIO()
+            argv = [
+                "execution_core",
+                "--state",
+                worker_state,
+                "submissions",
+                "capacity",
+                "--alert-after-seconds",
+                "60",
+                "--poll-state",
+                directory,
+            ]
+            with (
+                mock.patch.object(cli, "_worker_caller", side_effect=AssertionError("worker call")),
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(cli, "datetime") as clock,
+                redirect_stdout(out),
+            ):
+                clock.now.return_value = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+                with self.assertRaises(SystemExit) as exited:
+                    cli.main()
+            result = json.loads(out.getvalue())
+            self.assertEqual(exited.exception.code, 1)
+            self.assertEqual(result["alert"], "breached")
+            self.assertEqual(result["queue_depth"], 1)
+            self.assertEqual(result["oldest_age_seconds"], 60)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_capacity_command_reports_unknown_for_missing_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = io.StringIO()
+            err = io.StringIO()
+            with (
+                mock.patch.object(cli, "_worker_caller", side_effect=AssertionError("worker call")),
+                mock.patch.object(sys, "argv", self._argv(directory, "capacity")),
+                redirect_stdout(out),
+                redirect_stderr(err),
+                self.assertRaises(SystemExit) as exited,
+            ):
+                cli.main()
+
+            result = json.loads(err.getvalue())
+            self.assertEqual(exited.exception.code, 2)
+            self.assertEqual(result["alert"], "unknown")
+            self.assertEqual(result["error"]["kind"], "STATE_INVALID")
+            self.assertEqual(out.getvalue(), "")
+
+    def test_capacity_command_exits_zero_when_threshold_is_clear(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(
+                directory,
+                [_capacity_entry(KEY, "2026-11-11T11:59:30Z", "workflows/ci.yml", "check")],
+            )
+            out = io.StringIO()
+            with (
+                mock.patch.object(cli, "_worker_caller", side_effect=AssertionError("worker call")),
+                mock.patch.object(
+                    sys, "argv", self._argv(directory, "capacity", "--alert-after-seconds", "60")
+                ),
+                mock.patch.object(cli, "datetime") as clock,
+                redirect_stdout(out),
+                self.assertRaises(SystemExit) as exited,
+            ):
+                clock.now.return_value = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+                cli.main()
+
+            result = json.loads(out.getvalue())
+            self.assertEqual(exited.exception.code, 0)
+            self.assertEqual(result["alert"], "clear")
+            self.assertEqual(result["oldest_age_seconds"], 30)
 
     def test_live_repair_command_posts_the_error_status(self):
         with tempfile.TemporaryDirectory() as directory:

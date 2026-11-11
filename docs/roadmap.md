@@ -166,6 +166,9 @@ Public publishing is a separate step after the preview artifact is reviewable.
   The [scheduling investigation](research/resource-scheduling.md) separates
   implemented placement and local queues from proposed shared admission,
   capacity reservations, and fairness policies. No scheduler design is selected.
+  The [capacity-wait observability proposal](research/capacity-wait-observability.md)
+  considers a per-repository queue-age report without changing the worker page.
+  It is not accepted implementation scope.
 - Shared caches with explicit trust and retention boundaries.
 - Managed capacity and independent workflow scheduling.
   The [private capacity investigation](research/managed-capacity.md) compares

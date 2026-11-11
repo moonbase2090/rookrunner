@@ -12,16 +12,19 @@ import contextlib
 import fcntl
 import os
 from pathlib import Path
+import re
 import sqlite3
 import urllib.parse
+from datetime import UTC, datetime
 
-from .poll import PollError, _save_state, has_successor, retry_submission_key
+from .poll import PollError, _save_state, has_successor, is_capacity_wait, retry_submission_key
 from .protocol import strict_json
-from .status import TERMINAL_STATUS, StatusError, github_state
+from .status import TERMINAL_STATUS, StatusError, github_state, require_repository
 
 _MAX_BODY = 1024 * 1024
 _ACTIVE = frozenset({"queued", "running"})
 _RETRY_EVENTS = frozenset({"push", "pull_request"})
+_CAPACITY_KEY = re.compile(r"poll-[0-9a-f]{64}\Z")
 _KEPT = (
     "run_id",
     "event",
@@ -64,6 +67,98 @@ def load_poll_state(directory):
     ):
         raise PollError("STATE_INVALID", "poll state could not be read")
     return parsed
+
+
+def capacity_report(directory, *, alert_after_seconds=None, now=None):
+    """Report persisted capacity waits for one repository without contacting a worker."""
+
+    if alert_after_seconds is not None and (
+        type(alert_after_seconds) is not int or alert_after_seconds <= 0
+    ):
+        raise PollError("INVALID_PARAMS", "capacity age threshold must be positive seconds")
+    observed_at = datetime.now(UTC) if now is None else now
+    if (
+        not isinstance(observed_at, datetime)
+        or observed_at.tzinfo is None
+        or observed_at.utcoffset() is None
+    ):
+        raise PollError("INVALID_PARAMS", "capacity observation time must include a time zone")
+    observed_at = observed_at.astimezone(UTC)
+
+    state = load_poll_state(directory)
+    try:
+        repository = require_repository(state.get("repository"))
+    except StatusError:
+        raise PollError("STATE_INVALID", "poll state repository is not usable") from None
+
+    waits = []
+    keys = set()
+    for entry in state["submissions"]:
+        if not is_capacity_wait(entry):
+            continue
+        waiting = entry["waiting"]
+        request = waiting.get("request")
+        key = entry.get("key")
+        if not isinstance(key, str) or _CAPACITY_KEY.fullmatch(key) is None or key in keys:
+            raise PollError("STATE_INVALID", "capacity wait identity is not usable")
+        if not isinstance(request, dict):
+            raise PollError("STATE_INVALID", "capacity wait request is not usable")
+        try:
+            since_value = waiting.get("since")
+            if not isinstance(since_value, str):
+                raise ValueError
+            since = datetime.fromisoformat(since_value.replace("Z", "+00:00"))
+            if since.tzinfo is None or since.utcoffset() is None:
+                raise ValueError
+            since = since.astimezone(UTC)
+        except (TypeError, ValueError, OverflowError):
+            raise PollError("STATE_INVALID", "capacity wait time is not usable") from None
+        if since > observed_at:
+            raise PollError("STATE_INVALID", "capacity wait time is in the future")
+
+        event = entry.get("event")
+        ref = waiting.get("ref")
+        workflow = request.get("workflow")
+        job_id = request.get("job_id")
+        if any(
+            not isinstance(value, str) or value == "" for value in (event, ref, workflow, job_id)
+        ):
+            raise PollError("STATE_INVALID", "capacity wait details are not usable")
+        keys.add(key)
+        waits.append(
+            (
+                since,
+                {
+                    "key": key,
+                    "since": since.isoformat(),
+                    "age_seconds": int((observed_at - since).total_seconds()),
+                    "event": event,
+                    "ref": ref,
+                    "workflow": workflow,
+                    "job_id": job_id,
+                },
+            )
+        )
+
+    waits.sort(key=lambda item: (item[0], item[1]["key"]))
+    rows = [row for _, row in waits]
+    oldest_age = rows[0]["age_seconds"] if rows else None
+    if alert_after_seconds is None:
+        alert = "not_configured"
+    else:
+        alert = (
+            "breached" if oldest_age is not None and oldest_age >= alert_after_seconds else "clear"
+        )
+    return {
+        "repository": repository,
+        "observed_at": observed_at.isoformat(),
+        "queue_depth": len(rows),
+        "oldest_since": rows[0]["since"] if rows else None,
+        "oldest_age_seconds": oldest_age,
+        "alert_after_seconds": alert_after_seconds,
+        "alert": alert,
+        "waits": rows,
+    }
 
 
 def recorded_status_states(db_path, run_id, context, sha):

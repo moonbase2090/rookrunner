@@ -191,6 +191,18 @@ class PollError(Exception):
         self.kind = kind
 
 
+def is_capacity_wait(entry):
+    """Return whether an entry is an unplaced capacity wait."""
+
+    waiting = entry.get("waiting") if isinstance(entry, dict) else None
+    return (
+        isinstance(waiting, dict)
+        and waiting.get("reason") == "capacity"
+        and "run_id" not in entry
+        and "host" not in entry
+    )
+
+
 class _Budget:
     def __init__(self):
         self.stopped = False
@@ -1423,7 +1435,7 @@ class Pass:
         names = {place["name"] for place in self.places}
         seen = []
         for entry in self.state["submissions"]:
-            if self._is_capacity_wait(entry):
+            if is_capacity_wait(entry):
                 continue
             host = entry.get("host")
             if host in names or host in seen:
@@ -2744,15 +2756,6 @@ class Pass:
                 return False
         return saw_full
 
-    def _is_capacity_wait(self, entry):
-        waiting = entry.get("waiting") if isinstance(entry, dict) else None
-        return (
-            isinstance(waiting, dict)
-            and waiting.get("reason") == "capacity"
-            and "run_id" not in entry
-            and "host" not in entry
-        )
-
     def _waiting_row(self, entry):
         waiting = entry.get("waiting") if isinstance(entry.get("waiting"), dict) else {}
         request = waiting.get("request") if isinstance(waiting.get("request"), dict) else {}
@@ -2892,7 +2895,7 @@ class Pass:
 
         ranked = []
         for index, entry in enumerate(self.state.get("submissions") or []):
-            if not self._is_capacity_wait(entry):
+            if not is_capacity_wait(entry):
                 continue
             since = entry["waiting"].get("since")
             ranked.append((since if isinstance(since, str) else "", index, entry))
@@ -2946,7 +2949,7 @@ class Pass:
             existing = next(
                 (item for item in self.state["submissions"] if item.get("key") == key), None
             )
-            if existing is not None and self._is_capacity_wait(existing):
+            if existing is not None and is_capacity_wait(existing):
                 self._show_waiting(existing)
                 continue
             if existing is not None:

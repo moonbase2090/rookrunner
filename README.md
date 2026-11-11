@@ -45,12 +45,20 @@ the rest. `--poll-state` selects the directory that holds `poll.json`
 and defaults to `--state`. `--dry-run` reads and does not post, submit,
 or write `poll.json`.
 
+`submissions capacity` reports capacity waits persisted for one repository.
+It reads poll state without contacting a worker. Pass
+`--alert-after-seconds N` to report `clear` or `breached` and exit with 0 or
+1. Invalid or missing state reports `unknown` and exits 2. Without a
+threshold, `alert` is `not_configured` and the command exits 0. An external
+scheduled monitor can invoke the command and deliver notifications.
+
 ```bash
 python3 -m execution_core --state "$STATE" submissions list --dry-run
 python3 -m execution_core --state "$STATE" submissions inspect KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions capacity --alert-after-seconds 900
 ```
 
 `repair` posts the missing final status. For a setup failure that is
