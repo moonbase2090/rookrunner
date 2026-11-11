@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.17. A published release section
+The current package version is 0.1.18. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.18] - 2026-11-10
 
 - A pull request head that already ran also clears a merge-mismatch error
   left on it by an earlier pass. Before, only a pass that fetched the
@@ -13,6 +15,8 @@ This file does not reconstruct earlier milestones.
 - A merge-commit mismatch error on `rookrunner/trust` now turns into a
   success once a later pass finds the merge ref matching the same head.
   Before, the error stayed and the pull request stayed red.
+- The package version is 0.1.18. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.17] - 2026-11-10
 
