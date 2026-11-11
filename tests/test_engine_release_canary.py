@@ -17,6 +17,7 @@ from execution_core.poll import PollError, poll_once
 from execution_core.protocol import canonical
 from execution_core.verify import verify_snapshot
 from execution_core.engine_canary import run_poller_canary
+from schema_support import validate_response
 from execution_core.worker import Worker
 from test_poll import TOKEN, WORKFLOW, _Handler, _git
 
@@ -136,6 +137,10 @@ class EngineReleaseCanaryTests(unittest.TestCase):
     def test_installed_release_migrates_legacy_state_and_passes_canary_gate(self):
         manifest = self.worker.engine_manifest
         self.assertIsInstance(manifest, dict)
+        validate_response(
+            "worker.describe",
+            {"jsonrpc": "2.0", "id": 1, "result": self.caller("worker.describe", {})},
+        )
         expected_commit = os.environ.get("ROOKRUNNER_EXPECTED_COMMIT")
         if expected_commit:
             self.assertEqual(expected_commit, manifest["source_commit"])
