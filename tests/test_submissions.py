@@ -518,7 +518,50 @@ class OutcomeTests(unittest.TestCase):
                     caller=caller,
                     request_for=lambda _run_id: {"version": 1, "workflow": "w.yml"},
                 )
-            self.assertEqual(str(raised.exception), "only a failed run can be retried")
+            self.assertEqual(str(raised.exception), "only a failed or cancelled run can be retried")
+            self.assertEqual(submits, [])
+
+    def test_retry_submits_a_successor_of_a_cancelled_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry(run_id="run-cancelled")])
+            submits = []
+
+            def caller(method, params):
+                if method == "run.get":
+                    return {"state": "cancelled", "exit_code": None, "error": None}
+                submits.append(params)
+                return {"run_id": "run-next"}
+
+            live = retry_submission(
+                directory,
+                KEY,
+                caller=caller,
+                request_for=lambda _run_id: {"version": 1, "workflow": "w.yml", "job_id": "gui"},
+            )
+            self.assertEqual(live["action"], "submitted")
+            self.assertEqual(submits[0]["submission_key"], SUCCESSOR)
+            saved = json.loads(Path(directory, "poll.json").read_text())["submissions"]
+            self.assertEqual(saved[-1]["retry_of"], KEY)
+            self.assertEqual(saved[-1]["run_id"], "run-next")
+
+    def test_retry_refuses_a_running_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry(run_id="run-live")])
+            submits = []
+
+            def caller(method, params):
+                if method == "run.get":
+                    return {"state": "running", "exit_code": None, "error": None}
+                submits.append(params)
+                return {"run_id": "nope"}
+
+            with self.assertRaises(PollError):
+                retry_submission(
+                    directory,
+                    KEY,
+                    caller=caller,
+                    request_for=lambda _run_id: {"version": 1, "workflow": "w.yml"},
+                )
             self.assertEqual(submits, [])
 
     def test_stored_request_returns_the_saved_workflow_request(self):

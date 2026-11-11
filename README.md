@@ -64,8 +64,10 @@ python3 -m execution_core --state "$STATE" submissions capacity --alert-after-se
 `repair` posts the missing final status. For a setup failure that is
 still reported as needing another try, that status is `error`. `abandon`
 posts `error` and does not post `success`. `retry` submits one successor
-of a failed push or pull request. The successor key is stable, and
-repeating the command does not create another run. A live `repair` or
+of a failed or cancelled push or pull request. The successor key is
+stable, and repeating the command does not create another run. The
+successor is snapshotted from the worker's repository checkout, so check
+out the tested commit there before a retry of a pull request run. A live `repair` or
 `abandon` also needs `--repository owner/name` and `--credential-file`.
 
 ## Project boundaries
