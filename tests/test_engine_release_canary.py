@@ -61,7 +61,10 @@ class EngineReleaseCanaryTests(unittest.TestCase):
         old_record = {"run_id": "pre-d8-history", "state": "succeeded", "exit_code": 0}
         database.executemany(
             "INSERT INTO metadata VALUES (?, ?)",
-            [("repository", str(self.clone.resolve())), ("worker_id", "legacy-worker")],
+            [
+                ("repository", str(self.clone.resolve())),
+                ("worker_id", "00000000-0000-4000-8000-000000000002"),
+            ],
         )
         database.execute(
             "INSERT INTO runs (id, submission_key, request, record, log) VALUES (?, ?, ?, ?, ?)",
