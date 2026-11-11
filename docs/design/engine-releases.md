@@ -1,8 +1,9 @@
 # Engine release and rollout design
 
-Status: the requirements in RR-51 are accepted. The implementation choices
-below are proposed and will be validated against the current worker and
-release workflow before rollout.
+Status: RR-51's artifact, inspection, and canary requirements are accepted.
+The implementation choices below define the current implementation. The
+production cohort rollout invocation remains proposed pending the owner's
+choice of how the existing poller should be triggered.
 
 ## Artifact and identity
 
@@ -52,5 +53,16 @@ the same canary gate. The canary uses disposable state and execution resources.
 
 ## Implemented behavior
 
-No release bundle, manifest verification, fleet inspection, or rollout behavior
-has been implemented yet.
+The release workflow builds and publishes one deterministic bundle per tagged
+commit. The installer verifies the archive and installed source tree, places
+each release under its full commit, and atomically changes the active symlink.
+Worker startup validates the manifest before touching state. Legacy SQLite
+state receives format version 1; unknown versions are refused. `worker.describe`
+reports the release identity, and `scripts/engine-release.py inspect` reads a
+credential-free SSH inventory and emits an allowlisted per-unit drift report.
+
+CI installs the exact commit bundle into a temporary host layout and runs a
+Docker-backed canary with a pre-d8 state copy and local GitHub API fixture. It
+checks terminal success and exit code, snapshot digest, final success status,
+and an idempotent clean poll. Production cohort activation after a canary is
+not yet automated.

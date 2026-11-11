@@ -40,6 +40,7 @@ jobs:
           artifact=$(find "$artifact_dir" -maxdepth 1 -type f -name 'rookrunner-engine-*.tar.gz' -print -quit)
           test -n "$artifact"
           .venv/bin/python scripts/engine-release.py install "$artifact" --root "$host_root"
+          .venv/bin/python scripts/engine-release.py install "$artifact" --root "$host_root"
           .venv/bin/python scripts/engine-release.py activate "$GITHUB_SHA" --root "$host_root"
           echo "ROOKRUNNER_RELEASE_ROOT=$host_root" >> "$GITHUB_ENV"
 

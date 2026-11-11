@@ -14,6 +14,8 @@ class EngineFleetTests(unittest.TestCase):
         self.expected = {
             "source_commit": "a" * 40,
             "package_version": "0.1.19",
+            "source_archive_sha256": "b" * 64,
+            "source_tree_sha256": "c" * 64,
             "state_format_version": 1,
             "protocol_versions": [0, 1],
             "planner_capability_version": 12,
@@ -76,6 +78,12 @@ class EngineFleetTests(unittest.TestCase):
         self.inventory["units"][0]["token"] = "must-not-be-accepted"
         self.inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "unit fields"):
+            inspect_fleet(self.inventory_path)
+
+    def test_inventory_rejects_ssh_option_injection(self):
+        self.inventory["units"][0]["host"] = "-oProxyCommand=unsafe"
+        self.inventory_path.write_text(json.dumps(self.inventory), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "SSH destination"):
             inspect_fleet(self.inventory_path)
 
 

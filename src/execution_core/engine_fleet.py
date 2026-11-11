@@ -11,6 +11,8 @@ import subprocess
 _COHORT_FIELDS = {
     "source_commit",
     "package_version",
+    "source_archive_sha256",
+    "source_tree_sha256",
     "state_format_version",
     "protocol_versions",
     "planner_capability_version",
@@ -18,6 +20,8 @@ _COHORT_FIELDS = {
 }
 _UNIT_FIELDS = {"name", "host", "python", "engine_root", "state_dir", "cohort"}
 _COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SSH_DESTINATION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:\[\]-]*$")
 
 
 def _clean_text(value, *, name, max_length=256):
@@ -59,6 +63,9 @@ def _load_inventory(path):
         ):
             raise ValueError(f"fleet cohort {name} commit is invalid")
         _clean_text(expected["package_version"], name="package version")
+        for key in ("source_archive_sha256", "source_tree_sha256"):
+            if not isinstance(expected[key], str) or not _SHA256.fullmatch(expected[key]):
+                raise ValueError(f"fleet cohort {name} {key} is invalid")
         if (
             type(expected["state_format_version"]) is not int
             or expected["state_format_version"] < 1
@@ -83,7 +90,9 @@ def _load_inventory(path):
         if name in names:
             raise ValueError("fleet unit names must be unique")
         names.add(name)
-        _clean_text(unit["host"], name="SSH destination")
+        host = _clean_text(unit["host"], name="SSH destination")
+        if not _SSH_DESTINATION.fullmatch(host):
+            raise ValueError("fleet SSH destination contains unsupported characters")
         python = _clean_text(unit["python"], name="Python executable")
         if not python.startswith("/"):
             raise ValueError("fleet Python executable must be an absolute path")
@@ -123,6 +132,8 @@ def _inspect_unit(unit, expected, ssh=subprocess.run):
         )
         if result.returncode:
             raise ValueError("remote describe failed")
+        if len(result.stdout) > 64 * 1024:
+            raise ValueError("remote describe response is too large")
         envelope = json.loads(result.stdout)
         description = envelope.get("result")
         if not isinstance(description, dict) or "error" in envelope:
