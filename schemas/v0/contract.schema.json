@@ -2181,7 +2181,8 @@
             "post",
             "skip",
             "recorded",
-            "retry"
+            "retry",
+            "disposed"
           ]
         },
         "state": {
@@ -2230,7 +2231,28 @@
         "action",
         "state"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "disposed"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "error"
+              }
+            }
+          }
+        }
+      ]
     },
     "run.status.request": {
       "type": "object",
@@ -2297,6 +2319,10 @@
                 "cancelled",
                 "neutral"
               ]
+            },
+            "dispose": {
+              "const": "snapshot_unreadable",
+              "description": "Record missing terminal evidence separately from any GitHub status post."
             }
           },
           "required": [
@@ -2305,7 +2331,47 @@
             "status_sha",
             "context"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "dispose"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "record"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "checks"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "check_run_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "check_status"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "check_conclusion"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         }
       },
       "required": [

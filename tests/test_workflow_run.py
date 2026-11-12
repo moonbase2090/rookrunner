@@ -477,7 +477,7 @@ jobs:
             timeout=120,
         )
         elapsed = time.monotonic() - started
-        self.assertEqual(done["state"], "cancelled")
+        self.assertEqual(done["state"], "cancelled", done.get("error"))
         self.assertIsNone(done["exit_code"])
         self.assertIsNone(done["error"])
         self.assertFalse(done["cancel_requested"])

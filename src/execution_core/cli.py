@@ -658,6 +658,7 @@ def report_submissions(args):
         inspect_submission,
         list_submissions,
         load_poll_state,
+        migrate_submissions,
         recorded_status_states,
         repair_submission,
         retry_submission,
@@ -666,6 +667,23 @@ def report_submissions(args):
 
     directory = args.poll_state or args.state
     command = args.submissions_command
+    if command == "migrate":
+        try:
+            result = migrate_submissions(
+                directory,
+                caller=_poll_caller(args),
+                host=args.host if args.host is not None else args.ssh_host,
+                batch_size=args.batch_size,
+                dry_run=args.dry_run,
+                restart=args.restart,
+            )
+        except PollError as error:
+            print(
+                canonical({"error": {"kind": error.kind, "message": str(error)}}), file=sys.stderr
+            )
+            sys.exit(1)
+        print(canonical(result))
+        return
     if command == "capacity":
         try:
             result = capacity_report(
@@ -803,7 +821,7 @@ def report_status(args):
         print(canonical(reply))
         sys.exit(1)
     decision = reply["result"]
-    if decision["action"] == "skip":
+    if decision["action"] in {"skip", "disposed"}:
         print(canonical(reply))
         return
     if decision["action"] == "retry":
@@ -1291,6 +1309,20 @@ def main():
 
     _submission_parser("list", "list poll submissions that have no final commit status", key=False)
     _submission_parser("inspect", "show one poll submission and its worker status", key=True)
+    migration = submission_commands.add_parser(
+        "migrate", help="migrate one bounded batch of legacy reporting references; no GitHub posts"
+    )
+    migration.add_argument("--poll-state", help="directory holding poll.json; default is --state")
+    migration.add_argument("--dry-run", action="store_true", help="report only; write nothing")
+    migration.add_argument("--batch-size", type=int, default=100)
+    migration.add_argument("--ssh-host", help="worker SSH destination")
+    migration.add_argument("--remote-state", help="worker state directory on the SSH host")
+    migration.add_argument(
+        "--host", help="persisted placement name; default is the SSH destination"
+    )
+    migration.add_argument(
+        "--restart", action="store_true", help="rescan after a worker becomes reachable"
+    )
     capacity = _submission_parser(
         "capacity", "report persisted capacity waits for one repository", key=False
     )

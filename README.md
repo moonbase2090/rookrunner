@@ -59,6 +59,7 @@ python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions capacity --alert-after-seconds 900
+python3 -m execution_core --state "$STATE" submissions migrate --dry-run --batch-size 100
 ```
 
 `repair` posts the missing final status. For a setup failure that is
@@ -69,6 +70,12 @@ stable, and repeating the command does not create another run. The
 successor is snapshotted from the worker's repository checkout, so check
 out the tested commit there before a retry of a pull request run. A live `repair` or
 `abandon` also needs `--repository owner/name` and `--credential-file`.
+
+`submissions migrate` previews or applies one bounded batch of legacy reporting
+references. The first poll also runs this migration automatically. Missing
+terminal evidence gets a durable disposition and tombstone; active or
+unavailable runs remain intact. See [reporting and retention](docs/design/reporting-retention.md)
+for the migration contract and operator cleanup procedure.
 
 ## Project boundaries
 

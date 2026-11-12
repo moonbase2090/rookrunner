@@ -475,18 +475,26 @@ After reporting a `succeeded`, `failed`, or `cancelled` run, or after the worker
 confirms that report was already recorded, the poll removes the submission and
 retains its key in the `completed` mapping. That key prevents resubmission when
 the same event is rediscovered, including placement on a different worker. Older state files without `completed` start with no
-completed keys and retire their finished submissions during the next pass.
+completed keys. A versioned migration visits at most 100 legacy references per
+pass, records its cursor, and resumes after interruption. Terminal reporting
+waits until the migration has visited the reference. New references carry the
+current reporting version.
 Queued and running submissions, unreachable placements, and terminal posts that
 fail or hit a rate limit remain active for retry. Lost runs retain their original
 host assignment for reconciliation, even after their error status is recorded.
 
 A `succeeded`, `failed`, or `cancelled` run with an unreadable snapshot cannot
 produce a verified final status. The poll reports `snapshot_unreadable` once
-and retires the submission. Lost runs remain tracked even with an unreadable
+and retires the submission after the worker durably records a missing-evidence
+disposition. That disposition releases retention protection without claiming a
+GitHub status was posted. Lost runs remain tracked even with an unreadable
 snapshot. With a commit-status credential it first posts an `error` status; a failed post
 keeps the submission for retry. With App reporting it posts no check or status
 for that unreadable snapshot. Retirement records no success and does not remove
-the worker's run history. Completed keys are retained without expiry. Push and
+the worker's run history. The bounded legacy migration records a tombstone
+without posting to GitHub. Its dry-run and operational cleanup procedure are
+in [reporting and retention](reporting-retention.md). Completed keys are retained
+without expiry. Push and
 pull-request entries keep only the run id, event, status SHA, host when present, and retry base when present.
 Explicit retries consult this metadata and verify the worker run again; normal
 poll passes do not query retired runs. Older key-only lists are read as completed
@@ -549,7 +557,8 @@ browser rerun operation. Success still requires terminal `succeeded` and
 
 ## Final status for a poll submission
 
-Every submitted poll run reaches a final commit status. A setup failure
+Every reportable poll run reaches a final commit status. Missing evidence
+receives the durable disposition described above. A setup failure
 posts `error`. The poll pass posts that status and retires the
 submission. A neutral check uses conclusion `neutral` and still posts
 commit status `error`. Once `error` is recorded, `run.status` returns

@@ -36,6 +36,8 @@ _KEPT = (
     "tested_commit",
     "superseded",
     "abandoned",
+    "reporting_disposition",
+    "reporting_version",
 )
 
 
@@ -68,6 +70,25 @@ def load_poll_state(directory):
     ):
         raise PollError("STATE_INVALID", "poll state could not be read")
     return parsed
+
+
+def migrate_submissions(
+    directory, *, caller, host=None, batch_size=100, dry_run=False, restart=False
+):
+    """Migrate one batch without posting to GitHub or submitting execution."""
+
+    from .poll_migration import migrate_reporting
+
+    with _locked(directory, dry_run):
+        state = load_poll_state(directory)
+        return migrate_reporting(
+            state,
+            caller_for=lambda entry: caller if entry.get("host") == host else None,
+            save=lambda: _save_state(Path(directory) / "poll.json", state),
+            batch_size=batch_size,
+            dry_run=dry_run,
+            restart=restart,
+        )
 
 
 def capacity_report(directory, *, alert_after_seconds=None, now=None):
@@ -259,6 +280,16 @@ def repair_submission(directory, key, *, caller, recorded_states, post, dry_run=
         if final == "pending":
             raise PollError("INVALID_PARAMS", "run is not final")
         decision = caller("run.status", _status_params(entry))
+        if decision == {"action": "disposed", "state": "error"}:
+            if not dry_run and not retired:
+                _retire(
+                    directory,
+                    state,
+                    entry,
+                    reporting_disposition="snapshot_unreadable",
+                    reporting_version=1,
+                )
+            return _outcome(entry, "disposed", dry_run, state="error")
         if not isinstance(decision, dict) or decision.get("state") != final:
             raise PollError("WORKER_ERROR", "worker final state does not match the run")
         recorded = recorded_states(entry["run_id"], entry["context"], entry["status_sha"])
@@ -368,6 +399,7 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             "status_sha": entry["status_sha"],
             "context": entry["context"],
             "pending": False,
+            "reporting_version": 1,
         }
         if "host" in entry:
             claimed["host"] = entry["host"]
@@ -393,6 +425,10 @@ def _describe(entry, *, caller, recorded_states, retired):
     for field in ("run_id", "event", "context", "status_sha", "tested_commit"):
         if field in entry:
             row[field] = entry[field]
+    if entry.get("reporting_disposition") == "snapshot_unreadable":
+        row["reporting_disposition"] = "snapshot_unreadable"
+        row["final"] = "error"
+        return row
     if "run_id" not in entry or not _has_context(entry):
         row["stuck"] = True
         return row
@@ -415,7 +451,9 @@ def _describe(entry, *, caller, recorded_states, retired):
     row["status_action"] = decision.get("action")
     if isinstance(decision.get("state"), str):
         row["final"] = decision["state"]
-    row["stuck"] = decision.get("action") != "skip"
+    if decision.get("action") == "disposed":
+        row["reporting_disposition"] = "snapshot_unreadable"
+    row["stuck"] = decision.get("action") not in {"skip", "disposed"}
     return row
 
 

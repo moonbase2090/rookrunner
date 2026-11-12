@@ -817,6 +817,14 @@ class Worker:
                     conclusion TEXT,
                     PRIMARY KEY (run_id, context, sha)
                 );
+                CREATE TABLE IF NOT EXISTS reporting_dispositions (
+                    run_id TEXT NOT NULL,
+                    context TEXT NOT NULL,
+                    sha TEXT NOT NULL,
+                    tested_commit TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    PRIMARY KEY (run_id, context, sha)
+                );
             """)
             columns = {row[1] for row in self.db.execute("PRAGMA table_info(artifacts)")}
             if "name" not in columns:
@@ -1601,24 +1609,30 @@ class Worker:
             self._release_finished_attempt(record)
 
     def _folder_protected(self, record):
-        if record.get("state") not in TERMINAL:
+        if record.get("state") not in {"succeeded", "failed", "cancelled"}:
             return True
         if record.get("cleanup") != "confirmed_no_external_resources":
             return True
         # A workflow run's snapshot is read again when its terminal status is
-        # posted. Keep the folder until one such status is recorded.
+        # posted. Keep it until a final post or missing-evidence disposition.
         if (record.get("input") or {}).get("kind") == "workflow_job":
-            return not self._terminal_status_recorded(record["run_id"])
+            return not self._reporting_finished(record["run_id"])
         return False
 
-    def _terminal_status_recorded(self, run_id):
+    def _reporting_finished(self, run_id):
         states = sorted(TERMINAL_STATUS)
         marks = ", ".join("?" for _ in states)
         row = self.db.execute(
             f"SELECT 1 FROM status_posts WHERE run_id=? AND state IN ({marks}) LIMIT 1",
             (run_id, *states),
         ).fetchone()
-        return row is not None
+        return (
+            row is not None
+            or self.db.execute(
+                "SELECT 1 FROM reporting_dispositions WHERE run_id=? LIMIT 1", (run_id,)
+            ).fetchone()
+            is not None
+        )
 
     def _folder_names(self, records):
         snapshots = set()
@@ -2728,7 +2742,7 @@ class Worker:
         fields(
             p,
             ("run_id", "tested_commit", "status_sha", "context"),
-            ("record", "checks", "check_run_id", "check_status", "check_conclusion"),
+            ("record", "checks", "check_run_id", "check_status", "check_conclusion", "dispose"),
         )
         tested = p["tested_commit"]
         status_sha = p["status_sha"]
@@ -2753,7 +2767,46 @@ class Worker:
         record = self.get(p["run_id"])
         if record["input"].get("kind") != "workflow_job":
             raise Fault("STATUS_REFUSED", "run is not a workflow run")
-        manifest = self._status_manifest(record)
+        if "dispose" in p:
+            if p["dispose"] != "snapshot_unreadable" or any(
+                field in p
+                for field in (
+                    "record",
+                    "checks",
+                    "check_run_id",
+                    "check_status",
+                    "check_conclusion",
+                )
+            ):
+                invalid("disposal cannot be combined with a status post")
+            return self._dispose_reporting(record, tested, status_sha, context)
+        disposed = self.db.execute(
+            "SELECT tested_commit FROM reporting_dispositions WHERE run_id=? AND context=? AND sha=?",
+            (record["run_id"], context, status_sha),
+        ).fetchone()
+        if disposed is not None:
+            if disposed[0] != tested:
+                raise Fault("STATUS_REFUSED", "reporting disposition names another tested commit")
+            if "record" in p or recording_check:
+                raise Fault("STATUS_REFUSED", "reporting is already disposed")
+            return {"action": "disposed", "state": "error"}
+        try:
+            manifest = self._status_manifest(record)
+        except Fault as error:
+            # A final post can outlive its snapshot after retention. A lost
+            # poll checkpoint must only acknowledge that exact stored post.
+            final = github_state(record["state"], record["exit_code"], record.get("error"))
+            if (
+                error.kind == "STATUS_REFUSED"
+                and str(error) == "snapshot is not readable"
+                and "record" not in p
+                and not recording_check
+                and record["input"].get("tested_commit") == tested
+                and final in TERMINAL_STATUS
+                and self._status_recorded(record["run_id"], context, status_sha, final)
+            ):
+                return {"action": "skip", "state": final}
+            raise
         if manifest["dirty"] is not False:
             raise Fault("STATUS_REFUSED", "snapshot is dirty")
         included = manifest["included"]
@@ -2819,6 +2872,36 @@ class Worker:
                     (record["run_id"], context, status_sha, posted),
                 )
         return {"action": "recorded", "state": state}
+
+    def _dispose_reporting(self, record, tested, status_sha, context):
+        if record["state"] not in {"succeeded", "failed", "cancelled"}:
+            raise Fault("STATUS_REFUSED", "run is not safely terminal")
+        if record["input"].get("tested_commit") != tested:
+            raise Fault("STATUS_REFUSED", "submitted commit does not equal the tested commit")
+        final = github_state(record["state"], record["exit_code"], record.get("error"))
+        if self._status_recorded(record["run_id"], context, status_sha, final):
+            raise Fault("STATUS_REFUSED", "final status is already recorded")
+        existing = self.db.execute(
+            "SELECT tested_commit FROM reporting_dispositions WHERE run_id=? AND context=? AND sha=?",
+            (record["run_id"], context, status_sha),
+        ).fetchone()
+        if existing is not None:
+            if existing[0] != tested:
+                raise Fault("STATUS_REFUSED", "reporting disposition names another tested commit")
+            return {"action": "disposed", "state": "error"}
+        try:
+            self._status_manifest(record)
+        except Fault as error:
+            if error.kind != "STATUS_REFUSED" or str(error) != "snapshot is not readable":
+                raise
+        else:
+            raise Fault("STATUS_REFUSED", "snapshot is still readable")
+        with self.db:
+            self.db.execute(
+                "INSERT OR IGNORE INTO reporting_dispositions VALUES (?, ?, ?, ?, ?)",
+                (record["run_id"], context, status_sha, tested, "snapshot_unreadable"),
+            )
+        return {"action": "disposed", "state": "error"}
 
     def _accept_check_record(self, p, check_status, check_conclusion):
         identifier = integer(p["check_run_id"], 1, 2**63 - 1, "check_run_id")
@@ -3035,7 +3118,7 @@ def _oidc_settings(issuer, pull_requests, *, repository, state_dir, refs, pusher
 
 
 def _plan_protected(record, posted):
-    if record.get("state") not in TERMINAL:
+    if record.get("state") not in {"succeeded", "failed", "cancelled"}:
         return True
     if record.get("cleanup") != "confirmed_no_external_resources":
         return True
@@ -3161,6 +3244,10 @@ def storage_plan(state, disk_budget=None, finished_folder_count=None):
             )
         except sqlite3.Error:
             posted = set()
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reporting_dispositions'"
+        ).fetchone():
+            posted.update(row[0] for row in db.execute("SELECT run_id FROM reporting_dispositions"))
     finally:
         db.close()
     try:
