@@ -2790,7 +2790,23 @@ class Worker:
             if "record" in p or recording_check:
                 raise Fault("STATUS_REFUSED", "reporting is already disposed")
             return {"action": "disposed", "state": "error"}
-        manifest = self._status_manifest(record)
+        try:
+            manifest = self._status_manifest(record)
+        except Fault as error:
+            # A final post can outlive its snapshot after retention. A lost
+            # poll checkpoint must only acknowledge that exact stored post.
+            final = github_state(record["state"], record["exit_code"], record.get("error"))
+            if (
+                error.kind == "STATUS_REFUSED"
+                and str(error) == "snapshot is not readable"
+                and "record" not in p
+                and not recording_check
+                and record["input"].get("tested_commit") == tested
+                and final in TERMINAL_STATUS
+                and self._status_recorded(record["run_id"], context, status_sha, final)
+            ):
+                return {"action": "skip", "state": final}
+            raise
         if manifest["dirty"] is not False:
             raise Fault("STATUS_REFUSED", "snapshot is dirty")
         included = manifest["included"]
@@ -2862,6 +2878,9 @@ class Worker:
             raise Fault("STATUS_REFUSED", "run is not safely terminal")
         if record["input"].get("tested_commit") != tested:
             raise Fault("STATUS_REFUSED", "submitted commit does not equal the tested commit")
+        final = github_state(record["state"], record["exit_code"], record.get("error"))
+        if self._status_recorded(record["run_id"], context, status_sha, final):
+            raise Fault("STATUS_REFUSED", "final status is already recorded")
         existing = self.db.execute(
             "SELECT tested_commit FROM reporting_dispositions WHERE run_id=? AND context=? AND sha=?",
             (record["run_id"], context, status_sha),

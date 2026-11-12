@@ -19,6 +19,8 @@ snapshot cannot be verified. The response is `action: "disposed", state:
 "error"`. A disposal is idempotent and survives restart. It does not claim a
 GitHub status was posted, and it cannot manufacture a successful result.
 Later status decisions still return that disposal if snapshot files return.
+An exact final status that was recorded before pruning remains acknowledgeable
+after its snapshot is removed. That acknowledgement authorizes no new post.
 
 The worker stores dispositions separately from `status_posts`. Retention and
 `storage-plan --dry-run` consider both. Pruning still requires confirmed

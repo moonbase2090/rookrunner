@@ -218,6 +218,39 @@ class ReportingLifecycleTests(unittest.TestCase):
         self.assertEqual([], f.posts())
         self.assertEqual([], json.loads(self.state_path.read_text())["submissions"])
 
+    def test_recorded_final_status_survives_pruning_before_poll_checkpoint(self):
+        f = self.fixture
+        record = f.worker.get(self.run_id)
+        record.update(
+            state="succeeded",
+            exit_code=0,
+            cleanup="confirmed_no_external_resources",
+            finished_at=(datetime.now(UTC) - timedelta(days=91)).isoformat(),
+        )
+        with f.worker.db:
+            f.worker.save(record)
+        f.caller("run.status", {**self.params, "record": "success"})
+        f.worker._prune_finished_run_folders(0)
+        self.assertFalse((f.state / "snapshots" / record["input"]["snapshot_id"]).exists())
+        with self.assertRaisesRegex(PollError, "snapshot is not readable"):
+            f.caller("run.status", {**self.params, "tested_commit": "f" * 40})
+        self.entry.pop("reporting_version", None)
+        self.payload.pop("reporting_migration")
+        self.state_path.write_text(canonical(self.payload))
+        result = f.poll()
+        self.assertEqual(
+            [{"run_id": self.run_id, "state": "success", "action": "skip"}], result["statuses"]
+        )
+        self.assertEqual([], result["skipped"])
+        self.assertEqual([], f.posts())
+        self.assertEqual(
+            0, f.worker.db.execute("SELECT count(*) FROM reporting_dispositions").fetchone()[0]
+        )
+        saved = json.loads(self.state_path.read_text())
+        self.assertEqual([], saved["submissions"])
+        self.assertNotIn("reporting_disposition", saved["completed"][self.entry["key"]])
+        self.assertEqual([], f.poll()["statuses"])
+
     def test_unknown_migration_version_refuses_before_state_write(self):
         self.payload["reporting_migration"]["version"] = 99
         self.state_path.write_text(canonical(self.payload))
