@@ -144,6 +144,8 @@ from .diagnose import DiagnoseError, append_skip, record_skip
 from .reconcile import post_with_retry
 from .cron import cron_matches, parse_cron, schedule_decision
 from .plan import PlanError, workflow_job_ids, workflow_on
+from .poll_migration import VERSION as REPORTING_VERSION
+from .poll_migration import migrate_reporting, reporting_ready
 from .protocol import MAX_LIST_PAGE, Fault, canonical, is_integer, strict_json
 from .status import (
     StatusError,
@@ -1228,11 +1230,19 @@ class Pass:
             if isinstance(completed, list):
                 completed = {key: {} for key in completed}
             self.completed = self.state["completed"] = completed
+            if self.places is not None:
+                self._note_unknown_hosts()
+                self._connect_claimed()
+            migration = migrate_reporting(
+                self.state, caller_for=self._reporting_caller, save=self._checkpoint
+            )
+            self.result["migration"] = migration
+            for item in migration["items"]:
+                if item["disposition"] == "tombstoned":
+                    self._skip({"reason": "snapshot_unreadable", "run_id": item["run_id"]})
             if self.places is None:
                 self._expire_queued()
             else:
-                self._note_unknown_hosts()
-                self._connect_claimed()
                 self._expire_placed()
                 if not self._admit_capacity():
                     self._prepare_retry()
@@ -1293,6 +1303,12 @@ class Pass:
         self.retry_key = "poll-" + hashlib.sha256(("retry\0" + entry["key"]).encode()).hexdigest()
         if not retired:
             self._post_record(entry)
+
+    def _reporting_caller(self, entry):
+        if self.places is None:
+            return self.caller if self._claims_this_host(entry) else None
+        place = self._place_for(entry.get("host"))
+        return place["caller"] if place is not None and place.get("reachable") else None
 
     def _retry_matches(self, event, sha):
         return (
@@ -1495,6 +1511,8 @@ class Pass:
 
     def _expire_placed(self):
         for entry in self.state["submissions"]:
+            if not reporting_ready(self.state, entry):
+                continue
             if self._placed_caller(entry) is None or "run_id" not in entry:
                 continue
             record = self.caller("run.get", {"run_id": entry["run_id"]})
@@ -1505,6 +1523,8 @@ class Pass:
         for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
+            if not reporting_ready(self.state, entry):
+                continue
             if self._placed_caller(entry) is None or "run_id" not in entry:
                 continue
             self._post_record_guarded(entry)
@@ -2682,6 +2702,7 @@ class Pass:
                     "context": context,
                     "pending": False,
                 }
+                claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
                 self._checkpoint()
             if self.ssh_host is not None:
@@ -2724,6 +2745,7 @@ class Pass:
                     "context": context,
                     "pending": False,
                 }
+                claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
             else:
                 claimed["run_id"] = submitted["run_id"]
@@ -2835,6 +2857,7 @@ class Pass:
                 ),
             },
         }
+        claimed["reporting_version"] = REPORTING_VERSION
         self.state["submissions"].append(claimed)
         self._checkpoint()
         self._show_waiting(claimed)
@@ -3019,6 +3042,7 @@ class Pass:
                     "context": context,
                     "pending": False,
                 }
+                claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
                 self._checkpoint()
             params = self._placed_params(
@@ -3061,6 +3085,8 @@ class Pass:
 
     def _expire_queued(self):
         for entry in self.state["submissions"]:
+            if not reporting_ready(self.state, entry):
+                continue
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
             record = self.caller("run.get", {"run_id": entry["run_id"]})
@@ -3071,6 +3097,8 @@ class Pass:
         for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
+            if not reporting_ready(self.state, entry):
+                continue
             if not self._claims_this_host(entry) or "run_id" not in entry:
                 continue
             self._post_record_guarded(entry)
@@ -3081,6 +3109,8 @@ class Pass:
         try:
             if self._post_record(entry):
                 self._retire_submission(entry)
+                if entry.get("reporting_disposition") == "snapshot_unreadable":
+                    self._skip({"reason": "snapshot_unreadable", "run_id": entry["run_id"]})
         except (PollError, StatusError, OSError, ValueError) as exc:
             kind = getattr(exc, "kind", None) or (
                 "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
@@ -3101,10 +3131,12 @@ class Pass:
             "tested_commit",
             "superseded",
             "abandoned",
+            "reporting_disposition",
+            "reporting_version",
         )
         self.completed[key] = (
             {field: entry[field] for field in retry_fields if field in entry}
-            if entry.get("event") in {"push", "pull_request"}
+            if entry.get("event") in {"push", "pull_request"} or entry.get("reporting_disposition")
             else {}
         )
         self.state["submissions"] = [
@@ -3135,7 +3167,17 @@ class Pass:
             decision = self.caller("run.status", params)
         except PollError as exc:
             if exc.kind == "STATUS_REFUSED" and str(exc) == _SNAPSHOT_UNREADABLE:
-                self._skip({"reason": "snapshot_unreadable", "run_id": entry["run_id"]})
+                if not can_retire:
+                    return False
+                disposed = self.caller(
+                    "run.status", {**self._status_params(entry), "dispose": "snapshot_unreadable"}
+                )
+                if disposed != {"action": "disposed", "state": "error"}:
+                    raise PollError(
+                        "WORKER_ERROR", "worker did not record reporting disposal"
+                    ) from None
+                entry["reporting_disposition"] = "snapshot_unreadable"
+                entry["reporting_version"] = REPORTING_VERSION
                 if not self.app_key:
                     if not self._post(
                         entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
@@ -3146,6 +3188,10 @@ class Pass:
                     )
                 return can_retire
             raise
+        if decision["action"] == "disposed":
+            entry["reporting_disposition"] = "snapshot_unreadable"
+            entry["reporting_version"] = REPORTING_VERSION
+            return can_retire
         if decision["action"] == "skip":
             self.result["statuses"].append(
                 {"run_id": entry["run_id"], "state": decision["state"], "action": "skip"}
@@ -3199,7 +3245,7 @@ class Pass:
         if not self.app_key:
             return self._post(entry, "pending")
         decision = self.caller("run.status", {**self._status_params(entry), "checks": True})
-        if decision["action"] == "skip":
+        if decision["action"] in {"skip", "disposed"}:
             return True
         if decision["action"] != "post":
             raise PollError("WORKER_ERROR", "worker status decision was not post or skip")
@@ -3233,8 +3279,8 @@ class Pass:
                 return False
             raise
         if record:
-            # The worker refuses to record a run whose snapshot is unreadable,
-            # so the error post is not recorded and may repeat on a later pass.
+            # Missing evidence uses its separate reporting disposition instead
+            # of recording a status post that the worker cannot verify.
             self.caller(
                 "run.status",
                 {
