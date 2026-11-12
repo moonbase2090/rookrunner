@@ -218,6 +218,47 @@ class ReportingLifecycleTests(unittest.TestCase):
         self.assertEqual([], f.posts())
         self.assertEqual([], json.loads(self.state_path.read_text())["submissions"])
 
+    def test_failed_error_status_post_retries_before_recording_disposal(self):
+        f = self.fixture
+        record = f.worker.get(self.run_id)
+        record.update(state="failed", exit_code=1)
+        with f.worker.db:
+            f.worker.save(record)
+        shutil.rmtree(f.state / "snapshots" / record["input"]["snapshot_id"])
+
+        for response in (500, 429):
+            f.server.post_status = response
+            result = f.poll()
+            self.assertEqual([], result["statuses"])
+            saved = json.loads(self.state_path.read_text())
+            self.assertEqual([self.run_id], [row["run_id"] for row in saved["submissions"]])
+            self.assertEqual({}, saved["completed"])
+            self.assertNotIn("reporting_disposition", saved["submissions"][0])
+            self.assertEqual(
+                0, f.worker.db.execute("SELECT count(*) FROM reporting_dispositions").fetchone()[0]
+            )
+            if response == 500:
+                self.restart()
+
+        f.server.post_status = 201
+        f.server.requests.clear()
+        recovered = f.poll()
+        self.assertEqual(
+            [{"run_id": self.run_id, "state": "error", "action": "posted"}], recovered["statuses"]
+        )
+        saved = json.loads(self.state_path.read_text())
+        self.assertEqual([], saved["submissions"])
+        self.assertEqual(
+            "snapshot_unreadable", saved["completed"][self.entry["key"]]["reporting_disposition"]
+        )
+        self.assertEqual(
+            1, f.worker.db.execute("SELECT count(*) FROM reporting_dispositions").fetchone()[0]
+        )
+        repeated = f.poll()
+        self.assertEqual([], repeated["statuses"])
+        self.assertEqual([], repeated["skipped"])
+        self.assertEqual(["error"], [json.loads(row["body"])["state"] for row in f.posts()])
+
     def test_recorded_final_status_survives_pruning_before_poll_checkpoint(self):
         f = self.fixture
         record = f.worker.get(self.run_id)

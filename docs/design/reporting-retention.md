@@ -22,6 +22,11 @@ Later status decisions still return that disposal if snapshot files return.
 An exact final status that was recorded before pruning remains acknowledgeable
 after its snapshot is removed. That acknowledgement authorizes no new post.
 
+For credential-file reporting, the error status must post successfully before
+the worker records disposal. A failed post leaves the reference and worker
+disposition unchanged for retry. A crash after the post but before disposal may
+repeat the same error post.
+
 The worker stores dispositions separately from `status_posts`. Retention and
 `storage-plan --dry-run` consider both. Pruning still requires confirmed
 execution cleanup and follows the documented capacity policy: 90 days or the

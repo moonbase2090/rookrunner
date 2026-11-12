@@ -3169,6 +3169,14 @@ class Pass:
             if exc.kind == "STATUS_REFUSED" and str(exc) == _SNAPSHOT_UNREADABLE:
                 if not can_retire:
                     return False
+                if not self.app_key:
+                    if not self._post(
+                        entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
+                    ):
+                        return False
+                    self.result["statuses"].append(
+                        {"run_id": entry["run_id"], "state": "error", "action": "posted"}
+                    )
                 disposed = self.caller(
                     "run.status", {**self._status_params(entry), "dispose": "snapshot_unreadable"}
                 )
@@ -3178,14 +3186,6 @@ class Pass:
                     ) from None
                 entry["reporting_disposition"] = "snapshot_unreadable"
                 entry["reporting_version"] = REPORTING_VERSION
-                if not self.app_key:
-                    if not self._post(
-                        entry, "error", description=_SNAPSHOT_UNREADABLE, record=False
-                    ):
-                        return False
-                    self.result["statuses"].append(
-                        {"run_id": entry["run_id"], "state": "error", "action": "posted"}
-                    )
                 return can_retire
             raise
         if decision["action"] == "disposed":
