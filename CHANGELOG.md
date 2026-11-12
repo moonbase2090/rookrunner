@@ -1,11 +1,21 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.20. A published release section
+The current package version is 0.1.21. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.21] - 2026-11-12
+
+- `submissions migrate` previews or applies one bounded, resumable batch of
+  legacy snapshot reporting state. A terminal run whose snapshot is gone gets a
+  durable disposition and a poll tombstone, and active or still-reportable runs
+  are kept. An error status is posted before the evidence is disposed of, so a
+  failed post stays retryable. The first poll also runs the migration.
+- The package version is 0.1.21. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.20] - 2026-11-11
 
