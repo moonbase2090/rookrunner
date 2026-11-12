@@ -18,6 +18,8 @@ This file does not reconstruct earlier milestones.
   A worker refuses to start on a state format it does not know. Read-only fleet
   inspection reports each unit's engine, and a cohort rollout activates the
   remaining units only after the canary unit passes its gate.
+- `submissions retry` also accepts a cancelled run, not only a failed one.
+  Before, a retry that was cancelled could not be retried again.
 - The package version is 0.1.20. A wheel and a source tarball can be
   built from this tree. This change does not create a tag.
 
