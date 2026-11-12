@@ -28,7 +28,7 @@ class InstallDocTests(unittest.TestCase):
         self.assertIn("The repository unit omits the flag", PROSE)
 
     def test_developer_installs_the_wheel_without_pythonpath(self):
-        self.assertIn("execution_core-0.1.19-py3-none-any.whl", TEXT)
+        self.assertIn("execution_core-0.1.20-py3-none-any.whl", TEXT)
         self.assertIn("Do not set `PYTHONPATH`.", TEXT)
         self.assertIn("PyYAML 6.0.3", PROSE)
 
