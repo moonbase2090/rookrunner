@@ -20,7 +20,9 @@ RETRY_FIELDS = (
 
 
 def reporting_ready(state, entry):
-    migration = state.get("reporting_migration", {})
+    migration = state.get("reporting_migration")
+    if migration is None:
+        return True
     return (
         entry.get("reporting_version") == VERSION
         or migration.get("complete") is True
