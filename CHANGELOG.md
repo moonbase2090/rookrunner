@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `submissions retry` also accepts a cancelled run, not only a failed one. Before,
+  a retry that was cancelled could not be retried again.
+
 ## [0.1.19] - 2026-11-11
 
 - A job that waited for capacity is checked out again before it is submitted

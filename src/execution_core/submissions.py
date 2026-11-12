@@ -24,6 +24,7 @@ from .status import TERMINAL_STATUS, StatusError, github_state, require_reposito
 _MAX_BODY = 1024 * 1024
 _ACTIVE = frozenset({"queued", "running"})
 _RETRY_EVENTS = frozenset({"push", "pull_request"})
+_RETRY_STATES = frozenset({"failed", "cancelled"})
 _CAPACITY_KEY = re.compile(r"poll-[0-9a-f]{64}\Z")
 _KEPT = (
     "run_id",
@@ -327,7 +328,7 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
 
 
 def retry_submission(directory, key, *, caller, request_for, dry_run=False):
-    """Submit one successor of a failed push or pull request. Repeat is a no-op."""
+    """Submit one successor of a failed or cancelled push or pull request. Repeat is a no-op."""
 
     _require_key(key)
     with _locked(directory, dry_run):
@@ -339,8 +340,8 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
         if _successor_recorded(state, entry["key"], successor):
             return _outcome(entry, "already_retried", dry_run, submission_key=successor)
         record = _run(caller, entry)
-        if record.get("state") != "failed":
-            raise PollError("INVALID_PARAMS", "only a failed run can be retried")
+        if record.get("state") not in _RETRY_STATES:
+            raise PollError("INVALID_PARAMS", "only a failed or cancelled run can be retried")
         request = request_for(entry["run_id"])
         if not isinstance(request, dict) or request.get("version") != 1:
             raise PollError("INVALID_PARAMS", "retry requires a workflow submission")
