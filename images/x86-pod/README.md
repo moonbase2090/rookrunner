@@ -87,7 +87,7 @@ launch instances or create images:
 packer init images/x86-pod
 packer fmt -check images/x86-pod
 packer validate -syntax-only images/x86-pod
-PYTHONPATH=src:tests python3 -m unittest test_pod_payload
+PYTHONPATH=src:tests python3 -m unittest test_pod_payload test_pod_units
 bash -n images/x86-pod/install.sh images/x86-pod/verify-installed.sh
 ```
 
@@ -149,7 +149,7 @@ The accounts and services are separated as follows:
 | Service | Account | Access |
 | --- | --- | --- |
 | `pod-mux` | `podshell` | Private same-user pmux socket, PTYs, workspace, and caches |
-| `pod-agent` | `podshell`, group `pmuxbridge` | pmux commands, shell commands, and shared local agent socket |
+| `pod-agent` | `podshell`, group `podshell` | pmux commands, shell commands, and the local agent socket |
 | `pod-bridge` | `pmuxbridge` | Outbound hub session, local agent socket, and its systemd credential |
 
 The bridge receives the token through systemd `LoadCredential`. Its launcher
@@ -158,9 +158,26 @@ local agent has that credential. The shell account has no sudo or Docker group
 membership. Systemd hides the bridge credential directory from those services.
 The private pmux socket retains same-user authentication. Only the local agent
 shares a socket with the bridge. The agent must authenticate the bridge's UID.
-The agent unit selects the bridge group only for its own process. The shell
-account has no bridge-group membership. Shell sessions start through pmuxd,
-whose primary group remains `podshell`.
+The agent and every command it starts run as `podshell` with group `podshell`.
+No unit gives them the bridge group. The agent socket lives in `/run/pmux-pod`,
+which `systemd-tmpfiles` creates as `podshell:pmuxbridge`, mode `2770` (setgid).
+A socket bound in a setgid directory takes the directory's group, so the bridge
+account can connect while the agent keeps its own group. The agent still
+authenticates the bridge by its user ID. The shell account has no bridge-group
+membership, and shell sessions started through pmuxd keep group `podshell`.
+Commands run as `podshell` own that directory, so they can reach the agent socket
+as before; the credential is protected by file ownership and mode, not by the
+socket path.
+
+The `-` prefix on `InaccessiblePaths` for the credential and boot directories
+only skips the mask when a path does not exist at service start. The real
+protection is the root-only token file (`0400`), the `0700` systemd credential
+directory owned by the bridge account, and the shell account's lack of the bridge
+group. `credential-proof.sh` exercises those permissions in a Linux container and
+`test_pod_units` checks the unit files. Neither replaces the runtime acceptance
+below: `ProtectSystem=strict` on the bridge with a home under `/var`, and
+`RestrictAddressFamilies` without `AF_NETLINK`, are unproven until the bridge
+runs.
 
 Run `pod-verify` and `pod-cache-proof` as `podshell` before token injection.
 After injection, runtime acceptance must

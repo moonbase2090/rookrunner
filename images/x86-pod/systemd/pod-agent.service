@@ -5,22 +5,20 @@ After=pod-mux.service
 
 [Service]
 User=podshell
-Group=pmuxbridge
+Group=podshell
 WorkingDirectory=/work
 Environment=HOME=/home/podshell
 Environment=PMUX_SOCKET=/run/pmux-mux/pmux.sock
 Environment=PATH=/opt/pod/bin:/opt/pod/clients/bin:/opt/pod/toolchains/node/bin:/opt/pod/toolchains/rust/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CARGO_HOME=/var/cache/pod/cargo
 Environment=npm_config_cache=/var/cache/pod/npm
-RuntimeDirectory=pmux-pod
-RuntimeDirectoryMode=0750
 ExecStart=/opt/pod/bin/pmux-mcp --pod-agent --socket /run/pmux-pod/agent.sock --bridge-user pmuxbridge
 Restart=on-failure
 RestartSec=2
 UMask=0007
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/home/podshell /work /var/cache/pod
+ReadWritePaths=/home/podshell /work /var/cache/pod /run/pmux-pod
 PrivateTmp=yes
 InaccessiblePaths=-/run/credentials/pod-bridge.service -/run/pmux-pod-boot
 

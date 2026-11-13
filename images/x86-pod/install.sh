@@ -26,6 +26,8 @@ install -m 0755 /tmp/pod-image/cache-proof.sh /usr/local/libexec/pod-cache-proof
 install -m 0755 /tmp/pod-image/start-bridge.py /usr/local/libexec/pod-start-bridge
 install -m 0644 /tmp/pod-image/pod.env /etc/profile.d/pod.sh
 install -m 0644 /tmp/pod-image/systemd/*.service /etc/systemd/system/
+install -m 0644 /tmp/pod-image/tmpfiles/pod-agent.conf /etc/tmpfiles.d/pod-agent.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/pod-agent.conf
 cp -R /tmp/pod-image/cache-probes /opt/pod/cache-probes
 install -d -o podshell -g podshell -m 0755 /var/cache/pod /work
 cp -a /opt/pod/cache/. /var/cache/pod/
