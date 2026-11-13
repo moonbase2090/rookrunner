@@ -26,6 +26,9 @@ The first release targets one local worker. Later designs can extend execution t
 - [Install](docs/install.md): the 0.1.21 wheel and the host layout.
 - [Epics and stories](docs/planning/project-plan.md): Waypoint work breakdown, owners, and acceptance criteria.
 - [Review policy](REVIEW_POLICY.md): leaf vs trunk, proof, review and merge rules.
+- [x86 pod image definition](images/x86-pod/README.md): headless services,
+  tool inputs, dependency caches, and boot credential separation. Live baking
+  and hub integration remain separate acceptance steps.
 
 ## Schedule
 

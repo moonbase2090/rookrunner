@@ -1,0 +1,29 @@
+[Unit]
+Description=Headless terminal daemon
+After=local-fs.target
+
+[Service]
+User=podshell
+Group=podshell
+WorkingDirectory=/work
+Type=simple
+Environment=HOME=/home/podshell
+Environment=XDG_DATA_HOME=/home/podshell/.local/share
+Environment=PMUX_SOCKET=/run/pmux-mux/pmux.sock
+Environment=PATH=/opt/pod/bin:/opt/pod/clients/bin:/opt/pod/toolchains/node/bin:/opt/pod/toolchains/rust/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CARGO_HOME=/var/cache/pod/cargo
+Environment=npm_config_cache=/var/cache/pod/npm
+RuntimeDirectory=pmux-mux
+RuntimeDirectoryMode=0700
+ExecStart=/opt/pod/bin/pmuxd --socket /run/pmux-mux/pmux.sock -- /bin/bash -l
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/podshell /work /var/cache/pod
+PrivateTmp=yes
+InaccessiblePaths=-/run/credentials/pod-bridge.service -/run/pmux-pod-boot
+
+[Install]
+WantedBy=multi-user.target

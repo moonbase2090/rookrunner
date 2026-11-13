@@ -1,0 +1,28 @@
+[Unit]
+Description=Outbound pod hub session
+Wants=network-online.target
+Requires=pod-agent.service
+After=network-online.target pod-agent.service
+ConditionPathExists=/run/pmux-pod-boot/config.json
+
+[Service]
+User=pmuxbridge
+Group=pmuxbridge
+LoadCredential=pod-token:/run/pmux-pod-boot/pod-token
+ExecStart=/usr/local/libexec/pod-start-bridge
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+InaccessiblePaths=/run/pmux-mux
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
