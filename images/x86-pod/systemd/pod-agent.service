@@ -14,7 +14,7 @@ Environment=CARGO_HOME=/var/cache/pod/cargo
 Environment=npm_config_cache=/var/cache/pod/npm
 RuntimeDirectory=pmux-pod
 RuntimeDirectoryMode=0750
-ExecStart=/opt/pod/bin/pmux-mcp --pod-agent --socket /run/pmux-pod/agent.sock
+ExecStart=/opt/pod/bin/pmux-mcp --pod-agent --socket /run/pmux-pod/agent.sock --bridge-user pmuxbridge
 Restart=on-failure
 RestartSec=2
 UMask=0007

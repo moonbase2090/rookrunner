@@ -158,6 +158,9 @@ local agent has that credential. The shell account has no sudo or Docker group
 membership. Systemd hides the bridge credential directory from those services.
 The private pmux socket retains same-user authentication. Only the local agent
 shares a socket with the bridge. The agent must authenticate the bridge's UID.
+The agent unit selects the bridge group only for its own process. The shell
+account has no bridge-group membership. Shell sessions start through pmuxd,
+whose primary group remains `podshell`.
 
 Run `pod-verify` and `pod-cache-proof` as `podshell` before token injection.
 After injection, runtime acceptance must

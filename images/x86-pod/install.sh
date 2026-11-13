@@ -20,7 +20,6 @@ groupadd --system pmuxbridge
 useradd --system --gid pmuxbridge --home-dir /var/lib/pmuxbridge --create-home \
     --shell /usr/sbin/nologin pmuxbridge
 useradd --create-home --shell /bin/bash podshell
-usermod --append --groups pmuxbridge podshell
 install -d -o root -g root -m 0755 /usr/local/libexec /etc/pmux-pod
 install -m 0755 /tmp/pod-image/verify-installed.sh /usr/local/libexec/pod-verify
 install -m 0755 /tmp/pod-image/cache-proof.sh /usr/local/libexec/pod-cache-proof

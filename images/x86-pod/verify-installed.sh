@@ -5,6 +5,12 @@ test "$(uname -m)" = x86_64
 test "$(id -u podshell)" != 0
 test "$(id -u pmuxbridge)" != 0
 test "$(id -u podshell)" != "$(id -u pmuxbridge)"
+case " $(id -nG podshell) " in
+    *" sudo "*|*" docker "*|*" pmuxbridge "*)
+        echo 'The shell account must not belong to privileged or bridge groups.' >&2
+        exit 1
+        ;;
+esac
 for tool in pmux pmuxd pmux-mcp node npm rustc cargo gcc clang cmake git python3; do
     command -v "$tool" >/dev/null
 done
