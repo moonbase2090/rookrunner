@@ -544,6 +544,48 @@ class OutcomeTests(unittest.TestCase):
             self.assertEqual(saved[-1]["retry_of"], KEY)
             self.assertEqual(saved[-1]["run_id"], "run-next")
 
+    def test_retry_of_a_pull_request_run_carries_the_activity_type_of_its_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry(event="pull_request")])
+            submits = []
+            request = {
+                "version": 1,
+                "workflow": "w.yml",
+                "job_id": "test",
+                "event_name": "pull_request",
+                "event": {"action": "synchronize", "number": 158},
+            }
+
+            def caller(method, params):
+                if method == "run.get":
+                    return _setup_record()
+                submits.append(params)
+                return {"run_id": "run-next"}
+
+            retry_submission(directory, KEY, caller=caller, request_for=lambda _run_id: request)
+            self.assertEqual(submits[0]["activity_type"], "synchronize")
+
+    def test_retry_of_a_push_run_has_no_activity_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry()])
+            submits = []
+            request = {
+                "version": 1,
+                "workflow": "w.yml",
+                "job_id": "test",
+                "event_name": "push",
+                "event": {"after": TESTED, "action": "created"},
+            }
+
+            def caller(method, params):
+                if method == "run.get":
+                    return _setup_record()
+                submits.append(params)
+                return {"run_id": "run-next"}
+
+            retry_submission(directory, KEY, caller=caller, request_for=lambda _run_id: request)
+            self.assertNotIn("activity_type", submits[0])
+
     def test_retry_refuses_a_running_run(self):
         with tempfile.TemporaryDirectory() as directory:
             _write_poll(directory, [_entry(run_id="run-live")])
