@@ -1,15 +1,20 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.21. A published release section
+The current package version is 0.1.22. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-11-13
+
 - `submissions retry` of a pull request run keeps the activity type of the original
   event. Before, the worker refused the retry with `activity_type is required
   for pull_request`.
+
+- The package version is 0.1.22. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.21] - 2026-11-12
 
