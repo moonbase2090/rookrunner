@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+
 """Read public boot configuration and pass only the credential path to the bridge."""
 
 import json

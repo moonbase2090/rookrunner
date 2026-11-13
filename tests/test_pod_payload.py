@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 """Exercise the payload verifier and extractor with real archives and CLI calls."""
 
 import hashlib

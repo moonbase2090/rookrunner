@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
 """Verify and unpack an operator-produced, credential-free pod payload."""
 
 import argparse
