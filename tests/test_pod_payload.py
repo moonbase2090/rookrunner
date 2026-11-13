@@ -55,6 +55,7 @@ class PodPayloadTests(unittest.TestCase):
             ],
         }
         self.extra = []
+        self.modes = {}
 
     def bundle(self):
         self.files["manifest.json"] = json.dumps(self.manifest).encode()
@@ -63,7 +64,9 @@ class PodPayloadTests(unittest.TestCase):
             for name, data in self.files.items():
                 item = tarfile.TarInfo(name)
                 item.size = len(data)
-                item.mode = 0o755 if "/bin/" in name or name.startswith("bin/") else 0o644
+                item.mode = self.modes.get(
+                    name, 0o755 if "/bin/" in name or name.startswith("bin/") else 0o644
+                )
                 bundle.addfile(item, io.BytesIO(data))
             for item in self.extra:
                 bundle.addfile(item)
@@ -145,6 +148,36 @@ class PodPayloadTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.files[name] = b"fixture"
                 self.assert_rejected("payload rejected")
+                del self.files[name]
+
+    def test_rejects_setuid_and_setgid_modes(self):
+        for mode in (0o4755, 0o2755, 0o1755):
+            with self.subTest(mode=oct(mode)):
+                self.modes["clients/bin/client"] = mode
+                self.assert_rejected("privileged file mode in payload")
+
+    def test_rejects_a_duplicate_path(self):
+        again = tarfile.TarInfo("clients/bin/client")
+        again.size = 0
+        self.extra = [again]
+        self.assert_rejected("duplicate payload path")
+
+    def test_rejects_special_files_and_hard_links(self):
+        fifo = tarfile.TarInfo("clients/pipe")
+        fifo.type = tarfile.FIFOTYPE
+        self.extra = [fifo]
+        self.assert_rejected("special file or hard link")
+        hard = tarfile.TarInfo("clients/copy")
+        hard.type = tarfile.LNKTYPE
+        hard.linkname = "bin/pmux"
+        self.extra = [hard]
+        self.assert_rejected("special file or hard link")
+
+    def test_rejects_pem_and_key_files_by_name(self):
+        for name in ("clients/tls/server.pem", "clients/tls/server.key", "cache/id.key"):
+            with self.subTest(name=name):
+                self.files[name] = b"fixture"
+                self.assert_rejected("credential or machine-state path in payload")
                 del self.files[name]
 
     def test_rejects_traversal(self):
