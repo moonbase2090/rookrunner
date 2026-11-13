@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.20, 0.1.19, 0.1.18, 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.21, 0.1.20, 0.1.19, 0.1.18, 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -83,11 +83,19 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A step `continue-on-error` may be true", prose)
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
-    def test_0_1_20_is_the_current_version_and_its_entries_are_released(self):
-        self.assertIn("The current package version is 0.1.20.", TEXT)
-        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.20]", 1)[0]
-        self.assertNotIn("The package version is 0.1.20.", unreleased)
-        self.assertNotIn("`submissions capacity`", unreleased)
+    def test_0_1_21_is_the_current_version_and_its_entries_are_released(self):
+        self.assertIn("The current package version is 0.1.21.", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.21]", 1)[0]
+        self.assertNotIn("The package version is 0.1.21.", unreleased)
+        self.assertNotIn("`submissions migrate`", unreleased)
+        section = TEXT.split("## [0.1.21] - 2026-11-12", 1)[1].split("## [0.1.20]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.21.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("`submissions migrate` previews or applies one bounded", prose)
+        self.assertIn("so a failed post stays retryable", prose)
+
+    def test_0_1_20_records_the_current_changes(self):
         section = TEXT.split("## [0.1.20] - 2026-11-11", 1)[1].split("## [0.1.19]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.20.", prose)

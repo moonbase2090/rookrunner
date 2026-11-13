@@ -274,13 +274,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
             github = _repo(root, "release-version@example.invalid")
             shutil.copy(ROOT / ".github" / "release-version.sh", github / "release-version.sh")
             shutil.copy(
-                ROOT / ".github" / "v0.1.20-release-notes.md",
-                github / "v0.1.20-release-notes.md",
+                ROOT / ".github" / "v0.1.21-release-notes.md",
+                github / "v0.1.21-release-notes.md",
             )
-            (root / "pyproject.toml").write_text('[project]\nversion = "0.1.20"\n')
+            (root / "pyproject.toml").write_text('[project]\nversion = "0.1.21"\n')
             _git(root, "add", ".")
             _git(root, "commit", "--amend", "--no-edit")
-            _git(root, "tag", "v0.1.20")
+            _git(root, "tag", "v0.1.21")
 
             def run(tag):
                 env = os.environ.copy()
@@ -295,27 +295,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     check=False,
                 )
 
-            match = run("v0.1.20")
+            match = run("v0.1.21")
             self.assertEqual(match.returncode, 0, match.stderr)
             self.assertIn(
-                "RELEASE_WHEEL=execution_core-0.1.20-py3-none-any.whl",
+                "RELEASE_WHEEL=execution_core-0.1.21-py3-none-any.whl",
                 match.stdout,
             )
-            self.assertIn("RELEASE_SDIST=execution_core-0.1.20.tar.gz", match.stdout)
-            commit = _git(root, "rev-parse", "refs/tags/v0.1.20^{commit}").stdout.strip()
+            self.assertIn("RELEASE_SDIST=execution_core-0.1.21.tar.gz", match.stdout)
+            commit = _git(root, "rev-parse", "refs/tags/v0.1.21^{commit}").stdout.strip()
             self.assertIn(
-                f"RELEASE_ENGINE_BUNDLE=rookrunner-engine-0.1.20-{commit}.tar.gz",
+                f"RELEASE_ENGINE_BUNDLE=rookrunner-engine-0.1.21-{commit}.tar.gz",
                 match.stdout,
             )
-            self.assertIn("RELEASE_TITLE=v0.1.20 preview", match.stdout)
+            self.assertIn("RELEASE_TITLE=v0.1.21 preview", match.stdout)
             self.assertIn(
-                "RELEASE_NOTES=.github/v0.1.20-release-notes.md",
+                "RELEASE_NOTES=.github/v0.1.21-release-notes.md",
                 match.stdout,
             )
             mismatch = run("v0.1.0")
             self.assertNotEqual(mismatch.returncode, 0)
             self.assertIn("does not match", mismatch.stderr)
-            bare = run("0.1.20")
+            bare = run("0.1.21")
             self.assertNotEqual(bare.returncode, 0)
 
 
