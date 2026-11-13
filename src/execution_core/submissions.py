@@ -378,6 +378,7 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             raise PollError("INVALID_PARAMS", "retry requires a workflow submission")
         params = {field: request[field] for field in request if field != "submission_key"}
         params["submission_key"] = successor
+        _restore_activity_type(params)
         if dry_run:
             return _outcome(
                 entry,
@@ -413,6 +414,21 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             run_id=submitted["run_id"],
             workflow=request.get("workflow"),
         )
+
+
+def _restore_activity_type(params):
+    """Give a pull request retry the activity type the poll passed the first time.
+
+    The stored request keeps the event, not the separate activity type, and the
+    worker refuses a pull request submission without one.
+    """
+
+    if params.get("event_name") != "pull_request" or "activity_type" in params:
+        return
+    event = params.get("event")
+    action = event.get("action") if isinstance(event, dict) else None
+    if isinstance(action, str) and action:
+        params["activity_type"] = action
 
 
 def _describe(entry, *, caller, recorded_states, retired):

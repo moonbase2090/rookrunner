@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `submissions retry` of a pull request run keeps the activity type of the original
+  event. Before, the worker refused the retry with `activity_type is required
+  for pull_request`.
+
 ## [0.1.21] - 2026-11-12
 
 - `submissions migrate` previews or applies one bounded, resumable batch of
