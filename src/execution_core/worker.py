@@ -1398,6 +1398,7 @@ class Worker:
         try:
             reserve = usage(snapshot)
         except OSError as exc:
+            self._note_refusal("snapshot could not be measured", 0, exc)
             raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
         # The snapshot is already in the state total. Reserve another copy
         # for the attempt workspace. Do not delete the snapshot or other evidence.
@@ -2129,7 +2130,8 @@ class Worker:
 
         try:
             self._sync_state_files()
-        except OSError:
+        except OSError as exc:
+            self._note_refusal("state files could not be read", incoming, exc)
             return True
         if self._usage_fits(incoming):
             self._prune_finished_run_folders(0)
@@ -2139,14 +2141,37 @@ class Worker:
         # deleting finished folders or refusing the attempt.
         try:
             self.state_usage.refresh()
-        except OSError:
+        except OSError as exc:
+            self._note_refusal("state could not be measured", incoming, exc)
             return True
         if self._usage_fits(incoming):
             self._prune_finished_run_folders(0)
             return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
-        return not self._usage_fits(incoming)
+        refused = not self._usage_fits(incoming)
+        if refused:
+            self._note_refusal("state would exceed the budget", incoming)
+        return refused
+
+    def _note_refusal(self, reason, incoming, exc=None):
+        """Say on stderr why a storage refusal happened.
+
+        The refusal reply is the same text whether the budget is really
+        spent or the state could not be measured, so the operator log
+        carries the difference: the sizes, and the errno and path of a
+        measuring error.
+        """
+
+        detail = ""
+        if exc is not None:
+            detail = f" errno={exc.errno} path={exc.filename}"
+        print(  # noqa: T201  storage refusal reason on stderr
+            f"storage refused: {reason}; incoming={incoming}"
+            f" used={self.state_usage.total} budget={self.disk_budget}{detail}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _usage_fits(self, incoming):
         return self.state_usage.total + incoming <= self.disk_budget

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 
+import contextlib
 from datetime import datetime, timedelta, UTC
+import io
 import json
 import os
 from pathlib import Path
@@ -350,6 +352,52 @@ class DiskBudgetTests(unittest.TestCase):
                     worker.disk_budget = usage(worker.state) + 10
                     self.assertFalse(worker._over_budget(10))
                     self.assertTrue(worker._over_budget(11))
+            finally:
+                worker.close()
+
+    def test_a_refusal_for_an_unmeasurable_state_names_the_error_and_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state")
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                with worker.guard:
+                    worker.disk_budget = usage(worker.state) + 1_000_000
+                    broken = PermissionError(13, "denied", "/state/attempts/x/dir")
+                    stderr = io.StringIO()
+                    with (
+                        patch.object(worker, "_usage_fits", return_value=False),
+                        patch.object(worker.state_usage, "refresh", side_effect=broken),
+                        contextlib.redirect_stderr(stderr),
+                    ):
+                        self.assertTrue(worker._over_budget(5))
+                    line = stderr.getvalue()
+                    self.assertIn("state could not be measured", line)
+                    self.assertIn("errno=13", line)
+                    self.assertIn("path=/state/attempts/x/dir", line)
+                    self.assertIn("incoming=5", line)
+            finally:
+                worker.close()
+
+    def test_a_refusal_for_a_spent_budget_reports_the_sizes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state")
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                with worker.guard:
+                    used = usage(worker.state)
+                    worker.disk_budget = used + 10
+                    stderr = io.StringIO()
+                    with contextlib.redirect_stderr(stderr):
+                        self.assertTrue(worker._over_budget(11))
+                        self.assertFalse(worker._over_budget(10))
+                    lines = stderr.getvalue().splitlines()
+                    self.assertEqual(len(lines), 1)
+                    self.assertIn("state would exceed the budget", lines[0])
+                    self.assertIn("incoming=11", lines[0])
+                    self.assertIn(f"budget={used + 10}", lines[0])
+                    self.assertNotIn("errno", lines[0])
             finally:
                 worker.close()
 

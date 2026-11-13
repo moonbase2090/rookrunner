@@ -10,6 +10,10 @@ This file does not reconstruct earlier milestones.
 - `submissions retry` of a pull request run keeps the activity type of the original
   event. Before, the worker refused the retry with `activity_type is required
   for pull_request`.
+- The worker now writes one line to its error output whenever it refuses work for
+  storage: the reason, the incoming bytes, the bytes in use and the budget, plus the
+  error number and path when the state could not be measured. The refusal reply to
+  the caller is unchanged.
 
 ## [0.1.21] - 2026-11-12
 
