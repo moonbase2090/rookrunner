@@ -13,7 +13,7 @@ Install the wheel into a new virtual environment. The wheel depends on PyYAML
 
 ```sh
 uv venv
-uv pip install ./execution_core-0.1.21-py3-none-any.whl
+uv pip install ./execution_core-0.1.22-py3-none-any.whl
 python -m execution_core --help
 ```
 
