@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import contextlib
+import errno
 from datetime import datetime, timedelta, UTC
 import io
 import json
@@ -284,6 +285,39 @@ class DiskBudgetTests(unittest.TestCase):
                 self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 1)
                 self.assertEqual(evidence.read_bytes(), b"keep")
                 self.assertEqual(attempt.read_bytes(), b"keep-attempt")
+            finally:
+                worker.close()
+
+    def test_a_failing_diagnostic_sink_keeps_the_storage_refusal(self):
+        class FullSink:
+            def write(self, _text):
+                raise OSError(errno.ENOSPC, "no space left on device")
+
+            def flush(self):
+                raise OSError(errno.ENOSPC, "no space left on device")
+
+        class ClosedSink:
+            def write(self, _text):
+                raise ValueError("I/O operation on closed file")
+
+            def flush(self):
+                pass
+
+        for sink in (FullSink(), ClosedSink()):
+            with self.subTest(sink=type(sink).__name__):
+                self._assert_refusal_survives_sink(sink)
+
+    def _assert_refusal_survives_sink(self, sink):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state", disk_budget=0)
+            worker.execute_queue = worker.stop.wait
+            worker.start()
+            try:
+                with patch.object(sys, "stderr", sink):
+                    refused = _submit(worker, "fresh")
+                self.assertEqual(refused["error"]["data"]["kind"], "STORAGE_FULL")
+                self.assertEqual(refused["error"]["message"], _STORAGE_FULL)
+                self.assertEqual(worker.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
             finally:
                 worker.close()
 

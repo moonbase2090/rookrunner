@@ -2166,12 +2166,15 @@ class Worker:
         detail = ""
         if exc is not None:
             detail = f" errno={exc.errno} path={exc.filename}"
-        print(  # noqa: T201  storage refusal reason on stderr
-            f"storage refused: {reason}; incoming={incoming}"
-            f" used={self.state_usage.total} budget={self.disk_budget}{detail}",
-            file=sys.stderr,
-            flush=True,
-        )
+        # The line is only a diagnostic. A sink that is full or closed must
+        # not replace the refusal the caller is about to receive.
+        with contextlib.suppress(OSError, ValueError):
+            print(  # noqa: T201  storage refusal reason on stderr
+                f"storage refused: {reason}; incoming={incoming}"
+                f" used={self.state_usage.total} budget={self.disk_budget}{detail}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _usage_fits(self, incoming):
         return self.state_usage.total + incoming <= self.disk_budget
