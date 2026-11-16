@@ -498,11 +498,12 @@ _PR_WORKFLOW_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
 # in the legacy permission field; both are accepted.
 _PR_WORKFLOW_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _WORKFLOW_DIR = ".github/workflows/"
-_REVIEW_PAGES = 10
+_REVIEW_PAGES = 100
 _APP_REVIEW_WAITING = {
     "waiting": "waiting for exact-head approval by the reviewers App",
     "changes": "the reviewers App requested changes at this head",
     "unconfigured": "no reviewers App is configured",
+    "unreadable": "the pull request has more reviews than can be read",
 }
 _WORKFLOW_PATH_LIMIT = 5
 
@@ -2520,7 +2521,7 @@ class Pass:
         return False, None
 
     def _reviewers_verdict(self, number, head_sha):
-        """Return ``approved``, ``changes``, ``waiting``, ``unconfigured``, or ``_STOPPED``.
+        """Return ``approved``, ``changes``, ``waiting``, ``unconfigured``, ``unreadable``, or ``_STOPPED``.
 
         Only a review by the reviewers App, matched by numeric id, counts.
         It must name this exact head SHA and come from another account than
@@ -2549,8 +2550,11 @@ class Pass:
                     and review.get("state") in ("APPROVED", "CHANGES_REQUESTED")
                 ):
                     decision = review["state"]
-            if len(body) < 100 or page >= _REVIEW_PAGES:
+            if len(body) < 100:
                 break
+            if page >= _REVIEW_PAGES:
+                # A later review could still ask for changes. Do not guess.
+                return "unreadable"
             page += 1
         if decision == "APPROVED":
             return "approved"

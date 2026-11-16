@@ -2454,6 +2454,35 @@ class PollTests(unittest.TestCase):
         self.server.reviews[9] = [self._review(head), self._review(head, "CHANGES_REQUESTED")]
         self._assert_waits(head, "the reviewers App requested changes at this head")
 
+    def test_changes_requested_on_a_late_page_of_reviews_keeps_it_refused(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        noise = [self._review(head, "COMMENTED") for _ in range(1000)]
+        self.server.reviews[9] = [
+            self._review(head),
+            *noise,
+            self._review(head, "CHANGES_REQUESTED"),
+        ]
+        self._assert_waits(head, "the reviewers App requested changes at this head")
+        pages = [path for path in self._review_requests() if "page=11" in path]
+        self.assertEqual(len(pages), 1)
+
+    def test_an_approval_on_a_late_page_of_reviews_runs_the_head(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        noise = [self._review(head, "COMMENTED") for _ in range(1000)]
+        self.server.reviews[9] = [*noise, self._review(head)]
+        self._poll_app()
+        self.assertEqual(self.runs(), 1)
+
+    def test_more_reviews_than_the_page_limit_are_not_read_as_an_approval(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head)] + [
+            self._review(head, "COMMENTED") for _ in range(100 * 100)
+        ]
+        self._assert_waits(head, "the pull request has more reviews than can be read")
+
     def test_an_approval_after_changes_requested_runs_the_head(self):
         head = self._app_pull()
         self.worker.network = "bridge"
