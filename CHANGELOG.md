@@ -7,6 +7,12 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll pass no longer stops when one branch cannot be fetched or has moved since it
+  was listed. The pass skips that branch, records `branch_fetch_failed` or
+  `branch_tip_moved` in its skip list and diagnostic journal, keeps the branch list
+  unapplied so the next pass retries it, and goes on with the other branches and pull
+  requests. Before, the pass failed with `fetched branch tip does not match the listed
+  SHA`, which also hid a failed fetch.
 - The worker now writes one line to its error output whenever it refuses work for
   storage: the reason, the incoming bytes, the bytes in use and the budget, plus the
   error number and path when the state could not be measured. The refusal reply to
