@@ -398,7 +398,10 @@ of a run. Active runs and their snapshots are not deleted. SQLite full errors
 still roll back acceptance the same way. Runs and keys stay until the state
 directory is removed. The budget is worker
 configuration and is not a `worker.describe` limit. Charged bytes count
-each inode once. `worker.describe` includes `storage`: `budget_bytes`,
+each inode once. `worker.describe` includes `privileges`, a list naming each of `network`,
+`docker_socket`, `secrets`, `app_key`, `oidc`, `passwordless_sudo`, and
+`job_privileges` that the worker gives a job. An empty list is a sandbox. It
+also includes `storage`: `budget_bytes`,
 `used_bytes`, `low_watermark_bytes` (60 percent), `high_watermark_bytes`
 (80 percent), and `pressure` of `ok`, `low`, `high`, or `full`. Only
 `full` means another byte would not fit. `status.view` copies that object

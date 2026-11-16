@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A pull request from one configured GitHub App can change a workflow file. Poll flags
+  `--workflow-app-author-id` and `--workflow-app-reviewer-id` name the two App bot
+  accounts by numeric id. On a worker whose `worker.describe` reports no `privileges`
+  the pull request runs. On a privileged worker, or one that does not say, it runs only
+  after an approving review of the exact head from the reviewers App, and the pass after
+  that review runs it. Forks, other Apps, people and every commit identity check are
+  unchanged. `worker.describe` now lists `privileges`.
 - A poll pass no longer stops when one branch cannot be fetched or has moved since it
   was listed. The pass skips that branch, records `branch_fetch_failed` or
   `branch_tip_moved` in its skip list and diagnostic journal, keeps the branch list

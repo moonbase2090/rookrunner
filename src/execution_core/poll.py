@@ -498,6 +498,12 @@ _PR_WORKFLOW_ASSOCIATIONS = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
 # in the legacy permission field; both are accepted.
 _PR_WORKFLOW_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _WORKFLOW_DIR = ".github/workflows/"
+_REVIEW_PAGES = 10
+_APP_REVIEW_WAITING = {
+    "waiting": "waiting for exact-head approval by the reviewers App",
+    "changes": "the reviewers App requested changes at this head",
+    "unconfigured": "no reviewers App is configured",
+}
 _WORKFLOW_PATH_LIMIT = 5
 
 
@@ -532,6 +538,30 @@ def _allow_pr_workflow(values):
             raise PollError("INVALID_PARAMS", "allow-pr-workflow association is not accepted")
         allowed.append(item)
     return frozenset(allowed)
+
+
+def _app_id(value, name):
+    """Return a positive integer GitHub account id, or None when unset."""
+
+    if value is None:
+        return None
+    if not is_integer(value) or int(value) < 1:
+        raise PollError("INVALID_PARAMS", f"{name} must be a positive integer")
+    return int(value)
+
+
+def _bot_with_id(user, account_id):
+    """Return whether this user is a GitHub App bot with exactly this numeric id.
+
+    The login is never read, so a user who copies an App's name does not match.
+    """
+
+    return (
+        account_id is not None
+        and isinstance(user, dict)
+        and user.get("type") == "Bot"
+        and _integer_id(user.get("id")) == account_id
+    )
 
 
 def _workflow_definition(path, configured):
@@ -1145,6 +1175,8 @@ class Pass:
         allow_untrusted=(),
         allow_pr_workflow=(),
         allow_pr_workflow_sha=(),
+        workflow_app_author_id=None,
+        workflow_app_reviewer_id=None,
         key_dir=None,
         retry_failed=None,
     ):
@@ -1170,6 +1202,11 @@ class Pass:
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
         self.allow_pr_workflow_sha = _allow_pr_workflow_sha(allow_pr_workflow_sha)
+        self.workflow_app_author_id = _app_id(workflow_app_author_id, "workflow-app-author-id")
+        self.workflow_app_reviewer_id = _app_id(
+            workflow_app_reviewer_id, "workflow-app-reviewer-id"
+        )
+        self._privileged = None
         self.hold_branches = False
         self.hold_pulls = False
         self.remote_repository = None
@@ -2372,6 +2409,8 @@ class Pass:
             )
             self._clear_refusal_status(number, head_sha)
             return True, "pull request workflow change allowed by owner for this head SHA"
+        if kind == "changed" and self._is_workflow_app_pull(item):
+            return self._accept_app_workflow(number, head_sha, paths)
         association = _association(item.get("author_association"))
         allowed_by = association if association in self.allow_pr_workflow else None
         permission_checked = False
@@ -2413,6 +2452,111 @@ class Pass:
             return True, f"pull request workflow change allowed for {allowed_by}"
         self._record_workflow_refusal(number, head_sha, reason, entry, store=not permission_checked)
         return False, None
+
+    def _is_workflow_app_pull(self, item):
+        """Return whether the configured App opened this same-repository pull request."""
+
+        return _bot_with_id(item.get("user"), self.workflow_app_author_id) and _same_repository(
+            item.get("head"), item.get("base")
+        )
+
+    def _worker_privileged(self):
+        """Return whether a job on this worker may hold more than a sandbox.
+
+        A worker that does not say, a reply that is not a list, a place
+        setup, and a reply that fails all count as privileged.
+        """
+
+        if self._privileged is None:
+            self._privileged = True
+            if self.places is None:
+                try:
+                    described = self.caller("worker.describe", {})
+                except (PollError, OSError):
+                    described = None
+                held = described.get("privileges") if isinstance(described, dict) else None
+                self._privileged = not (isinstance(held, list) and held == [])
+        return self._privileged
+
+    def _accept_app_workflow(self, number, head_sha, paths):
+        """Decide a workflow change by the configured App. Same return as ``_accept_pr_workflow``.
+
+        A sandboxed worker runs it. A privileged one waits for an approving
+        review of this exact head by the reviewers App. The refusal is
+        asked again each pass, so the pass after the approval runs it.
+        """
+
+        shown = _show_paths(paths)
+        if not self._worker_privileged():
+            reason = (
+                "pull request workflow change allowed for the configured App on a sandboxed worker"
+            )
+            approved = True
+            message = f"{reason}: {shown}"
+        else:
+            verdict = self._reviewers_verdict(number, head_sha)
+            if verdict is _STOPPED:
+                return None, None
+            approved = verdict == "approved"
+            reason = "pull request workflow change allowed after the reviewers App approved this head SHA"
+            message = f"{reason}: {shown}"
+            if not approved:
+                message = (
+                    f"pull request changes a workflow file: {shown}; privileged worker, "
+                    + _APP_REVIEW_WAITING[verdict]
+                )
+        entry = {
+            "number": number,
+            "sha": head_sha,
+            "action": "allowed" if approved else "refused",
+            "reason": "workflow_changed",
+            "message": message,
+        }
+        if approved:
+            self.result["warnings"].append(entry)
+            self._clear_refusal_status(number, head_sha)
+            return True, reason
+        self._record_workflow_refusal(number, head_sha, "workflow_changed", entry)
+        return False, None
+
+    def _reviewers_verdict(self, number, head_sha):
+        """Return ``approved``, ``changes``, ``waiting``, ``unconfigured``, or ``_STOPPED``.
+
+        Only a review by the reviewers App, matched by numeric id, counts.
+        It must name this exact head SHA and come from another account than
+        the author. Comment and dismissed reviews are ignored. Of the rest,
+        the latest one decides.
+        """
+
+        if self.workflow_app_reviewer_id is None:
+            return "unconfigured"
+        decision = None
+        page = 1
+        while True:
+            body = self._array(
+                f"/repos/{self.repository}/pulls/{number}/reviews?per_page=100&page={page}"
+            )
+            if body is None:
+                return _STOPPED
+            for review in body:
+                if not isinstance(review, dict):
+                    raise PollError("API_REJECTED", "GitHub pull request reviews are not usable")
+                user = review.get("user")
+                if (
+                    _bot_with_id(user, self.workflow_app_reviewer_id)
+                    and _integer_id(user.get("id")) != self.workflow_app_author_id
+                    and review.get("commit_id") == head_sha
+                    and review.get("state") in ("APPROVED", "CHANGES_REQUESTED")
+                ):
+                    decision = review["state"]
+            if len(body) < 100 or page >= _REVIEW_PAGES:
+                break
+            page += 1
+        if decision == "APPROVED":
+            return "approved"
+        if decision == "CHANGES_REQUESTED":
+            return "changes"
+        return "waiting"
 
     def _pr_workflow_change(self, base_sha, head_sha, changed):
         if changed is None:
@@ -3440,6 +3584,8 @@ def poll_once(
     allow_untrusted=(),
     allow_pr_workflow=(),
     allow_pr_workflow_sha=(),
+    workflow_app_author_id=None,
+    workflow_app_reviewer_id=None,
     key_dir=None,
     retry_failed=None,
 ):
@@ -3464,6 +3610,8 @@ def poll_once(
         allow_untrusted=allow_untrusted,
         allow_pr_workflow=allow_pr_workflow,
         allow_pr_workflow_sha=allow_pr_workflow_sha,
+        workflow_app_author_id=workflow_app_author_id,
+        workflow_app_reviewer_id=workflow_app_reviewer_id,
         key_dir=key_dir,
         retry_failed=retry_failed,
     ).run()

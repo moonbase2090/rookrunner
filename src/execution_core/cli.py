@@ -454,6 +454,8 @@ def _run_poll(args, caller, mint, revoke, places=None):
             allow_untrusted=getattr(args, "allow_untrusted", ()) or (),
             allow_pr_workflow=getattr(args, "allow_pr_workflow", ()) or (),
             allow_pr_workflow_sha=getattr(args, "allow_pr_workflow_sha", ()) or (),
+            workflow_app_author_id=getattr(args, "workflow_app_author_id", None),
+            workflow_app_reviewer_id=getattr(args, "workflow_app_reviewer_id", None),
             key_dir=getattr(args, "key_dir", None),
             retry_failed=getattr(args, "retry_failed", None),
         )
@@ -1426,6 +1428,26 @@ def main():
             "association. With it, an author with another association runs "
             "when the repository reports write, maintain, or admin permission. "
             "Omit it to refuse those pull requests."
+        ),
+    )
+    poll.add_argument(
+        "--workflow-app-author-id",
+        type=int,
+        help=(
+            "numeric GitHub account id of the App bot whose same-repository pull "
+            "requests may change a workflow file. On a worker with no network, "
+            "docker socket, secrets, app key, oidc, sudo, or job privileges the "
+            "change runs. On any other worker it runs only after an approving "
+            "review of the exact head by --workflow-app-reviewer-id."
+        ),
+    )
+    poll.add_argument(
+        "--workflow-app-reviewer-id",
+        type=int,
+        help=(
+            "numeric GitHub account id of the reviewers App bot whose approval "
+            "of the exact head lets a privileged worker run the author App's "
+            "workflow change. It must differ from --workflow-app-author-id."
         ),
     )
     poll.add_argument(
