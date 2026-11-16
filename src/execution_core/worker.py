@@ -2382,6 +2382,29 @@ class Worker:
         self._sync_state_files()
         return record
 
+    def privileges(self):
+        """Name each privilege this worker gives a job. An empty list is a sandbox.
+
+        A pull-request trust decision reads this through ``worker.describe``.
+        """
+
+        held = []
+        if self.network != "none":
+            held.append("network")
+        if self.docker_socket:
+            held.append("docker_socket")
+        if self.secrets:
+            held.append("secrets")
+        if self.app_key is not None:
+            held.append("app_key")
+        if self.oidc is not None:
+            held.append("oidc")
+        if self.passwordless_sudo:
+            held.append("passwordless_sudo")
+        if self.job_privileges:
+            held.append("job_privileges")
+        return held
+
     def dispatch(self, method, p):
         if method == "worker.describe":
             fields(p)
@@ -2417,6 +2440,7 @@ class Worker:
                 },
                 "retention": "runs and submission keys retained indefinitely; terminal attempt directories removed",
                 "storage": self._storage_report(),
+                "privileges": self.privileges(),
             }
             if self.node24 is not None:
                 described["node24"] = {

@@ -166,6 +166,8 @@ class _Handler(BaseHTTPRequestHandler):
             kind = "pulls"
         elif "/pulls/" in path and path.endswith("/commits"):
             kind = "pull_commits"
+        elif "/pulls/" in path and path.endswith("/reviews"):
+            kind = "pull_reviews"
         elif "/collaborators/" in path and path.endswith("/permission"):
             kind = "permission"
         elif "/commits/" in path:
@@ -212,6 +214,16 @@ class _Handler(BaseHTTPRequestHandler):
             page = int(query.get("page", ["1"])[0])
             body = json.dumps(listed[(page - 1) * size : page * size]).encode()
             self._send(200, body, None, remaining)
+            return
+        if kind == "pull_reviews":
+            number = int(path.rsplit("/", 2)[-2])
+            listed = getattr(self.server, "reviews", {}).get(number, [])
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            size = int(query.get("per_page", ["30"])[0])
+            page = int(query.get("page", ["1"])[0])
+            self._send(
+                200, json.dumps(listed[(page - 1) * size : page * size]).encode(), None, remaining
+            )
             return
         if kind == "permission":
             login = urllib.parse.unquote(path.rsplit("/", 2)[-2])
@@ -349,6 +361,7 @@ class PollTests(unittest.TestCase):
         self.server.verified = set()
         self.server.permissions = {}
         self.server.pull_commits = {}
+        self.server.reviews = {}
         self.server.remote = self.remote
         self.server.etags = {"branches": "branches-1", "pulls": "pulls-1"}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -2322,6 +2335,306 @@ class PollTests(unittest.TestCase):
         self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
         self.assertEqual(self.runs(), 0)
         self.assertNotIn("# edited", (self.clone / ".github/workflows/check.yml").read_text())
+
+    AUTHOR_APP = 777
+    REVIEWER_APP = 888
+
+    def _app_pull(self, number=9, **user):
+        """Open a workflow-editing pull request authored by the agents App."""
+
+        _tip, head = self._open_feature(number, self._workflow_edit, association="NONE")
+        self.server.pulls[0]["user"] = {
+            "login": "agents[bot]",
+            "id": self.AUTHOR_APP,
+            "type": "Bot",
+            **user,
+        }
+        return head
+
+    def _review(self, head, state="APPROVED", user_id=None, login="reviewers[bot]", kind="Bot"):
+        return {
+            "state": state,
+            "commit_id": head,
+            "user": {
+                "login": login,
+                "id": self.REVIEWER_APP if user_id is None else user_id,
+                "type": kind,
+            },
+        }
+
+    def _poll_app(self, **extra):
+        return self.poll(
+            workflow_app_author_id=self.AUTHOR_APP,
+            workflow_app_reviewer_id=self.REVIEWER_APP,
+            **extra,
+        )
+
+    def _review_requests(self):
+        return [item["path"] for item in self.server.requests if "/reviews" in item["path"]]
+
+    def _edit_applied(self):
+        return "# edited" in (self.clone / ".github/workflows/check.yml").read_text()
+
+    def test_an_app_workflow_edit_runs_on_a_sandboxed_worker_without_a_review(self):
+        head = self._app_pull()
+        result = self._poll_app()
+        self.assertEqual(self.runs(), 1)
+        record = self.worker.get(result["submitted"][0]["run_id"])
+        self.assertIs(record["untrusted_override"], True)
+        self.assertEqual(
+            record["untrusted_reason"],
+            "pull request workflow change allowed for the configured App on a sandboxed worker",
+        )
+        self.assertEqual(
+            result["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "allowed",
+                    "reason": "workflow_changed",
+                    "message": (
+                        "pull request workflow change allowed for the configured App on a "
+                        "sandboxed worker: .github/workflows/check.yml"
+                    ),
+                }
+            ],
+        )
+        self.assertEqual(self._review_requests(), [])
+        self.assertTrue(self._edit_applied())
+
+    def test_an_app_workflow_edit_waits_on_a_privileged_worker_until_the_exact_head_is_approved(
+        self,
+    ):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        waiting = self._poll_app()
+        message = (
+            "pull request changes a workflow file: .github/workflows/check.yml; "
+            "privileged worker, waiting for exact-head approval by the reviewers App"
+        )
+        self._assert_workflow_refused(waiting, head, message)
+        self.assertFalse(self._edit_applied())
+        self.server.reviews[9] = [self._review(head)]
+        landed = self._poll_app()
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(landed["submitted"][0]["event"], "pull_request")
+        record = self.worker.get(landed["submitted"][0]["run_id"])
+        self.assertEqual(
+            record["untrusted_reason"],
+            "pull request workflow change allowed after the reviewers App approved this head SHA",
+        )
+        self.assertTrue(self._edit_applied())
+        trust = [
+            json.loads(item["body"])["state"]
+            for item in self.posts()
+            if json.loads(item["body"])["context"] == "rookrunner/trust"
+        ]
+        self.assertEqual(trust, ["failure", "success"])
+
+    def _assert_waits(self, head, wording):
+        refused = self._poll_app()
+        self._assert_workflow_refused(
+            refused,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml; "
+            "privileged worker, " + wording,
+        )
+        self.assertFalse(self._edit_applied())
+
+    def test_an_approval_of_an_older_head_does_not_admit_the_new_head(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review("1" * 40)]
+        self._assert_waits(head, "waiting for exact-head approval by the reviewers App")
+
+    def test_changes_requested_after_an_approval_at_the_head_keeps_it_refused(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head), self._review(head, "CHANGES_REQUESTED")]
+        self._assert_waits(head, "the reviewers App requested changes at this head")
+
+    def test_changes_requested_on_a_late_page_of_reviews_keeps_it_refused(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        noise = [self._review(head, "COMMENTED") for _ in range(1000)]
+        self.server.reviews[9] = [
+            self._review(head),
+            *noise,
+            self._review(head, "CHANGES_REQUESTED"),
+        ]
+        self._assert_waits(head, "the reviewers App requested changes at this head")
+        pages = [path for path in self._review_requests() if "page=11" in path]
+        self.assertEqual(len(pages), 1)
+
+    def test_an_approval_on_a_late_page_of_reviews_runs_the_head(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        noise = [self._review(head, "COMMENTED") for _ in range(1000)]
+        self.server.reviews[9] = [*noise, self._review(head)]
+        self._poll_app()
+        self.assertEqual(self.runs(), 1)
+
+    def test_more_reviews_than_the_page_limit_are_not_read_as_an_approval(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head)] + [
+            self._review(head, "COMMENTED") for _ in range(100 * 100)
+        ]
+        self._assert_waits(head, "the pull request has more reviews than can be read")
+
+    def test_an_approval_after_changes_requested_runs_the_head(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head, "CHANGES_REQUESTED"), self._review(head)]
+        self._poll_app()
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_dismissed_or_comment_review_does_not_approve(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head, "DISMISSED"), self._review(head, "COMMENTED")]
+        self._assert_waits(head, "waiting for exact-head approval by the reviewers App")
+
+    def test_an_approval_from_the_author_app_does_not_count(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head, user_id=self.AUTHOR_APP)]
+        self._assert_waits(head, "waiting for exact-head approval by the reviewers App")
+        # Even when the operator names the author App as its own reviewer.
+        self.poll(workflow_app_author_id=self.AUTHOR_APP, workflow_app_reviewer_id=self.AUTHOR_APP)
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_reviewer_that_copies_the_reviewers_login_is_not_the_reviewers_app(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [
+            self._review(head, user_id=4242),
+            self._review(head, kind="User"),
+        ]
+        self._assert_waits(head, "waiting for exact-head approval by the reviewers App")
+
+    def test_a_privileged_worker_without_a_configured_reviewers_app_refuses(self):
+        head = self._app_pull()
+        self.worker.network = "bridge"
+        self.server.reviews[9] = [self._review(head)]
+        refused = self.poll(workflow_app_author_id=self.AUTHOR_APP)
+        self._assert_workflow_refused(
+            refused,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml; "
+            "privileged worker, no reviewers App is configured",
+        )
+
+    def test_an_unknown_worker_privilege_is_treated_as_privileged(self):
+        head = self._app_pull()
+        calls = []
+
+        def caller(method, params):
+            result = self.caller(method, params)
+            if method == "worker.describe":
+                calls.append(method)
+                result = {key: value for key, value in result.items() if key != "privileges"}
+            return result
+
+        refused = poll_once(
+            repository="acme/demo",
+            clone=self.clone,
+            jobs=[JOB],
+            image=IMAGE,
+            credential_file=self.credential,
+            api_base=self.base,
+            state=self.state,
+            caller=caller,
+            workflow_app_author_id=self.AUTHOR_APP,
+            workflow_app_reviewer_id=self.REVIEWER_APP,
+        )
+        self.assertTrue(calls)
+        self._assert_workflow_refused(
+            refused,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml; "
+            "privileged worker, waiting for exact-head approval by the reviewers App",
+        )
+
+    def test_every_privilege_the_worker_holds_makes_it_privileged(self):
+        for name, value in (
+            ("passwordless_sudo", True),
+            ("job_privileges", True),
+            ("network", "bridge"),
+        ):
+            with self.subTest(name):
+                held = getattr(self.worker, name)
+                setattr(self.worker, name, value)
+                try:
+                    self.assertNotEqual(self.caller("worker.describe", {})["privileges"], [])
+                finally:
+                    setattr(self.worker, name, held)
+        self.assertEqual(self.caller("worker.describe", {})["privileges"], [])
+
+    def _assert_author_refused(self, **user):
+        head = self._app_pull(**user)
+        refused = self._poll_app()
+        self._assert_workflow_refused(
+            refused, head, "pull request changes a workflow file: .github/workflows/check.yml"
+        )
+        self.assertEqual(self._review_requests(), [])
+
+    def test_a_workflow_edit_from_another_app_stays_refused_on_a_sandbox(self):
+        self._assert_author_refused(id=9001)
+
+    def test_a_person_with_the_apps_id_and_a_copied_login_stays_refused(self):
+        self._assert_author_refused(type="User")
+
+    def test_the_app_path_is_off_without_a_configured_author_id(self):
+        head = self._app_pull()
+        refused = self.poll(workflow_app_reviewer_id=self.REVIEWER_APP)
+        self._assert_workflow_refused(
+            refused,
+            head,
+            "pull request changes a workflow file: .github/workflows/check.yml",
+        )
+
+    def test_an_app_pull_request_from_a_fork_never_runs(self):
+        self._app_pull()
+        self.server.pulls[0]["head"]["repo"] = {"id": 6000, "full_name": "fork/demo"}
+        self._poll_app()
+        self.assertEqual(self.runs(), 0)
+        self.assertFalse(self._edit_applied())
+
+    def test_an_app_workflow_edit_does_not_skip_the_commit_identity_check(self):
+        head = self._app_pull()
+        self.server.authors[head] = "outsider"
+        self.server.permissions = {"outsider": "read"}
+        self._poll_app()
+        self.assertEqual(self.runs(), 0)
+        self.assertFalse(self._edit_applied())
+
+    def test_the_poll_command_hands_the_app_ids_to_the_pass(self):
+        from execution_core.cli import _run_poll
+
+        self._app_pull()
+        args = SimpleNamespace(
+            repository="acme/demo",
+            clone=self.clone,
+            job=[JOB],
+            image=IMAGE,
+            credential_file=self.credential,
+            app_key=None,
+            api_base=self.base,
+            state=self.state,
+            workflow_app_author_id=self.AUTHOR_APP,
+            workflow_app_reviewer_id=self.REVIEWER_APP,
+        )
+        _run_poll(args, self.caller, None, None)
+        self.assertEqual(self.runs(), 1)
+
+    def test_the_app_ids_must_be_positive_integers(self):
+        for value in (0, -1, True, "777", 1.5):
+            for name in ("workflow_app_author_id", "workflow_app_reviewer_id"):
+                with self.subTest(name=name, value=value), self.assertRaises(PollError) as caught:
+                    self.poll(**{name: value})
+                self.assertEqual(caught.exception.kind, "INVALID_PARAMS")
 
     def test_allow_pr_workflow_sha_rejects_values_that_are_not_commit_shas(self):
         for value in ("main", "6192c3b", "A" * 40, ""):

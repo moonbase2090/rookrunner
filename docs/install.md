@@ -105,3 +105,23 @@ Cargo and pip need it. The repository unit omits the flag, so jobs have no
 egress until the host adds it. Do not copy a private key into a release tree or
 mount the Docker socket unless the operator explicitly starts the worker with
 `--docker-socket`.
+
+## Let an App change workflow files
+
+A pull request that changes a workflow file is refused unless the author is
+allowed by `--allow-pr-workflow`. To let one GitHub App open such pull
+requests, add its bot account's numeric user id to the poll command:
+
+```sh
+python -m execution_core --state <worker-state> poll ... \
+  --workflow-app-author-id <author-app-bot-id> \
+  --workflow-app-reviewer-id <reviewers-app-bot-id>
+```
+
+Find an id with `gh api users/<app-slug>%5Bbot%5D --jq .id`. On a worker
+with none of `--network bridge`, `--docker-socket`, `--secrets`, `--app-key`,
+`--oidc-issuer`, `--passwordless-sudo`, and `--job-privileges`, the pull
+request runs. On any other worker it runs only after the reviewers App
+approves the exact head SHA. The worker must be on an engine whose
+`worker.describe` reports `privileges`; an older engine counts as privileged.
+Neither id is stored, and omitting the author id leaves the rule off.

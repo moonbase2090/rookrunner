@@ -118,6 +118,27 @@ same way. The fetched merge commit is checked out only when its
 first parent is the listed base and its second parent is the listed
 head.
 
+A workflow-file change by one GitHub App can run without naming an
+association. Give the poll `--workflow-app-author-id` with the App bot
+account's numeric user id, and `--workflow-app-reviewer-id` with the
+reviewers App bot's numeric user id. Ids are compared as numbers. A login,
+including one that copies an App's name, grants nothing. Only a
+same-repository pull request whose author is a bot with the author id
+qualifies. A fork, another App and a person stay refused. The commit
+identity checks still apply to every commit. On a worker that reports no
+privileges in `worker.describe` (no `--network bridge`, `--docker-socket`,
+`--secrets`, `--app-key`, `--oidc-issuer`, `--passwordless-sudo`, or
+`--job-privileges`) the pull request runs. On any other worker it runs only
+when the reviewers App has an approving review of exactly the current head
+SHA. A later request for changes at that head, a dismissed review, a comment,
+a review of another head, and a review by the author App all do not count.
+The poll asks again on every pass, so the pass after the approval runs the
+pull request. A worker that does not report its privileges, a worker that
+cannot be asked, and a placed poll count as privileged. The refusal status
+says it is waiting for the approval. `--allow-untrusted` and
+`--allow-pr-workflow-sha` still override one exact head. The ids are poll
+flags and are not stored.
+
 Every engine call uses the Docker context named `default` unless
 `worker --docker-context` or `ROOKRUNNER_DOCKER_CONTEXT` names one.
 An inherited `DOCKER_CONTEXT` or `DOCKER_HOST` does not select the

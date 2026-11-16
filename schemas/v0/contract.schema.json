@@ -1537,6 +1537,21 @@
         "storage": {
           "$ref": "#/$defs/StorageReport"
         },
+        "privileges": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "network",
+              "docker_socket",
+              "secrets",
+              "app_key",
+              "oidc",
+              "passwordless_sudo",
+              "job_privileges"
+            ]
+          },
+          "uniqueItems": true
+        },
         "node24": {
           "type": "object",
           "properties": {
