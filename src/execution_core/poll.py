@@ -2058,7 +2058,14 @@ class Pass:
             return True
         fetched = _fetch_sha(self.clone, ref)
         if fetched != sha:
-            raise PollError("GIT_FAILED", "fetched branch tip does not match the listed SHA")
+            # One branch that cannot be fetched, or moved since it was listed,
+            # must not stop the pass for every other branch and pull request.
+            # Keep its tip unsaved and the branch list unapplied so a later
+            # pass retries it.
+            reason = "branch_fetch_failed" if fetched is None else "branch_tip_moved"
+            self._skip({"reason": reason, "ref": ref, "sha": sha})
+            self.hold_branches = True
+            return True
         _checkout(self.clone, sha)
         repo = self._repository_body()
         if repo is None:

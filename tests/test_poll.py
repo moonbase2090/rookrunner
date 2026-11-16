@@ -774,6 +774,58 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.submits[0]["event"]["before"], tip)
         self.assertEqual(self.submits[0]["event"]["after"], new)
 
+    def test_a_branch_that_cannot_be_fetched_does_not_stop_the_other_branches(self):
+        tip = self._tip()
+        self.server.branches = [
+            {"name": "gone", "commit": {"sha": tip}},
+            {"name": "main", "commit": {"sha": tip}},
+        ]
+        summary = self.poll()
+        self.assertEqual(len(summary["submitted"]), 1)
+        self.assertEqual(summary["submitted"][0]["ref"], "refs/heads/main")
+        self.assertIn(
+            {"reason": "branch_fetch_failed", "ref": "refs/heads/gone", "sha": tip},
+            summary["skipped"],
+        )
+        self.assertNotIn(
+            "refs/heads/gone", json.loads((self.state / "poll.json").read_text())["tips"]
+        )
+        self.assertNotIn("branches", json.loads((self.state / "poll.json").read_text())["etags"])
+
+    def test_a_branch_that_moved_after_it_was_listed_is_skipped_and_retried(self):
+        old = self._tip()
+        (self.seed / "moved.txt").write_text("moved\n")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "moved",
+        )
+        _git(self.seed, "push", "origin", "main")
+        new = self._tip()
+        self.assertNotEqual(old, new)
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        summary = self.poll()
+        self.assertEqual(summary["submitted"], [])
+        self.assertIn(
+            {"reason": "branch_tip_moved", "ref": "refs/heads/main", "sha": old},
+            summary["skipped"],
+        )
+        self.assertNotIn(
+            "refs/heads/main", json.loads((self.state / "poll.json").read_text())["tips"]
+        )
+        self.server.branches = [{"name": "main", "commit": {"sha": new}}]
+        again = self.poll()
+        self.assertEqual(len(again["submitted"]), 1)
+        self.assertEqual(
+            json.loads((self.state / "poll.json").read_text())["tips"]["refs/heads/main"], new
+        )
+
     def test_adjacent_terminal_runs_are_both_posted_locally(self):
         self._assert_adjacent_terminal_posts(placed=False)
 
