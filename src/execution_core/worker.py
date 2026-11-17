@@ -2192,9 +2192,13 @@ class Worker:
 
         try:
             used = self.state_usage.refresh()
-        except OSError:
+        except OSError as exc:
+            self._note_refusal("state could not be measured while a job ran", 0, exc)
             return True
-        return used > self.disk_budget
+        if used > self.disk_budget:
+            self._note_refusal("state exceeds the budget while a job ran", 0)
+            return True
+        return False
 
     def _sync_state_files(self):
         self.state_usage.sync_files(

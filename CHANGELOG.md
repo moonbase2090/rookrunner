@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The disk measurement no longer fails when a file or directory is deleted while the
+  state tree is being walked. A job container removing its temporary files in an attempt
+  workspace could make the walk raise, and the worker then reported `worker storage is
+  full` for a disk that was nearly empty. An entry that vanished is not charged. An
+  unreadable entry and a missing root still fail the measurement. The worker also now
+  writes the `storage refused:` line when the measurement fails or the budget is spent
+  while a job runs, as it already did at admission.
 - A pull request from one configured GitHub App can change a workflow file. Poll flags
   `--workflow-app-author-id` and `--workflow-app-reviewer-id` name the two App bot
   accounts by numeric id. On a worker whose `worker.describe` reports no `privileges`

@@ -106,18 +106,39 @@ class _Scan:
 
 
 def _scan(root):
+    """Walk ``root`` and charge each inode once.
+
+    A job can delete files in a tree while it is walked. An entry that
+    vanishes between being listed and being measured is not charged. The
+    root itself must exist, and any other error is raised.
+    """
+
     root = Path(root)
     scan = _Scan()
     seen_directories = set()
     pending = [root]
     while pending:
         current = pending.pop()
-        info = current.lstat()
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            if current == root:
+                raise
+            continue
         ident = (info.st_dev, info.st_ino)
         is_dir = stat.S_ISDIR(info.st_mode)
         if is_dir and ident in seen_directories:
             scan.links[ident] = scan.links.get(ident, 0) + 1
             continue
+        children = []
+        if is_dir:
+            try:
+                with os.scandir(current) as entries:
+                    children = [Path(entry.path) for entry in entries]
+            except (FileNotFoundError, NotADirectoryError):
+                if current == root:
+                    raise
+                continue
         if ident not in scan.sizes:
             scan.sizes[ident] = info.st_size
             scan.links[ident] = 1
@@ -129,8 +150,7 @@ def _scan(root):
             continue
         seen_directories.add(ident)
         scan.directories[current] = info.st_size
-        with os.scandir(current) as entries:
-            pending.extend(Path(entry.path) for entry in entries)
+        pending.extend(children)
     return scan
 
 
