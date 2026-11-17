@@ -92,6 +92,106 @@ class DiskUsageTests(unittest.TestCase):
             self.assertLess(measured, 50000)
             self.assertGreaterEqual(measured, link.lstat().st_size + dir_link.lstat().st_size)
 
+    def _scan_with_a_race(self, directory, victims, before=False):
+        """Measure a tree while another party deletes ``victims`` from it.
+
+        The deletion happens right after the directory is listed, or right
+        before it is opened with ``before``, as a job container removing
+        its temporary files would.
+        """
+
+        real = os.scandir
+        busy = []
+
+        def racing(path):
+            if busy or not isinstance(path, str | os.PathLike):
+                return real(path)
+            busy.append(True)
+            try:
+                if before and Path(path) in victims:
+                    shutil.rmtree(path)
+                    return real(path)
+                listing = list(real(path))
+                for victim in victims:
+                    if Path(path) == victim.parent and victim.exists():
+                        if victim.is_dir():
+                            shutil.rmtree(victim)
+                        else:
+                            victim.unlink()
+                return contextlib.nullcontext(listing)
+            finally:
+                busy.pop()
+
+        with patch("execution_core.disk.os.scandir", racing):
+            return usage(directory)
+
+    def test_a_file_deleted_after_it_was_listed_is_not_charged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            kept = root / "kept"
+            kept.write_bytes(b"abc")
+            gone = root / "gone"
+            gone.write_bytes(b"x" * 5000)
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "inner").write_bytes(b"y" * 5000)
+            # The root is measured before the deletions change its own size.
+            listed_size = root.lstat().st_size
+            measured = self._scan_with_a_race(root, [gone, sub])
+            self.assertEqual(measured, listed_size + kept.lstat().st_size)
+
+    def test_a_directory_deleted_before_it_was_opened_is_not_charged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            kept = root / "kept"
+            kept.write_bytes(b"abc")
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "inner").write_bytes(b"y" * 5000)
+            listed_size = root.lstat().st_size
+            measured = self._scan_with_a_race(root, [sub], before=True)
+            self.assertEqual(measured, listed_size + kept.lstat().st_size)
+
+    def test_a_directory_replaced_by_a_file_before_it_was_opened_is_charged_as_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "inner").write_bytes(b"y" * 5000)
+            real = os.scandir
+
+            def replacing(path):
+                if isinstance(path, str | os.PathLike) and Path(path) == sub and sub.is_dir():
+                    shutil.rmtree(sub)
+                    sub.write_bytes(b"z" * 7000)
+                return real(path)
+
+            listed_size = root.lstat().st_size
+            with patch("execution_core.disk.os.scandir", replacing):
+                measured = usage(root)
+            self.assertEqual(measured, listed_size + 7000)
+
+    def test_a_missing_state_root_is_still_an_error(self):
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(FileNotFoundError):
+            usage(Path(directory) / "absent")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read an unreadable directory")
+    def test_an_unreadable_directory_still_fails_the_measurement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            locked = root / "locked"
+            locked.mkdir(parents=True)
+            (locked / "f").write_bytes(b"x")
+            locked.chmod(0)
+            try:
+                with self.assertRaises(PermissionError):
+                    usage(root)
+            finally:
+                locked.chmod(0o700)
+
     def test_state_usage_tracks_additions_removals_and_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "state"
@@ -410,6 +510,47 @@ class DiskBudgetTests(unittest.TestCase):
                     self.assertIn("errno=13", line)
                     self.assertIn("path=/state/attempts/x/dir", line)
                     self.assertIn("incoming=5", line)
+            finally:
+                worker.close()
+
+    def test_a_failed_runtime_measurement_names_the_error_and_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state")
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                broken = PermissionError(13, "denied", "/state/attempts/x/dir")
+                stderr = io.StringIO()
+                with (
+                    patch.object(worker.state_usage, "refresh", side_effect=broken),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    self.assertTrue(worker._runtime_over_budget())
+                line = stderr.getvalue()
+                self.assertIn("while a job ran", line)
+                self.assertIn("errno=13", line)
+                self.assertIn("path=/state/attempts/x/dir", line)
+            finally:
+                worker.close()
+
+    def test_a_spent_budget_while_a_job_runs_is_reported_and_a_fit_is_silent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(directory, Path(directory) / "state")
+            worker.execute_queue = lambda: worker.stop.wait()
+            worker.start()
+            try:
+                used = usage(worker.state)
+                worker.disk_budget = used + 1_000_000
+                quiet = io.StringIO()
+                with contextlib.redirect_stderr(quiet):
+                    self.assertFalse(worker._runtime_over_budget())
+                self.assertEqual(quiet.getvalue(), "")
+                worker.disk_budget = used - 1
+                loud = io.StringIO()
+                with contextlib.redirect_stderr(loud):
+                    self.assertTrue(worker._runtime_over_budget())
+                self.assertIn("state exceeds the budget while a job ran", loud.getvalue())
+                self.assertIn(f"budget={used - 1}", loud.getvalue())
             finally:
                 worker.close()
 
