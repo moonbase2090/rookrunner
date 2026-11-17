@@ -154,6 +154,26 @@ class DiskUsageTests(unittest.TestCase):
             measured = self._scan_with_a_race(root, [sub], before=True)
             self.assertEqual(measured, listed_size + kept.lstat().st_size)
 
+    def test_a_directory_replaced_by_a_file_before_it_was_opened_is_charged_as_the_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "inner").write_bytes(b"y" * 5000)
+            real = os.scandir
+
+            def replacing(path):
+                if isinstance(path, str | os.PathLike) and Path(path) == sub and sub.is_dir():
+                    shutil.rmtree(sub)
+                    sub.write_bytes(b"z" * 7000)
+                return real(path)
+
+            listed_size = root.lstat().st_size
+            with patch("execution_core.disk.os.scandir", replacing):
+                measured = usage(root)
+            self.assertEqual(measured, listed_size + 7000)
+
     def test_a_missing_state_root_is_still_an_error(self):
         with tempfile.TemporaryDirectory() as directory, self.assertRaises(FileNotFoundError):
             usage(Path(directory) / "absent")

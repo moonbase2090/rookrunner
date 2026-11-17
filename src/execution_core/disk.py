@@ -109,13 +109,15 @@ def _scan(root):
     """Walk ``root`` and charge each inode once.
 
     A job can delete files in a tree while it is walked. An entry that
-    vanishes between being listed and being measured is not charged. The
-    root itself must exist, and any other error is raised.
+    vanishes between being listed and being measured is not charged, and a
+    directory replaced by a file is measured again as that file. The root
+    itself must exist, and any other error is raised.
     """
 
     root = Path(root)
     scan = _Scan()
     seen_directories = set()
+    remeasured = set()
     pending = [root]
     while pending:
         current = pending.pop()
@@ -135,9 +137,17 @@ def _scan(root):
             try:
                 with os.scandir(current) as entries:
                     children = [Path(entry.path) for entry in entries]
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError:
                 if current == root:
                     raise
+                continue
+            except NotADirectoryError:
+                # Replaced by a file after it was measured. Measure what is
+                # there now, once. A second failure is raised.
+                if current == root or current in remeasured:
+                    raise
+                remeasured.add(current)
+                pending.append(current)
                 continue
         if ident not in scan.sizes:
             scan.sizes[ident] = info.st_size
