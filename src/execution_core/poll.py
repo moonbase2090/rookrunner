@@ -3550,13 +3550,50 @@ def _load_state(path, repository):
     return parsed
 
 
+_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+def _fit_state(payload):
+    """Encode the state so that _load_state can read it back.
+
+    The state is only read back up to _MAX_BODY bytes. A state written over
+    that size fails every later pass, so shrink it first. The only thing
+    dropped is the completed record of a commit that no open pull request, tip,
+    submission, refusal or status still names; nothing polls such a commit
+    again. If that is not enough, raise before writing so the last readable
+    state stays in place.
+    """
+
+    blob = (canonical(payload) + "\n").encode()
+    if len(blob) <= _MAX_BODY:
+        return blob
+    completed = payload.get("completed")
+    if isinstance(completed, dict):
+        live = set()
+        for name, value in payload.items():
+            if name != "completed":
+                live.update(_COMMIT.findall(canonical(value)))
+        # In place: the running pass holds this same dict.
+        for key in [
+            key
+            for key, meta in completed.items()
+            if not isinstance(meta, dict)
+            or (meta.get("status_sha") not in live and meta.get("tested_commit") not in live)
+        ]:
+            del completed[key]
+        blob = (canonical(payload) + "\n").encode()
+    if len(blob) > _MAX_BODY:
+        raise PollError("STATE_INVALID", "poll state is over the size limit")
+    return blob
+
+
 def _save_state(path, payload):
     if path.is_symlink():
         raise PollError("STATE_INVALID", "poll state must not be a symlink")
     temporary = path.with_name(".poll.json.preparing")
     if temporary.is_symlink():
         raise PollError("STATE_INVALID", "poll state must not be a symlink")
-    blob = (canonical(payload) + "\n").encode()
+    blob = _fit_state(payload)
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     except OSError:

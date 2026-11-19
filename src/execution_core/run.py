@@ -3255,9 +3255,7 @@ def run_job(
                             resolved_inputs = _resolve_call_inputs(
                                 job["call"]["inputs"],
                                 passed_values,
-                                lambda explicit,
-                                call_workflow=job["call"]["workflow"],
-                                cancelled=cancelled: (
+                                lambda explicit, call_workflow=job["call"]["workflow"], cancelled=cancelled: (
                                     _expression_values(
                                         event,
                                         call_workflow,
