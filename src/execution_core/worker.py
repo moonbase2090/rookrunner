@@ -1185,8 +1185,10 @@ class Worker:
                         if kind == "workflow_job":
                             lease = ContainerLease()
                             lease.blocked_names = self._blocked_container_names()
-                            lease.reserve = lambda name, attempt_id=attempt_id: (
-                                self._write_ownership(attempt_id, name)
+                            lease.reserve = (
+                                lambda name, attempt_id=attempt_id: self._write_ownership(
+                                    attempt_id, name
+                                )
                             )
                             lease.unreserve = lambda attempt_id=attempt_id: self._delete_ownership(
                                 attempt_id
