@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll pass can no longer write a state file that the next pass cannot read. The state
+  is read back up to 1 MiB, but it was saved with no size check, so a busy repository's
+  record of completed jobs could pass the limit and make every later pass fail with
+  `poll state could not be read`. Before a save would go over the limit, the engine now
+  drops the completed record of any commit that no open pull request, tip, submission,
+  refusal or status still names. If the state still does not fit, the save fails with a
+  clear error and leaves the last readable file in place.
 - The disk measurement no longer fails when a file or directory is deleted while the
   state tree is being walked. A job container removing its temporary files in an attempt
   workspace could make the walk raise, and the worker then reported `worker storage is
