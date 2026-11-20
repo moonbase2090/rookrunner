@@ -846,6 +846,64 @@ class PollTests(unittest.TestCase):
         self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
         self.assertEqual(self.submits[0]["event"]["after"], second)
 
+    def test_a_truncated_branch_list_leaves_its_prefix_and_cache_unapplied(self):
+        old = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        self.poll()
+        saved = json.loads((self.state / "poll.json").read_text())
+        names = [f"a-{number:04d}" for number in range(2000)]
+        saved["tips"].update({f"refs/heads/{name}": old for name in names})
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        new = self._commit_on_main("truncated-branches.txt")
+        _git(self.seed, "push", "origin", f"HEAD:refs/heads/{names[0]}")
+        self.server.branches = [
+            {"name": name, "commit": {"sha": new if number == 0 else old}}
+            for number, name in enumerate(names)
+        ] + [{"name": "main", "commit": {"sha": new}}]
+        self.server.etags["branches"] = "branches-2"
+        self.submits.clear()
+
+        summary = self.poll()
+
+        self.assertIn({"reason": "list_truncated", "list": "branches"}, summary["skipped"])
+        self.assertEqual(summary["submitted"], [])
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.runs(), 1)
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after["tips"], saved["tips"])
+        self.assertEqual(after["etags"], saved["etags"])
+
+    def test_a_truncated_pull_list_leaves_its_prefix_and_cache_unapplied(self):
+        self.poll()
+        base, head = self._open_feature(
+            2001, lambda seed: (seed / "truncated-pulls.txt").write_text("feature\n")
+        )
+        item = self.server.pulls[0]
+        merge = self._tip("refs/pull/2001/merge")
+        saved = json.loads((self.state / "poll.json").read_text())
+        saved["pulls"] = {
+            str(number): {"head": head, "base": base, "merge": merge, "commits": "trusted"}
+            for number in range(1, 2001)
+        }
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        self.server.pulls = [
+            item,
+            *[
+                {**item, "number": number, "head": {**item["head"], "ref": f"feature-{number}"}}
+                for number in range(2000, 0, -1)
+            ],
+        ]
+
+        summary = self.poll()
+
+        self.assertIn({"reason": "list_truncated", "list": "pulls"}, summary["skipped"])
+        self.assertEqual(summary["submitted"], [])
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.runs(), 0)
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after["pulls"], saved["pulls"])
+        self.assertEqual(after["etags"], saved["etags"])
+
     def test_a_validator_saved_before_the_paging_flag_still_reads_every_page(self):
         old = self._tip()
         self.server.branches = [{"name": "main", "commit": {"sha": old}}]
@@ -1632,6 +1690,46 @@ class PollTests(unittest.TestCase):
         )
         self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
         self.assertEqual(self.runs(), 1)
+
+    def _invalid_branch(self, name, text):
+        _git(self.seed, "checkout", "-b", name)
+        (self.seed / ".github/workflows/check.yml").write_text(text)
+        self._commit_all(f"invalid {name}")
+        _git(self.seed, "push", "origin", name)
+        _git(self.seed, "checkout", "main")
+        return self._tip(f"refs/heads/{name}")
+
+    def test_a_branch_whose_workflow_yaml_cannot_be_parsed_skips_it_and_the_pass_continues(self):
+        main = self._tip()
+        broken = self._invalid_branch("broken", WORKFLOW + "      - run: echo a: b: c\n")
+        self.server.branches = [
+            {"name": "broken", "commit": {"sha": broken}},
+            {"name": "main", "commit": {"sha": main}},
+        ]
+        result = self.poll()
+        self.assertFalse(result["stopped"])
+        self.assertEqual([item["reason"] for item in result["skipped"]], ["workflow_invalid"])
+        self.assertEqual(result["skipped"][0]["ref"], "refs/heads/broken")
+        self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_branch_where_another_job_is_rejected_skips_it_and_the_pass_continues(self):
+        main = self._tip()
+        other = self._invalid_branch(
+            "other-job",
+            WORKFLOW
+            + "  other:\n    if: ${{ secrets.TOKEN != '' }}\n    runs-on: ubuntu-latest\n"
+            + "    steps:\n      - run: echo hi\n",
+        )
+        self.server.branches = [
+            {"name": "main", "commit": {"sha": main}},
+            {"name": "other-job", "commit": {"sha": other}},
+        ]
+        result = self.poll()
+        self.assertFalse(result["stopped"])
+        self.assertEqual([item["reason"] for item in result["skipped"]], ["workflow_invalid"])
+        self.assertEqual(result["skipped"][0]["ref"], "refs/heads/other-job")
+        self.assertEqual([item["ref"] for item in result["submitted"]], ["refs/heads/main"])
 
     def test_a_workflow_file_that_is_not_regular_still_stops_the_pass(self):
         main = self._tip()
@@ -3723,15 +3821,23 @@ class PollTests(unittest.TestCase):
 
 
 class AbsentReasonTests(unittest.TestCase):
-    def test_a_rejection_names_only_the_configured_job(self):
+    def test_a_planner_rejection_of_any_job_or_the_yaml_skips_the_configured_job(self):
         named = PollError("INVALID_PARAMS", "jobs.check.if: context is not available: secrets")
-        other = PollError("INVALID_PARAMS", "jobs.other.if: context is not available: secrets")
-        prefix = PollError("INVALID_PARAMS", "jobs.checker.if: context is not available: secrets")
-        refused = PollError("WORKER_ERROR", "jobs.check.if: context is not available: secrets")
+        other = PollError("INVALID_PARAMS", "jobs.other.env.PGPORT must be a string")
+        colon = PollError("INVALID_PARAMS", "jobs.other: needs names an unknown job")
+        yaml_text = PollError("INVALID_PARAMS", "workflow YAML is not accepted")
         self.assertEqual(_absent_reason(named, "check"), "workflow_invalid")
-        self.assertIsNone(_absent_reason(other, "check"))
-        self.assertIsNone(_absent_reason(prefix, "check"))
+        self.assertEqual(_absent_reason(other, "check"), "workflow_invalid")
+        self.assertEqual(_absent_reason(colon, "check"), "workflow_invalid")
+        self.assertEqual(_absent_reason(yaml_text, "check"), "workflow_invalid")
+
+    def test_other_errors_still_stop_the_pass(self):
+        refused = PollError("WORKER_ERROR", "jobs.check.if: context is not available: secrets")
+        unrelated = PollError("INVALID_PARAMS", "place is not accepted")
+        loose = PollError("INVALID_PARAMS", "the jobs.check list is not accepted")
         self.assertIsNone(_absent_reason(refused, "check"))
+        self.assertIsNone(_absent_reason(unrelated, "check"))
+        self.assertIsNone(_absent_reason(loose, "check"))
 
 
 class AllowlistTests(unittest.TestCase):
