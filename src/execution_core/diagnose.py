@@ -81,7 +81,7 @@ SKIP_DETAILS = {
     "merge_ref_absent": "pull request merge ref was absent",
     "workflow_absent": "workflow file is not in the tested commit",
     "job_absent": "configured job is not in the workflow",
-    "workflow_invalid": "workflow rejected the configured job",
+    "workflow_invalid": "workflow file was rejected, so the configured job cannot run",
     "no_host": "run was not admitted because no worker place had room",
     "snapshot_unreadable": "snapshot could not be read for the final status",
     "not_triggered": "workflow on did not match this event",
