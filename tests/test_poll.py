@@ -846,6 +846,64 @@ class PollTests(unittest.TestCase):
         self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
         self.assertEqual(self.submits[0]["event"]["after"], second)
 
+    def test_a_truncated_branch_list_leaves_its_prefix_and_cache_unapplied(self):
+        old = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        self.poll()
+        saved = json.loads((self.state / "poll.json").read_text())
+        names = [f"a-{number:04d}" for number in range(2000)]
+        saved["tips"].update({f"refs/heads/{name}": old for name in names})
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        new = self._commit_on_main("truncated-branches.txt")
+        _git(self.seed, "push", "origin", f"HEAD:refs/heads/{names[0]}")
+        self.server.branches = [
+            {"name": name, "commit": {"sha": new if number == 0 else old}}
+            for number, name in enumerate(names)
+        ] + [{"name": "main", "commit": {"sha": new}}]
+        self.server.etags["branches"] = "branches-2"
+        self.submits.clear()
+
+        summary = self.poll()
+
+        self.assertIn({"reason": "list_truncated", "list": "branches"}, summary["skipped"])
+        self.assertEqual(summary["submitted"], [])
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.runs(), 1)
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after["tips"], saved["tips"])
+        self.assertEqual(after["etags"], saved["etags"])
+
+    def test_a_truncated_pull_list_leaves_its_prefix_and_cache_unapplied(self):
+        self.poll()
+        base, head = self._open_feature(
+            2001, lambda seed: (seed / "truncated-pulls.txt").write_text("feature\n")
+        )
+        item = self.server.pulls[0]
+        merge = self._tip("refs/pull/2001/merge")
+        saved = json.loads((self.state / "poll.json").read_text())
+        saved["pulls"] = {
+            str(number): {"head": head, "base": base, "merge": merge, "commits": "trusted"}
+            for number in range(1, 2001)
+        }
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        self.server.pulls = [
+            item,
+            *[
+                {**item, "number": number, "head": {**item["head"], "ref": f"feature-{number}"}}
+                for number in range(2000, 0, -1)
+            ],
+        ]
+
+        summary = self.poll()
+
+        self.assertIn({"reason": "list_truncated", "list": "pulls"}, summary["skipped"])
+        self.assertEqual(summary["submitted"], [])
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.runs(), 0)
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after["pulls"], saved["pulls"])
+        self.assertEqual(after["etags"], saved["etags"])
+
     def test_a_branch_that_cannot_be_fetched_does_not_stop_the_other_branches(self):
         tip = self._tip()
         self.server.branches = [

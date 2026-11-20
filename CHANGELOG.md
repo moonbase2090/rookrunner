@@ -7,6 +7,9 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- When a branch or pull request list reaches the 20-page bound, the poll leaves
+  that list unapplied and keeps its previous cache. It no longer submits items
+  from the truncated prefix or advances their recorded tips.
 - The poll now reads every page of the branch and pull request lists. It asked for one
   page of 100, so once a repository had more than 100 branches the ones sorting after
   the first 100 names, `main` among them, were never polled and got no push runs. A

@@ -1894,7 +1894,7 @@ class Pass:
         while len(items) == page * PAGE_SIZE:
             if page == _MAX_LIST_PAGES:
                 self._skip({"reason": "list_truncated", "list": kind})
-                break
+                return None
             page += 1
             more = self._list(kind, f"{path}&page={page}", conditional=False)
             if more is None:
