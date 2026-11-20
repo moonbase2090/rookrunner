@@ -177,6 +177,7 @@ _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 # The worker's plan error when the workflow at that commit has no such job.
 _JOB_ABSENT = "no selected job"
+_YAML_REJECTED = "workflow YAML is not accepted"
 _SNAPSHOT_UNREADABLE = "snapshot is not readable"
 _SIGNOFF_CONTEXT = "rookrunner/signoff"
 _TRUST_CONTEXT = "rookrunner/trust"
@@ -401,10 +402,13 @@ def _absent_reason(exc, job_id):
 
     A workflow file that is not tracked is ``workflow_absent``. A workflow
     whose jobs do not include the configured job, as on a branch that
-    predates that job, is ``job_absent``. A job the planner rejects is
-    ``workflow_invalid`` when the rejection names that job by its path,
-    ``jobs.<job_id>.`` or ``jobs.<job_id>:``. Each skips that one job, and
-    the pass continues. Any other error is None and still stops the pass.
+    predates that job, is ``job_absent``. A workflow the planner rejects is
+    ``workflow_invalid``: the planner reads every job in the file, so a
+    rejection that names any job as ``jobs.<id>.`` or ``jobs.<id>:``, or
+    YAML it cannot parse, means this file cannot run the configured job
+    either. Each skips that one job, and the pass continues, so one bad
+    branch does not stop the others. Any other error is None and still
+    stops the pass.
     """
 
     if exc.kind != "INVALID_PARAMS":
@@ -414,8 +418,7 @@ def _absent_reason(exc, job_id):
         return "workflow_absent"
     if text == _JOB_ABSENT:
         return "job_absent"
-    prefix = f"jobs.{job_id}"
-    if text.startswith((prefix + ".", prefix + ":")):
+    if text == _YAML_REJECTED or re.match(r"jobs\.[^.:\s]+[.:]", text):
         return "workflow_invalid"
     return None
 

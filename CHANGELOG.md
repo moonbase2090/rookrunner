@@ -10,6 +10,12 @@ This file does not reconstruct earlier milestones.
 - When a branch or pull request list reaches the 20-page bound, the poll leaves
   that list unapplied and keeps its previous cache. It no longer submits items
   from the truncated prefix or advances their recorded tips.
+- One branch whose workflow file the planner rejects no longer stops the whole poll pass.
+  The planner reads every job in a file, so a rejection that names any job, or YAML it
+  cannot parse, means the configured job cannot run at that commit. That job is now
+  skipped with `workflow_invalid`, as a rejection naming the configured job already was,
+  and the pass goes on to the other branches and pull requests. Any other error still
+  stops the pass.
 - The poll now reads every page of the branch and pull request lists. It asked for one
   page of 100, so once a repository had more than 100 branches the ones sorting after
   the first 100 names, `main` among them, were never polled and got no push runs. A
