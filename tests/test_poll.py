@@ -821,7 +821,7 @@ class PollTests(unittest.TestCase):
         self.poll()
         fillers = self._a_hundred_known_branches_before_main(old)
         new = self._commit_on_main("second-page.txt")
-        self.server.branches = fillers + [{"name": "main", "commit": {"sha": new}}]
+        self.server.branches = [*fillers, {"name": "main", "commit": {"sha": new}}]
         self.server.etags["branches"] = "branches-2"
         self.submits.clear()
         summary = self.poll()
@@ -835,12 +835,12 @@ class PollTests(unittest.TestCase):
         self.poll()
         fillers = self._a_hundred_known_branches_before_main(old)
         first = self._commit_on_main("second-page-1.txt")
-        self.server.branches = fillers + [{"name": "main", "commit": {"sha": first}}]
+        self.server.branches = [*fillers, {"name": "main", "commit": {"sha": first}}]
         self.server.etags["branches"] = "branches-2"
         self.poll()
         # The first page keeps its validator while only the second page changes.
         second = self._commit_on_main("second-page-2.txt")
-        self.server.branches = fillers + [{"name": "main", "commit": {"sha": second}}]
+        self.server.branches = [*fillers, {"name": "main", "commit": {"sha": second}}]
         self.submits.clear()
         summary = self.poll()
         self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
