@@ -7,6 +7,12 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The poll now reads every page of the branch and pull request lists. It asked for one
+  page of 100, so once a repository had more than 100 branches the ones sorting after
+  the first 100 names, `main` among them, were never polled and got no push runs. A
+  list that spans pages is read in full on every pass, because a page's validator does
+  not change when a later page does; a list that fits on one page is still read with its
+  stored validator. Nothing from a list is applied unless every page was read.
 - A poll pass can no longer write a state file that the next pass cannot read. The state
   is read back up to 1 MiB, but it was saved with no size check, so a busy repository's
   record of completed jobs could pass the limit and make every later pass fail with

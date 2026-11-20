@@ -168,6 +168,7 @@ QUEUE_LIMIT = timedelta(hours=24)
 # One response page. GitHub's maximum page size is 100.
 # https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
 PAGE_SIZE = 100
+_MAX_LIST_PAGES = 20
 # Local bounds. They are not GitHub limits.
 _GET_TIMEOUT_SECONDS = 10
 _GIT_TIMEOUT_SECONDS = 30
@@ -1845,7 +1846,7 @@ class Pass:
             self._checkpoint()
         return self._signoff(number, head_sha, base_sha, item)
 
-    def _list(self, kind, path):
+    def _list(self, kind, path, conditional=True):
         """Return (body, etag) when a new list should be applied.
 
         A 304 keeps the stored validator. A list whose rate-limit header
@@ -1858,7 +1859,9 @@ class Pass:
         listed = _get_json(
             self.api_base,
             path,
-            None if self.retry_entry is not None else self.state["etags"].get(kind),
+            None
+            if self.retry_entry is not None or not conditional
+            else self.state["etags"].get(kind),
             self.list_token,
         )
         self.budget.observe(listed["remaining"])
@@ -1871,11 +1874,41 @@ class Pass:
             raise PollError("API_REJECTED", "GitHub list response is not a list")
         return listed["body"], listed["etag"]
 
+    def _list_pages(self, kind, path):
+        """Return (items, etag, paged) for every page of a list, or None.
+
+        GitHub returns at most PAGE_SIZE items a page, and an ETag only
+        describes its own page. Page one is requested with the stored
+        validator only while the whole list fitted on it, because a change
+        on a later page does not change the first page's validator. A list
+        that spans pages is read in full on every pass. Nothing is applied
+        unless every page was read.
+        """
+
+        paged = self.state["etags"].get(kind + "_paged") is True
+        first = self._list(kind, f"{path}&page=1", conditional=not paged)
+        if first is None:
+            return None
+        items, etag = first
+        page = 1
+        while len(items) == page * PAGE_SIZE:
+            if page == _MAX_LIST_PAGES:
+                self._skip({"reason": "list_truncated", "list": kind})
+                break
+            page += 1
+            more = self._list(kind, f"{path}&page={page}", conditional=False)
+            if more is None:
+                return None
+            items = items + more[0]
+        return items, etag, page > 1
+
     def _branches(self):
-        listed = self._list("branches", f"/repos/{self.repository}/branches?per_page={PAGE_SIZE}")
+        listed = self._list_pages(
+            "branches", f"/repos/{self.repository}/branches?per_page={PAGE_SIZE}"
+        )
         if listed is None:
             return
-        body, etag = listed
+        body, etag, paged = listed
         for item in body:
             if not isinstance(item, dict):
                 raise PollError("API_REJECTED", "GitHub branch list is not usable")
@@ -1888,15 +1921,16 @@ class Pass:
         if self.hold_branches:
             return
         self.state["etags"]["branches"] = etag
+        self.state["etags"]["branches_paged"] = paged
         self._checkpoint()
 
     def _pulls(self):
-        listed = self._list(
+        listed = self._list_pages(
             "pulls", f"/repos/{self.repository}/pulls?state=open&per_page={PAGE_SIZE}"
         )
         if listed is None:
             return
-        body, etag = listed
+        body, etag, paged = listed
         for item in body:
             if not isinstance(item, dict):
                 raise PollError("API_REJECTED", "GitHub pull request list is not usable")
@@ -1907,6 +1941,7 @@ class Pass:
         if self.hold_pulls:
             return
         self.state["etags"]["pulls"] = etag
+        self.state["etags"]["pulls_paged"] = paged
         self._checkpoint()
 
     def _schedules(self):

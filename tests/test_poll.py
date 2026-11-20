@@ -193,9 +193,11 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_header("x-ratelimit-remaining", str(remaining))
                 self.end_headers()
                 return
-            body = json.dumps(
-                self.server.branches if kind == "branches" else self.server.pulls
-            ).encode()
+            listed = self.server.branches if kind == "branches" else self.server.pulls
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            size = int(query.get("per_page", ["30"])[0])
+            page = int(query.get("page", ["1"])[0])
+            body = json.dumps(listed[(page - 1) * size : page * size]).encode()
             self._send(200, body, etag, remaining)
             return
         if kind == "commit":
@@ -786,6 +788,63 @@ class PollTests(unittest.TestCase):
         self.assertNotIn("diff_unavailable", self.submits[0])
         self.assertEqual(self.submits[0]["event"]["before"], tip)
         self.assertEqual(self.submits[0]["event"]["after"], new)
+
+    def _commit_on_main(self, name):
+        (self.seed / name).write_text(name + "\n")
+        _git(self.seed, "add", ".")
+        _git(
+            self.seed,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            name,
+        )
+        _git(self.seed, "push", "origin", "main")
+        return self._tip()
+
+    def _a_hundred_known_branches_before_main(self, tip):
+        """Branches that sort before main and are already polled, so only main's tip is news."""
+
+        saved = json.loads((self.state / "poll.json").read_text())
+        names = [f"a-{number:03d}" for number in range(100)]
+        for name in names:
+            saved["tips"][f"refs/heads/{name}"] = tip
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        return [{"name": name, "commit": {"sha": tip}} for name in names]
+
+    def test_a_branch_on_the_second_page_of_the_list_is_polled(self):
+        old = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        self.poll()
+        fillers = self._a_hundred_known_branches_before_main(old)
+        new = self._commit_on_main("second-page.txt")
+        self.server.branches = fillers + [{"name": "main", "commit": {"sha": new}}]
+        self.server.etags["branches"] = "branches-2"
+        self.submits.clear()
+        summary = self.poll()
+        self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.submits[0]["event"]["after"], new)
+        self.assertEqual(self.submits[0]["event"]["before"], old)
+
+    def test_a_change_on_a_later_page_is_seen_although_the_first_page_is_unchanged(self):
+        old = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        self.poll()
+        fillers = self._a_hundred_known_branches_before_main(old)
+        first = self._commit_on_main("second-page-1.txt")
+        self.server.branches = fillers + [{"name": "main", "commit": {"sha": first}}]
+        self.server.etags["branches"] = "branches-2"
+        self.poll()
+        # The first page keeps its validator while only the second page changes.
+        second = self._commit_on_main("second-page-2.txt")
+        self.server.branches = fillers + [{"name": "main", "commit": {"sha": second}}]
+        self.submits.clear()
+        summary = self.poll()
+        self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.submits[0]["event"]["after"], second)
 
     def test_a_branch_that_cannot_be_fetched_does_not_stop_the_other_branches(self):
         tip = self._tip()
