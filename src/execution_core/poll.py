@@ -1881,12 +1881,14 @@ class Pass:
         describes its own page. Page one is requested with the stored
         validator only while the whole list fitted on it, because a change
         on a later page does not change the first page's validator. A list
-        that spans pages is read in full on every pass. Nothing is applied
-        unless every page was read.
+        that spans pages, or whose validator predates the flag, is read in
+        full. Nothing is applied unless every page was read.
         """
 
-        paged = self.state["etags"].get(kind + "_paged") is True
-        first = self._list(kind, f"{path}&page=1", conditional=not paged)
+        # A validator saved before the flag existed says nothing about later
+        # pages, so only a flag recorded as False lets page one be conditional.
+        single_page = self.state["etags"].get(kind + "_paged") is False
+        first = self._list(kind, f"{path}&page=1", conditional=single_page)
         if first is None:
             return None
         items, etag = first
