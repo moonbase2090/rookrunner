@@ -904,6 +904,27 @@ class PollTests(unittest.TestCase):
         self.assertEqual(after["pulls"], saved["pulls"])
         self.assertEqual(after["etags"], saved["etags"])
 
+    def test_a_validator_saved_before_the_paging_flag_still_reads_every_page(self):
+        old = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": old}}]
+        self.poll()
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertIn("branches", saved["etags"])
+        # An older engine saved the page-one validator with no paging flag.
+        del saved["etags"]["branches_paged"]
+        del saved["etags"]["pulls_paged"]
+        (self.state / "poll.json").write_text(json.dumps(saved))
+        fillers = self._a_hundred_known_branches_before_main(old)
+        new = self._commit_on_main("legacy-validator.txt")
+        # Page one is unchanged, so GitHub would answer 304 to its old validator.
+        self.server.branches = [*fillers, {"name": "main", "commit": {"sha": new}}]
+        self.submits.clear()
+        summary = self.poll()
+        self.assertEqual([item["ref"] for item in summary["submitted"]], ["refs/heads/main"])
+        self.assertEqual(self.submits[0]["event"]["after"], new)
+        after = json.loads((self.state / "poll.json").read_text())["etags"]
+        self.assertIs(after["branches_paged"], True)
+
     def test_a_branch_that_cannot_be_fetched_does_not_stop_the_other_branches(self):
         tip = self._tip()
         self.server.branches = [
