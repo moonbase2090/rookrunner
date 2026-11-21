@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.22. A published release section
+The current package version is 0.1.23. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.23] - 2026-11-20
 
 - When a branch or pull request list reaches the 20-page bound, the poll leaves
   that list unapplied and keeps its previous cache. It no longer submits items
@@ -54,6 +56,9 @@ This file does not reconstruct earlier milestones.
   error number and path when the state could not be measured. The refusal reply to
   the caller is unchanged.
   A full or closed error stream cannot replace that reply: the line is best effort.
+
+- The package version is 0.1.23. A wheel and a source tarball can be
+  built from this tree. This change does not create a tag.
 
 ## [0.1.22] - 2026-11-13
 
