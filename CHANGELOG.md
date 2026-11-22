@@ -7,6 +7,7 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- An action path is passed as a path, and a path segment that starts with a dash is refused.
 - `submissions retry` now checks out the retried submission's tested commit on
   the worker clone before calling `run.submit`. Before, retrying against a
   shared clone left on another commit caused the worker to snapshot the wrong
