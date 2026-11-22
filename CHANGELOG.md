@@ -7,6 +7,15 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A stale pull request merge ref (`refs/pull/N/merge`) right after a push is now
+  treated as retryable instead of immediately posting a terminal `rookrunner/trust`
+  error. While the merge ref settles, the poll skips the pull request without
+  posting a trust status and refetches the pull list on the next pass; it posts
+  `rookrunner/trust` as `error` and records a refusal only when the mismatch
+  persists across three consecutive passes on the same head. A new push resets
+  the count, closing the pull request drops it, and a matching merge ref still
+  clears any earlier mismatch error.
+
 ## [0.1.23] - 2026-11-20
 
 - When a branch or pull request list reaches the 20-page bound, the poll leaves

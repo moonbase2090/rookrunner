@@ -2141,16 +2141,53 @@ class PollTests(unittest.TestCase):
         side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
         merge = self._merge_commit(side, head, "merge side")
         _git(self.seed, "push", "--force", "origin", f"{merge}:refs/pull/9/merge")
-        result = self.poll()
-        self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        for expected_count in (1, 2):
+            result = self.poll()
+            self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+            self.assertEqual(result["warnings"], [])
+            self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+            self.assertEqual(self.runs(), 0)
+            self.assert_trust_posts(head, [])
+            saved = json.loads((self.state / "poll.json").read_text())
+            self.assertNotIn("pulls", saved["etags"])
+            self.assertEqual(saved.get("workflow_refusals", []), [])
+            self.assertEqual(
+                saved["merge_mismatches"], {"9": {"head": head, "count": expected_count}}
+            )
+        third = self.poll()
+        self.assertEqual(third["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        self.assertEqual(
+            third["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": "merge_commit_mismatch",
+                    "message": "fetched merge commit does not match the listed head",
+                }
+            ],
+        )
         self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
         self.assertEqual(self.runs(), 0)
         self.assert_trust_posts(
             head,
             [("error", "refused: fetched merge commit does not match the listed head")],
         )
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(
+            saved["workflow_refusals"],
+            [{"number": 9, "head_sha": head, "reason": "merge_commit_mismatch"}],
+        )
+        self.assertEqual(saved["merge_mismatches"], {"9": {"head": head, "count": 3}})
+        fourth = self.poll()
+        self.assertEqual(fourth["warnings"], [])
+        self.assert_trust_posts(
+            head,
+            [("error", "refused: fetched merge commit does not match the listed head")],
+        )
 
-    def test_a_merge_mismatch_error_clears_once_the_merge_ref_matches_the_head(self):
+    def test_a_transient_stale_merge_ref_retries_and_runs_without_posting_error(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")
 
@@ -2163,11 +2200,112 @@ class PollTests(unittest.TestCase):
         _git(self.seed, "push", "--force", "origin", f"{stale}:refs/pull/9/merge")
         first = self.poll()
         self.assertEqual(first["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        self.assertEqual(self.runs(), 0)
+        self.assert_trust_posts(head, [])
+        # Even if the saved pulls validator already matches GitHub's ETag, a
+        # retryable mismatch still refetches the pull list and merge ref.
+        path = self.state / "poll.json"
+        saved = json.loads(path.read_text())
+        saved["etags"]["pulls"] = self.server.etags["pulls"]
+        saved["etags"]["pulls_paged"] = False
+        path.write_text(json.dumps(saved))
         good = self._merge_commit(tip, head, "merge listed base")
         _git(self.seed, "push", "--force", "origin", f"{good}:refs/pull/9/merge")
         second = self.poll()
         self.assertNotIn(
             "merge_commit_mismatch", [item.get("reason") for item in second["skipped"]]
+        )
+        self.assertEqual(self.runs(), 1)
+        trust = [
+            json.loads(item["body"])
+            for item in self.posts()
+            if json.loads(item["body"]).get("context") == "rookrunner/trust"
+        ]
+        self.assertEqual(trust, [])
+        after = json.loads(path.read_text())
+        self.assertEqual(after.get("merge_mismatches", {}), {})
+        self.assertEqual(after.get("workflow_refusals", []), [])
+
+    def test_a_new_push_resets_the_merge_mismatch_retry_count(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("first\n")
+
+        tip, first_head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        stale = self._merge_commit(side, first_head, "stale merge")
+        _git(self.seed, "push", "--force", "origin", f"{stale}:refs/pull/9/merge")
+        self.poll()
+        self.poll()
+        self.assert_trust_posts(first_head, [])
+        _git(self.seed, "checkout", "-q", "feature-9")
+        (self.seed / "feature-9.txt").write_text("second\n")
+        self._commit_all("second feature commit")
+        second_head = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        self.server.pulls[0]["head"]["sha"] = second_head
+        self.server.etags["pulls"] = "pulls-2"
+        third = self.poll()
+        self.assertEqual(third["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        self.assert_trust_posts(second_head, [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["merge_mismatches"], {"9": {"head": second_head, "count": 1}})
+        self.assertEqual(saved.get("workflow_refusals", []), [])
+        good = self._merge_commit(tip, second_head, "merge second head")
+        _git(self.seed, "push", "--force", "origin", f"{good}:refs/pull/9/merge")
+        fourth = self.poll()
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in fourth["skipped"]]
+        )
+        self.assertEqual(self.runs(), 1)
+        trust = [
+            json.loads(item["body"])
+            for item in self.posts()
+            if json.loads(item["body"]).get("context") == "rookrunner/trust"
+        ]
+        self.assertEqual(trust, [])
+
+    def test_closing_a_pull_request_prunes_its_merge_mismatch_count(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        stale = self._merge_commit(side, head, "stale merge")
+        _git(self.seed, "push", "--force", "origin", f"{stale}:refs/pull/9/merge")
+        self.poll()
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["merge_mismatches"], {"9": {"head": head, "count": 1}})
+        self.server.pulls = []
+        self.server.etags["pulls"] = "pulls-closed"
+        self.poll()
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after.get("merge_mismatches", {}), {})
+        self.assertEqual(after["etags"]["pulls"], "pulls-closed")
+
+    def test_a_merge_mismatch_error_clears_once_the_merge_ref_matches_the_head(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        stale = self._merge_commit(side, head, "stale merge")
+        _git(self.seed, "push", "--force", "origin", f"{stale}:refs/pull/9/merge")
+        for _ in range(3):
+            failed = self.poll()
+            self.assertEqual(failed["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        good = self._merge_commit(tip, head, "merge listed base")
+        _git(self.seed, "push", "--force", "origin", f"{good}:refs/pull/9/merge")
+        settled = self.poll()
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in settled["skipped"]]
         )
         self.assertEqual(self.runs(), 1)
         trust = [
@@ -2193,6 +2331,7 @@ class PollTests(unittest.TestCase):
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertEqual(saved["trust_statuses"]["9"]["state"], "success")
         self.assertEqual(saved.get("workflow_refusals", []), [])
+        self.assertEqual(saved.get("merge_mismatches", {}), {})
 
     def test_a_head_that_already_ran_clears_a_mismatch_error_left_on_it(self):
         def mutate(seed):
@@ -2382,24 +2521,12 @@ class PollTests(unittest.TestCase):
         self.assertEqual(self.runs(), 0)
         self.assertNotIn("# raced", (self.clone / ".github/workflows/check.yml").read_text())
         self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
-        self.assertEqual(
-            result["warnings"],
-            [
-                {
-                    "number": 9,
-                    "sha": head,
-                    "action": "refused",
-                    "reason": "merge_commit_mismatch",
-                    "message": "fetched merge commit does not match the listed head",
-                }
-            ],
-        )
+        self.assertEqual(result["warnings"], [])
+        self.assert_trust_posts(head, [])
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertNotIn("pulls", saved["etags"])
-        self.assertEqual(
-            saved["workflow_refusals"],
-            [{"number": 9, "head_sha": head, "reason": "merge_commit_mismatch"}],
-        )
+        self.assertEqual(saved.get("workflow_refusals", []), [])
+        self.assertEqual(saved["merge_mismatches"], {"9": {"head": head, "count": 1}})
         new_base = _git(self.seed, "rev-parse", "HEAD^1").stdout.strip()
         new_head = _git(self.seed, "rev-parse", "HEAD^2").stdout.strip()
         self.server.pulls[0]["base"]["sha"] = new_base
@@ -2413,6 +2540,8 @@ class PollTests(unittest.TestCase):
         self.assertEqual(caught["warnings"][0]["sha"], new_head)
         self.assertEqual(caught["warnings"][0]["reason"], "workflow_changed")
         self.assertIn(".github/workflows/check.yml", caught["warnings"][0]["message"])
+        after = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(after.get("merge_mismatches", {}), {})
 
     def test_a_collaborator_workflow_edit_is_refused_until_that_association_is_named(self):
         def mutate(seed):

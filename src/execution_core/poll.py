@@ -72,7 +72,10 @@ Local rules, not GitHub-equivalence claims:
 - A refused same-repository pull request gets a ``rookrunner/trust``
   failure status on the head SHA with the reason, once per head and
   reason. When a later pass lets that head run, the status turns to
-  success. A fork and a merge-commit mismatch post nothing.
+  success. A fork posts nothing. A merge-commit mismatch is retryable:
+  it holds the pull request list and posts no status while the merge ref
+  settles, and posts an error status only if the mismatch persists for
+  three consecutive passes on the same head.
 - A repository with ``.github/CODEOWNERS`` at the pull base or head
   gets a ``rookrunner/signoff`` status on the head SHA. Patterns are
   the union of the two blobs. A protected path without
@@ -173,6 +176,7 @@ _MAX_LIST_PAGES = 20
 _GET_TIMEOUT_SECONDS = 10
 _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
+_MERGE_MISMATCH_LIMIT = 3
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 # The worker's plan error when the workflow at that commit has no such job.
@@ -1834,8 +1838,9 @@ class Pass:
         merge-mismatch error left on the head from an earlier pass is cleared.
         """
 
-        self._clear_merge_mismatch(number, head_sha)
-        if seen.get("commits") != "trusted":
+        if seen.get("commits") == "trusted":
+            self._clear_merge_mismatch(number, head_sha)
+        else:
             base = item.get("base")
             base_ref = base.get("ref") if isinstance(base, dict) else None
             if self._fetch_pull_merge(number, base_sha, head_sha, base_ref) is None:
@@ -1890,8 +1895,11 @@ class Pass:
 
         # A validator saved before the flag existed says nothing about later
         # pages, so only a flag recorded as False lets page one be conditional.
+        # A retryable merge mismatch also reads the pull list unconditionally
+        # so an unchanged ETag cannot hide a newly updated merge ref.
         single_page = self.state["etags"].get(kind + "_paged") is False
-        first = self._list(kind, f"{path}&page=1", conditional=single_page)
+        conditional = single_page and not (kind == "pulls" and self._has_retryable_merge_mismatch())
+        first = self._list(kind, f"{path}&page=1", conditional=conditional)
         if first is None:
             return None
         items, etag = first
@@ -1936,11 +1944,14 @@ class Pass:
         if listed is None:
             return
         body, etag, paged = listed
+        open_numbers = set()
         for item in body:
             if not isinstance(item, dict):
                 raise PollError("API_REJECTED", "GitHub pull request list is not usable")
             if not self._pull(item):
                 return
+            open_numbers.add(str(item["number"]))
+        self._prune_merge_mismatches(open_numbers)
         if self.signoff_seen and not self.signoff_present:
             self._skip({"reason": "signoff_absent"})
         if self.hold_pulls:
@@ -2614,14 +2625,70 @@ class Pass:
             return None, ()
         return "changed", paths
 
-    def _record_merge_mismatch(self, number, head_sha):
-        """Do not check out a merge commit that is not the listed base and head.
+    def _has_retryable_merge_mismatch(self):
+        mismatches = self.state.get("merge_mismatches")
+        if not isinstance(mismatches, dict):
+            return False
+        for row in mismatches.values():
+            if (
+                isinstance(row, dict)
+                and is_integer(row.get("count"))
+                and 0 < int(row["count"]) < _MERGE_MISMATCH_LIMIT
+            ):
+                return True
+        return False
 
-        The head gets a visible error status, so the pull request is not silently skipped.
+    def _prune_merge_mismatches(self, open_numbers):
+        mismatches = self.state.get("merge_mismatches")
+        if not isinstance(mismatches, dict):
+            return
+        stale = [key for key in mismatches if key not in open_numbers]
+        if not stale:
+            return
+        for key in stale:
+            del mismatches[key]
+        self._checkpoint()
+
+    def _record_merge_mismatch(self, number, head_sha):
+        """Hold a pull request whose merge ref does not match the listed base and head.
+
+        A stale merge ref right after a push is retryable: hold the pull request
+        list and post no trust status while it settles. Only a mismatch that
+        persists across ``_MERGE_MISMATCH_LIMIT`` passes on the same head becomes
+        a refusal with a visible error status.
         """
 
+        key = str(number)
         row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
         rows = self.state.setdefault("workflow_refusals", [])
+        mismatches = self.state.get("merge_mismatches")
+        if not isinstance(mismatches, dict):
+            mismatches = {}
+            self.state["merge_mismatches"] = mismatches
+        stored = mismatches.get(key)
+        if (
+            isinstance(stored, dict)
+            and stored.get("head") == head_sha
+            and is_integer(stored.get("count"))
+            and int(stored["count"]) > 0
+        ):
+            previous = int(stored["count"])
+        elif row in rows:
+            previous = _MERGE_MISMATCH_LIMIT
+        else:
+            previous = 0
+        count = min(previous + 1, _MERGE_MISMATCH_LIMIT)
+        if not (
+            isinstance(stored, dict)
+            and stored.get("head") == head_sha
+            and stored.get("count") == count
+        ):
+            mismatches[key] = {"head": head_sha, "count": count}
+            self._checkpoint()
+        if count < _MERGE_MISMATCH_LIMIT:
+            self._skip({"reason": "merge_commit_mismatch", "number": number})
+            self.hold_pulls = True
+            return
         entry = {
             "number": number,
             "sha": head_sha,
@@ -2682,13 +2749,21 @@ class Pass:
         that stands for another reason stays as it was.
         """
 
+        changed = False
+        key = str(number)
+        mismatches = self.state.get("merge_mismatches")
+        if isinstance(mismatches, dict) and key in mismatches:
+            del mismatches[key]
+            changed = True
         row = {"number": number, "head_sha": head_sha, "reason": "merge_commit_mismatch"}
         rows = self.state.get("workflow_refusals")
         if isinstance(rows, list) and row in rows:
             rows.remove(row)
+            changed = True
+        if changed:
             self._checkpoint()
         stored = self.state.get("trust_statuses")
-        record = stored.get(str(number)) if isinstance(stored, dict) else None
+        record = stored.get(key) if isinstance(stored, dict) else None
         if isinstance(record, dict) and record.get("state") == "error":
             self._clear_refusal_status(number, head_sha)
 
