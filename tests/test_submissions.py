@@ -675,6 +675,54 @@ class OutcomeTests(unittest.TestCase):
                 )
             self.assertEqual(submits, [])
 
+    def test_retry_unblocks_a_tested_commit_mismatch_with_one_successor(self):
+        mismatch = "base_commit does not equal the tested commit"
+        blocked = _entry(run_id="run-mismatch")
+        blocked.update(
+            state="blocked",
+            blocked={
+                "kind": "STATUS_REFUSED",
+                "message": mismatch,
+                "unblock": "retry_or_abandon",
+            },
+        )
+        request = {
+            "version": 1,
+            "workflow": "workflows/operator-retry.yml",
+            "job_id": "test",
+            "event": {"after": TESTED},
+            "event_name": "push",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [blocked])
+            submitted = []
+
+            def caller(method, params):
+                if method == "run.get":
+                    return {"state": "succeeded", "exit_code": 0, "error": None}
+                if method == "run.status":
+                    raise PollError("STATUS_REFUSED", mismatch)
+                if method == "run.submit":
+                    submitted.append(params)
+                    return {"run_id": "run-successor"}
+                raise AssertionError(method)
+
+            result = retry_submission(
+                directory,
+                KEY,
+                caller=caller,
+                request_for=lambda _run_id: request,
+                checkout=lambda _sha: None,
+            )
+
+            self.assertEqual(result["action"], "submitted")
+            self.assertEqual(len(submitted), 1)
+            saved = json.loads(Path(directory, "poll.json").read_text())
+            self.assertEqual(saved["submissions"][0]["run_id"], "run-successor")
+            self.assertEqual(saved["submissions"][0]["state"], "submitted")
+            self.assertEqual(saved["completed"][KEY]["state"], "retired")
+            self.assertTrue(saved["completed"][KEY]["superseded"])
+
     def test_stored_request_returns_the_saved_workflow_request(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "runs.sqlite3"
@@ -1000,3 +1048,94 @@ class CliTests(unittest.TestCase):
                 self.assertTrue(payload["dry_run"], command)
                 post_status.assert_not_called()
             self.assertEqual(Path(directory, "poll.json").read_bytes(), before)
+
+    def test_poll_recovery_commands_alias_the_submission_operations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry()])
+            db = sqlite3.connect(Path(directory) / "runs.sqlite3")
+            db.execute("CREATE TABLE runs (id TEXT, request TEXT)")
+            db.execute(
+                "INSERT INTO runs VALUES (?, ?)",
+                (
+                    "run-setup",
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "workflow": "workflows/operator-retry.yml",
+                            "job_id": "test",
+                            "event": {"after": TESTED},
+                            "event_name": "push",
+                        }
+                    ),
+                ),
+            )
+            db.commit()
+            db.close()
+
+            def caller(method, _params):
+                if method == "run.get":
+                    return _setup_record()
+                if method == "run.status":
+                    return {"action": "retry", "state": "error"}
+                raise AssertionError(method)
+
+            for command in ("inspect", "abandon", "retry", "repair"):
+                argv = [
+                    "execution_core",
+                    "--state",
+                    directory,
+                    "poll",
+                    command,
+                    KEY,
+                    "--poll-state",
+                    directory,
+                    "--dry-run",
+                ]
+                if command == "abandon":
+                    argv.extend(["--reason", "operator retired this submission"])
+                out = io.StringIO()
+                with (
+                    mock.patch.object(cli, "_worker_caller", return_value=caller),
+                    mock.patch.object(sys, "argv", argv),
+                    redirect_stdout(out),
+                ):
+                    cli.main()
+                self.assertTrue(json.loads(out.getvalue())["dry_run"], command)
+
+    def test_poll_abandon_requires_a_reason(self):
+        argv = ["execution_core", "--state", "/unused", "poll", "abandon", KEY, "--dry-run"]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            cli.main()
+        self.assertEqual(exited.exception.code, 2)
+
+    def test_poll_pass_rejects_recovery_only_flags(self):
+        base = [
+            "execution_core",
+            "--state",
+            "/unused",
+            "poll",
+            "--repository",
+            "acme/demo",
+            "--clone",
+            "/clone",
+            "--job",
+            "workflow.yml",
+            "test",
+        ]
+        for flag in (["--dry-run"], ["--poll-state", "/poll"], ["--reason", "operator"]):
+            with self.subTest(flag=flag[0]):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "argv", [*base, *flag]),
+                    mock.patch.object(cli, "report_poll") as report_poll,
+                    redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as exited,
+                ):
+                    cli.main()
+                self.assertEqual(exited.exception.code, 2)
+                self.assertIn(f"{flag[0]} requires a poll recovery operation", stderr.getvalue())
+                report_poll.assert_not_called()
