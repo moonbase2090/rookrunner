@@ -18,6 +18,18 @@ This file does not reconstruct earlier milestones.
   list spanned pages, and GitHub answers that validator with 304 while page one is
   unchanged, so a change on a later page stayed hidden. A list whose validator has no
   paging record is now read in full once, and the record is saved.
+- `submissions retry` now checks out the retried submission's tested commit on
+  the worker clone before calling `run.submit`. Before, retrying against a
+  shared clone left on another commit caused the worker to snapshot the wrong
+  HEAD and later refuse status reporting as `base_commit does not equal the
+  tested commit`.
+- The worker now rejects a `push` or `pull_request` `run.submit` at admission
+  with `SOURCE_UNSTABLE` when the repository HEAD does not match the submitted
+  `event.after` commit, instead of publishing a mismatched snapshot and queuing
+  an unreportable run.
+- `submissions list` and `submissions inspect` now report a `STATUS_REFUSED`
+  submission as stuck instead of failing, and `submissions abandon` can post
+  `error` and retire an already-mismatched run.
 - The package version is 0.1.24. A wheel and a source tarball can be built
   from this tree. This change does not create a tag.
 

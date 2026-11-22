@@ -18,6 +18,7 @@ from execution_core.poll import PollError
 from execution_core.submissions import (
     abandon_submission,
     capacity_report,
+    inspect_submission,
     list_submissions,
     recorded_status_states,
     repair_submission,
@@ -394,6 +395,8 @@ class OutcomeTests(unittest.TestCase):
             def caller(method, _params):
                 if method == "run.get":
                     return {"state": "succeeded", "exit_code": 0, "error": None}
+                if method == "run.status":
+                    return {"action": "post", "state": "success"}
                 raise AssertionError(method)
 
             with self.assertRaises(PollError) as raised:
@@ -482,9 +485,15 @@ class OutcomeTests(unittest.TestCase):
             self.assertEqual(
                 len(json.loads(Path(directory, "poll.json").read_text())["submissions"]), 1
             )
+            checked = []
             live = retry_submission(
-                directory, KEY, caller=caller, request_for=lambda _run_id: request
+                directory,
+                KEY,
+                caller=caller,
+                request_for=lambda _run_id: request,
+                checkout=checked.append,
             )
+            self.assertEqual(checked, [TESTED])
             self.assertEqual(live["action"], "submitted")
             self.assertEqual(live["run_id"], "run-next")
             self.assertEqual(submits[0]["submission_key"], SUCCESSOR)
@@ -495,6 +504,7 @@ class OutcomeTests(unittest.TestCase):
                 KEY,
                 caller=caller,
                 request_for=lambda _run_id: (_ for _ in ()).throw(AssertionError("request read")),
+                checkout=lambda _sha: self.fail("already_retried must not check out"),
             )
             self.assertEqual(again["action"], "already_retried")
             self.assertEqual(again["submission_key"], SUCCESSOR)
@@ -532,12 +542,15 @@ class OutcomeTests(unittest.TestCase):
                 submits.append(params)
                 return {"run_id": "run-next"}
 
+            checked = []
             live = retry_submission(
                 directory,
                 KEY,
                 caller=caller,
                 request_for=lambda _run_id: {"version": 1, "workflow": "w.yml", "job_id": "gui"},
+                checkout=checked.append,
             )
+            self.assertEqual(checked, [TESTED])
             self.assertEqual(live["action"], "submitted")
             self.assertEqual(submits[0]["submission_key"], SUCCESSOR)
             saved = json.loads(Path(directory, "poll.json").read_text())["submissions"]
@@ -562,7 +575,15 @@ class OutcomeTests(unittest.TestCase):
                 submits.append(params)
                 return {"run_id": "run-next"}
 
-            retry_submission(directory, KEY, caller=caller, request_for=lambda _run_id: request)
+            checked = []
+            retry_submission(
+                directory,
+                KEY,
+                caller=caller,
+                request_for=lambda _run_id: request,
+                checkout=checked.append,
+            )
+            self.assertEqual(checked, [TESTED])
             self.assertEqual(submits[0]["activity_type"], "synchronize")
 
     def test_retry_of_a_push_run_has_no_activity_type(self):
@@ -583,8 +604,56 @@ class OutcomeTests(unittest.TestCase):
                 submits.append(params)
                 return {"run_id": "run-next"}
 
-            retry_submission(directory, KEY, caller=caller, request_for=lambda _run_id: request)
+            checked = []
+            retry_submission(
+                directory,
+                KEY,
+                caller=caller,
+                request_for=lambda _run_id: request,
+                checkout=checked.append,
+            )
+            self.assertEqual(checked, [TESTED])
             self.assertNotIn("activity_type", submits[0])
+
+    def test_list_inspect_and_abandon_handle_mismatched_base_commit_runs(self):
+        mismatch = "base_commit does not equal the tested commit"
+        for state, exit_code in (("succeeded", 0), ("cancelled", None)):
+            with tempfile.TemporaryDirectory() as directory:
+                _write_poll(directory, [_entry(run_id="run-mismatch")])
+                posted = []
+
+                def caller(method, _params, *, state=state, exit_code=exit_code):
+                    if method == "run.get":
+                        return {"state": state, "exit_code": exit_code, "error": None}
+                    if method == "run.status":
+                        raise PollError("STATUS_REFUSED", mismatch)
+                    raise AssertionError(method)
+
+                listed = list_submissions(
+                    directory, caller=caller, recorded_states=_none, stuck_only=True
+                )
+                self.assertEqual(len(listed["submissions"]), 1)
+                self.assertTrue(listed["submissions"][0]["stuck"])
+                self.assertEqual(listed["submissions"][0]["status_refused"], mismatch)
+
+                inspected = inspect_submission(directory, KEY, caller=caller, recorded_states=_none)
+                self.assertTrue(inspected["stuck"])
+                self.assertEqual(inspected["status_refused"], mismatch)
+
+                result = abandon_submission(
+                    directory,
+                    KEY,
+                    caller=caller,
+                    post=lambda _sha, posted_state, _context, posted=posted: posted.append(
+                        posted_state
+                    ),
+                )
+                self.assertEqual(result["action"], "abandoned")
+                self.assertEqual(result["state"], "error")
+                self.assertEqual(posted, ["error"])
+                saved = json.loads(Path(directory, "poll.json").read_text(encoding="utf-8"))
+                self.assertEqual(saved["submissions"], [])
+                self.assertTrue(saved["completed"][KEY]["abandoned"])
 
     def test_retry_refuses_a_running_run(self):
         with tempfile.TemporaryDirectory() as directory:
