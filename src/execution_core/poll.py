@@ -1704,7 +1704,7 @@ class Pass:
 
     def _commit_body(self, sha):
         quoted = urllib.parse.quote(sha, safe="")
-        return self._object(f"/repos/{self.repository}/commits/{quoted}")
+        return self._object(f"/repos/{self.repository}/commits/{quoted}?per_page=1")
 
     def _array(self, path):
         """GET one JSON list, or None when the rate-limit budget stopped the pass."""
