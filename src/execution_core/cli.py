@@ -768,6 +768,7 @@ def report_submissions(args):
                 args.key,
                 caller=caller,
                 request_for=request_for,
+                clone=getattr(args, "clone", None),
                 dry_run=args.dry_run,
             )
         else:
@@ -1340,11 +1341,12 @@ def main():
         key=True,
     )
     abandon.add_argument("--reason", help="operator reason stored in the audited tombstone")
-    _submission_parser(
+    retry = _submission_parser(
         "retry",
         "submit one successor of a failed push or pull-request submission",
         key=True,
     )
+    retry.add_argument("--clone", help="dedicated clone; must be the worker repository")
     _submission_parser(
         "repair",
         "post the missing final commit status, including error after a setup failure",

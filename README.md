@@ -64,13 +64,13 @@ python3 -m execution_core --state "$STATE" submissions list --dry-run
 python3 -m execution_core --state "$STATE" submissions inspect KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions repair KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
-python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
+python3 -m execution_core --state "$STATE" submissions retry KEY --clone "$CLONE" --dry-run
 python3 -m execution_core --state "$STATE" submissions capacity --alert-after-seconds 900
 python3 -m execution_core --state "$STATE" submissions migrate --dry-run --batch-size 100
 python3 -m execution_core --state "$STATE" poll inspect KEY --dry-run
 python3 -m execution_core --state "$STATE" poll repair KEY --dry-run
 python3 -m execution_core --state "$STATE" poll abandon KEY --reason "operator decision" --dry-run
-python3 -m execution_core --state "$STATE" poll retry KEY --dry-run
+python3 -m execution_core --state "$STATE" poll retry KEY --clone "$CLONE" --dry-run
 ```
 
 The `poll` recovery forms are aliases for the corresponding `submissions`
@@ -80,9 +80,12 @@ still reported as needing another try, that status is `error`. `abandon`
 posts `error` and does not post `success`. `retry` submits one successor
 of a failed or cancelled push or pull request. The successor key is
 stable, and repeating the command does not create another run. The
-successor is snapshotted from the worker's repository checkout, so check
-out the tested commit there before a retry of a pull request run. A live `repair` or
-`abandon` also needs `--repository owner/name` and `--credential-file`.
+successor is snapshotted from the worker's repository checkout. A live retry
+requires `--clone`, checks that it is the worker repository, and restores the
+tested commit before submission. Retry refuses a submission assigned to a
+named placement rather than redirecting it to the local worker. A live
+`repair` or `abandon` also needs `--repository owner/name` and
+`--credential-file`.
 
 `submissions migrate` previews or applies one bounded batch of legacy reporting
 references. The first poll also runs this migration automatically. Missing

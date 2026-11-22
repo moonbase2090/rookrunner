@@ -8,6 +8,10 @@ This file does not reconstruct earlier milestones.
 ## [Unreleased]
 
 - An action path is passed as a path, and a path segment that starts with a dash is refused.
+- A live submission retry requires the dedicated clone and refuses to clean a
+  different worker repository. Submissions assigned to a named placement are
+  refused instead of retried on the local worker. Submission inspection marks
+  only the tested-commit mismatch as a stuck `STATUS_REFUSED` result.
 
 ## [0.1.24] - 2026-11-22
 

@@ -624,6 +624,8 @@ class PlacementTests(unittest.TestCase):
             original_entry["key"],
             caller=self._caller(shared),
             request_for=lambda run_id: stored_request(db_path, run_id),
+            clone=self.clone,
+            host=original_entry["host"],
         )
         self.assertEqual(retried["action"], "submitted")
         new_run_id = retried["run_id"]
