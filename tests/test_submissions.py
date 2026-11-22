@@ -385,6 +385,7 @@ class OutcomeTests(unittest.TestCase):
             self.assertEqual(recorded, ["error"])
             saved = json.loads(Path(directory, "poll.json").read_text(encoding="utf-8"))
             self.assertTrue(saved["completed"][KEY]["abandoned"])
+            self.assertNotIn("abandon_reason", saved["completed"][KEY])
             self.assertEqual(saved["submissions"], [])
 
         with tempfile.TemporaryDirectory() as directory:
