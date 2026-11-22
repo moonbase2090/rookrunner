@@ -1474,7 +1474,10 @@ def main():
     poll.add_argument(
         "--dry-run",
         action="store_true",
-        help="read and decide; post nothing, submit nothing, and write nothing",
+        help=(
+            "for a recovery operation, read and decide; "
+            "post nothing, submit nothing, and write nothing"
+        ),
     )
     poll.add_argument("--reason", help="operator reason required by poll abandon")
     commands.add_parser(
@@ -1526,6 +1529,14 @@ def main():
             parser.error("poll abandon requires --reason")
         args.submissions_command = args.poll_operation
     elif args.command == "poll":
+        recovery_flags = (
+            ("--dry-run", args.dry_run),
+            ("--poll-state", args.poll_state is not None),
+            ("--reason", args.reason is not None),
+        )
+        for flag, present in recovery_flags:
+            if present:
+                parser.error(f"{flag} requires a poll recovery operation")
         if args.repository is None or args.clone is None:
             parser.error("a poll pass requires --repository and --clone")
         if not args.job:

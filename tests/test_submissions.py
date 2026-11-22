@@ -1111,3 +1111,31 @@ class CliTests(unittest.TestCase):
         ):
             cli.main()
         self.assertEqual(exited.exception.code, 2)
+
+    def test_poll_pass_rejects_recovery_only_flags(self):
+        base = [
+            "execution_core",
+            "--state",
+            "/unused",
+            "poll",
+            "--repository",
+            "acme/demo",
+            "--clone",
+            "/clone",
+            "--job",
+            "workflow.yml",
+            "test",
+        ]
+        for flag in (["--dry-run"], ["--poll-state", "/poll"], ["--reason", "operator"]):
+            with self.subTest(flag=flag[0]):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "argv", [*base, *flag]),
+                    mock.patch.object(cli, "report_poll") as report_poll,
+                    redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as exited,
+                ):
+                    cli.main()
+                self.assertEqual(exited.exception.code, 2)
+                self.assertIn(f"{flag[0]} requires a poll recovery operation", stderr.getvalue())
+                report_poll.assert_not_called()
