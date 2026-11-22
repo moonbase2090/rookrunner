@@ -204,7 +204,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if kind == "commit":
             sha = path.rsplit("/", 1)[-1]
-            self._send(200, json.dumps(_commit_record(self.server, sha)).encode(), None, remaining)
+            record = _commit_record(self.server, sha)
+            files = getattr(self.server, "commit_files", {}).get(sha)
+            if files is not None:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                if "per_page" in query:
+                    files = files[: int(query["per_page"][0])]
+                record["files"] = files
+            self._send(200, json.dumps(record).encode(), None, remaining)
             return
         if kind == "pull_commits":
             number = int(path.rsplit("/", 2)[-2])
@@ -388,6 +395,7 @@ class PollTests(unittest.TestCase):
         }
         self.server.authors = {}
         self.server.committers = {}
+        self.server.commit_files = {}
         self.server.verified = set()
         self.server.permissions = {}
         self.server.pull_commits = {}
@@ -3349,6 +3357,27 @@ class PollTests(unittest.TestCase):
         )
         saved = json.loads((self.state / "poll.json").read_text())
         self.assertNotIn("refs/heads/main", saved["tips"])
+
+    def test_commit_trust_fetch_pages_the_file_list_to_stay_under_the_body_limit(self):
+        tip = self._push_main("large-commit-files.txt")
+        self.server.authors[tip] = "writer"
+        self.server.committers[tip] = "writer"
+        self.server.permissions = {"writer": "write"}
+        self.server.commit_files[tip] = [
+            {"filename": f"file-{index:03d}.txt", "patch": "x" * 5500} for index in range(213)
+        ]
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+
+        result = self.poll()
+
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(result["warnings"], [])
+        commit_requests = [
+            request["path"]
+            for request in self.server.requests
+            if f"/commits/{tip}" in request["path"]
+        ]
+        self.assertEqual(commit_requests, [f"/repos/acme/demo/commits/{tip}?per_page=1"])
 
     def test_an_unreadable_permission_is_refused_and_asked_once_per_login(self):
         tip = self._tip()

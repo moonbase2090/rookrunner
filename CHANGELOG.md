@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.23. A published release section
+The current package version is 0.1.24. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.24] - 2026-11-22
 
 - Poll submissions now carry explicit durable lifecycle states. A capability
   refusal blocks after its first occurrence until the worker engine identity
@@ -16,7 +18,15 @@ This file does not reconstruct earlier milestones.
 - `poll inspect`, `poll repair`, `poll retry`, and `poll abandon KEY --reason`
   expose recovery through the poll command. Abandon reasons are retained in
   atomically written tombstones, and retired keys are not rediscovered.
-
+- A commit trust lookup now asks GitHub for one file record instead of the full
+  patch-bearing file list. Large commits no longer exceed the poller's 1 MiB
+  response limit, and author, committer, and signature checks still use the
+  commit metadata.
+- A poll state saved before the branch and pull request lists were read page by page is
+  now upgraded correctly. Its stored page-one validator carries no record of whether the
+  list spanned pages, and GitHub answers that validator with 304 while page one is
+  unchanged, so a change on a later page stayed hidden. A list whose validator has no
+  paging record is now read in full once, and the record is saved.
 - `submissions retry` now checks out the retried submission's tested commit on
   the worker clone before calling `run.submit`. Before, retrying against a
   shared clone left on another commit caused the worker to snapshot the wrong
@@ -29,6 +39,8 @@ This file does not reconstruct earlier milestones.
 - `submissions list` and `submissions inspect` now report a `STATUS_REFUSED`
   submission as stuck instead of failing, and `submissions abandon` can post
   `error` and retire an already-mismatched run.
+- The package version is 0.1.24. A wheel and a source tarball can be built
+  from this tree. This change does not create a tag.
 
 ## [0.1.23] - 2026-11-20
 
@@ -41,11 +53,6 @@ This file does not reconstruct earlier milestones.
   skipped with `workflow_invalid`, as a rejection naming the configured job already was,
   and the pass goes on to the other branches and pull requests. Any other error still
   stops the pass.
-- A poll state saved before the branch and pull request lists were read page by page is
-  now upgraded correctly. Its stored page-one validator carries no record of whether the
-  list spanned pages, and GitHub answers that validator with 304 while page one is
-  unchanged, so a change on a later page stayed hidden. A list whose validator has no
-  paging record is now read in full once, and the record is saved.
 - The poll now reads every page of the branch and pull request lists. It asked for one
   page of 100, so once a repository had more than 100 branches the ones sorting after
   the first 100 names, `main` among them, were never polled and got no push runs. A
