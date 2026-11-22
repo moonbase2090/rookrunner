@@ -759,6 +759,7 @@ def report_submissions(args):
                 args.key,
                 caller=caller,
                 post=None if args.dry_run else post,
+                reason=args.reason,
                 dry_run=args.dry_run,
             )
         elif command == "retry":
@@ -1333,11 +1334,12 @@ def main():
         type=int,
         help="mark the alert breached when the oldest wait reaches this positive age",
     )
-    _submission_parser(
+    abandon = _submission_parser(
         "abandon",
         "post error for one submission and retire it; never post success",
         key=True,
     )
+    abandon.add_argument("--reason", help="operator reason stored in the audited tombstone")
     _submission_parser(
         "retry",
         "submit one successor of a failed push or pull-request submission",
@@ -1349,8 +1351,8 @@ def main():
         key=True,
     )
     poll = commands.add_parser("poll", help="run one poll pass for one owner repository")
-    poll.add_argument("--repository", required=True, help="GitHub repository as owner/name")
-    poll.add_argument("--clone", required=True, help="dedicated clone; the worker repository")
+    poll.add_argument("--repository", help="GitHub repository as owner/name")
+    poll.add_argument("--clone", help="dedicated clone; the worker repository")
     poll.add_argument(
         "--job",
         action="append",
@@ -1461,6 +1463,20 @@ def main():
         "--remote-state",
         help="worker state directory on the ssh host. Set only with --ssh-host.",
     )
+    poll.add_argument(
+        "poll_operation",
+        nargs="?",
+        choices=("inspect", "abandon", "retry", "repair"),
+        help="inspect or recover one durable poll submission instead of running a pass",
+    )
+    poll.add_argument("key", nargs="?", help="poll submission key or run id")
+    poll.add_argument("--poll-state", help="directory holding poll.json; default is --state")
+    poll.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read and decide; post nothing, submit nothing, and write nothing",
+    )
+    poll.add_argument("--reason", help="operator reason required by poll abandon")
     commands.add_parser(
         "call",
         help="send one JSON-RPC request from stdin to the local worker socket",
@@ -1503,8 +1519,17 @@ def main():
         ),
     )
     args = parser.parse_args()
-    if args.command == "poll" and not args.job:
-        parser.error("poll requires at least one --job WORKFLOW JOB_ID")
+    if args.command == "poll" and args.poll_operation is not None:
+        if args.key is None:
+            parser.error(f"poll {args.poll_operation} requires KEY")
+        if args.poll_operation == "abandon" and not args.reason:
+            parser.error("poll abandon requires --reason")
+        args.submissions_command = args.poll_operation
+    elif args.command == "poll":
+        if args.repository is None or args.clone is None:
+            parser.error("a poll pass requires --repository and --clone")
+        if not args.job:
+            parser.error("poll requires at least one --job WORKFLOW JOB_ID")
     try:
         if args.command == "mcp":
             from .mcp import serve_stdio
@@ -1540,7 +1565,10 @@ def main():
             report_dispatch(args)
             return
         if args.command == "poll":
-            report_poll(args)
+            if args.poll_operation is None:
+                report_poll(args)
+            else:
+                report_submissions(args)
             return
         if args.command == "reconcile":
             report_reconcile(args)

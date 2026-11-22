@@ -53,6 +53,10 @@ status
 dispatch
 reconcile
 poll
+poll inspect
+poll abandon
+poll retry
+poll repair
 diagnose
 submissions list
 submissions inspect

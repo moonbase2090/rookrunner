@@ -7,6 +7,16 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Poll submissions now carry explicit durable lifecycle states. A capability
+  refusal blocks after its first occurrence until the worker engine identity
+  changes. A tested-commit mismatch blocks after its first reporting attempt
+  until an operator retries or abandons it. Block records retain the error
+  fingerprint, first and last observation, count, engine identity, and unblock
+  condition; rate limits keep their existing retry behavior.
+- `poll inspect`, `poll repair`, `poll retry`, and `poll abandon KEY --reason`
+  expose recovery through the poll command. Abandon reasons are retained in
+  atomically written tombstones, and retired keys are not rediscovered.
+
 - `submissions retry` now checks out the retried submission's tested commit on
   the worker clone before calling `run.submit`. Before, retrying against a
   shared clone left on another commit caused the worker to snapshot the wrong

@@ -38,6 +38,13 @@ A due minute runs on the first poll at or after that minute. The engine does not
 ## Stuck submissions
 
 A poll submission stays active until a final commit status is recorded.
+A permanent capability refusal, or a tested-commit mismatch discovered while
+reporting, moves the submission to `blocked` after its first occurrence. The
+blocked record keeps a stable fingerprint, first and last observation times,
+count, engine identity, and unblock condition. A capability block is tried
+again after the engine identity changes. A commit-identity block waits for an
+operator retry or abandonment. Rate limits remain retryable and do not create
+a permanent block.
 A setup failure's final status is `error`. The next poll posts it, and
 a neutral check posts that `error` status as well. `submissions list`
 prints the submissions that still have no final status. `--all` includes
@@ -60,9 +67,15 @@ python3 -m execution_core --state "$STATE" submissions abandon KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions retry KEY --dry-run
 python3 -m execution_core --state "$STATE" submissions capacity --alert-after-seconds 900
 python3 -m execution_core --state "$STATE" submissions migrate --dry-run --batch-size 100
+python3 -m execution_core --state "$STATE" poll inspect KEY --dry-run
+python3 -m execution_core --state "$STATE" poll repair KEY --dry-run
+python3 -m execution_core --state "$STATE" poll abandon KEY --reason "operator decision" --dry-run
+python3 -m execution_core --state "$STATE" poll retry KEY --dry-run
 ```
 
-`repair` posts the missing final status. For a setup failure that is
+The `poll` recovery forms are aliases for the corresponding `submissions`
+operations. `poll abandon` requires a reason and stores it in the durable
+tombstone. `repair` posts the missing final status. For a setup failure that is
 still reported as needing another try, that status is `error`. `abandon`
 posts `error` and does not post `success`. `retry` submits one successor
 of a failed or cancelled push or pull request. The successor key is
