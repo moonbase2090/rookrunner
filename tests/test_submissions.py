@@ -558,6 +558,93 @@ class OutcomeTests(unittest.TestCase):
             self.assertEqual(saved[-1]["retry_of"], KEY)
             self.assertEqual(saved[-1]["run_id"], "run-next")
 
+    def test_retry_refuses_a_worker_repository_that_is_not_the_dedicated_clone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "poll-clone"
+            described = root / "other-checkout"
+            expected.mkdir()
+            described.mkdir()
+            state = root / "state"
+            state.mkdir()
+            _write_poll(state, [_entry()])
+
+            def caller(method, _params):
+                if method == "run.get":
+                    return _setup_record()
+                if method == "worker.describe":
+                    return {"repository": str(described)}
+                raise AssertionError(method)
+
+            with self.assertRaises(PollError) as raised:
+                retry_submission(
+                    state,
+                    KEY,
+                    caller=caller,
+                    request_for=lambda _run_id: {
+                        "version": 1,
+                        "workflow": "w.yml",
+                        "job_id": "test",
+                    },
+                    clone=expected,
+                )
+            self.assertEqual(raised.exception.kind, "CLONE_MISMATCH")
+            self.assertEqual(str(raised.exception), "dedicated clone must be the worker repository")
+
+    def test_live_retry_requires_the_dedicated_clone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry()])
+            calls = []
+
+            def caller(method, _params):
+                calls.append(method)
+                if method == "run.get":
+                    return _setup_record()
+                raise AssertionError(method)
+
+            with self.assertRaises(PollError) as raised:
+                retry_submission(
+                    directory,
+                    KEY,
+                    caller=caller,
+                    request_for=lambda _run_id: {
+                        "version": 1,
+                        "workflow": "w.yml",
+                        "job_id": "test",
+                    },
+                )
+            self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+            self.assertEqual(str(raised.exception), "live retry requires --clone")
+            self.assertEqual(calls, ["run.get"])
+
+    def test_retry_refuses_a_submission_placed_on_another_host(self):
+        entry = _entry()
+        entry["host"] = "linux-1"
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [entry])
+
+            def caller(method, _params):
+                if method == "run.get":
+                    return _setup_record()
+                if method == "run.submit":
+                    return {"run_id": "run-next"}
+                raise AssertionError(method)
+
+            with self.assertRaises(PollError) as raised:
+                retry_submission(
+                    directory,
+                    KEY,
+                    caller=caller,
+                    request_for=lambda _run_id: {
+                        "version": 1,
+                        "workflow": "w.yml",
+                        "job_id": "test",
+                    },
+                    checkout=lambda _sha: None,
+                )
+            self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+            self.assertEqual(str(raised.exception), "retry must use the recorded worker placement")
+
     def test_retry_of_a_pull_request_run_carries_the_activity_type_of_its_event(self):
         with tempfile.TemporaryDirectory() as directory:
             _write_poll(directory, [_entry(event="pull_request")])
@@ -655,6 +742,22 @@ class OutcomeTests(unittest.TestCase):
                 saved = json.loads(Path(directory, "poll.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved["submissions"], [])
                 self.assertTrue(saved["completed"][KEY]["abandoned"])
+
+    def test_an_unrelated_status_refusal_is_not_reported_as_stuck(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _write_poll(directory, [_entry(run_id="run-refused")])
+
+            def caller(method, _params):
+                if method == "run.get":
+                    return _setup_record()
+                if method == "run.status":
+                    raise PollError("STATUS_REFUSED", "final status is already recorded")
+                raise AssertionError(method)
+
+            with self.assertRaises(PollError) as raised:
+                inspect_submission(directory, KEY, caller=caller, recorded_states=_none)
+            self.assertEqual(raised.exception.kind, "STATUS_REFUSED")
+            self.assertEqual(str(raised.exception), "final status is already recorded")
 
     def test_retry_refuses_a_running_run(self):
         with tempfile.TemporaryDirectory() as directory:

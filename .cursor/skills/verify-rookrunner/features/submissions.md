@@ -36,7 +36,7 @@ From the checkout, with the worker state and the poll state:
 
 `python3 -m execution_core --state STATE submissions abandon KEY --repository OWNER/NAME --credential-file FILE`
 
-`python3 -m execution_core --state STATE submissions retry KEY`
+`python3 -m execution_core --state STATE submissions retry KEY --clone CLONE`
 
 `python3 -m execution_core --state STATE poll inspect KEY`
 
@@ -44,7 +44,7 @@ From the checkout, with the worker state and the poll state:
 
 `python3 -m execution_core --state STATE poll abandon KEY --reason "operator decision" --repository OWNER/NAME --credential-file FILE`
 
-`python3 -m execution_core --state STATE poll retry KEY`
+`python3 -m execution_core --state STATE poll retry KEY --clone CLONE`
 
 Add `--dry-run` to read without posting, submitting, or writing `poll.json`.
 `--poll-state` selects the directory that holds `poll.json` when it is not
@@ -77,3 +77,6 @@ for the fixture key of `poll-` plus `ab` repeated.
 - A capability block is retried only after the worker's engine identity
   changes. A tested-commit mismatch needs `poll retry` or `poll abandon`.
 - A successor already recorded for the key is not overwritten by another post.
+- A live retry requires the dedicated clone returned by `worker.describe`.
+  Retry refuses a submission assigned to a named placement instead of using
+  the local worker.

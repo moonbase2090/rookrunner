@@ -580,7 +580,11 @@ posts `error`, never `success`, and retires the submission with
 is still active after cancel is left in place and nothing is posted.
 `submissions retry KEY` submits one successor of a failed push or
 pull-request run under the same derived key as `poll --retry-failed`.
-Repeating it returns that successor and does not create another run.
+Repeating it returns that successor and does not create another run. A live
+retry requires `--clone`; the command refuses before checkout unless that path
+is the repository returned by `worker.describe`. A submission with a recorded
+placement is not redirected to the local worker; this recovery command refuses
+it explicitly.
 
 Each command accepts `--dry-run`. A dry run does not post, submit, or
 write `poll.json`. `--poll-state` selects the directory that holds

@@ -385,7 +385,17 @@ def abandon_submission(directory, key, *, caller, post, reason=None, dry_run=Fal
         return _outcome(entry, "abandoned", False, state="error", reason=reason)
 
 
-def retry_submission(directory, key, *, caller, request_for, checkout=None, dry_run=False):
+def retry_submission(
+    directory,
+    key,
+    *,
+    caller,
+    request_for,
+    checkout=None,
+    clone=None,
+    host=None,
+    dry_run=False,
+):
     """Submit one successor of a failed or cancelled push or pull request. Repeat is a no-op."""
 
     _require_key(key)
@@ -394,6 +404,8 @@ def retry_submission(directory, key, *, caller, request_for, checkout=None, dry_
         entry, _retired = _find(state, key)
         if entry.get("event") not in _RETRY_EVENTS or "run_id" not in entry:
             raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
+        if entry.get("host") is not None and entry.get("host") != host:
+            raise PollError("INVALID_PARAMS", "retry must use the recorded worker placement")
         tested = entry.get("tested_commit")
         if not isinstance(tested, str) or _SHA.fullmatch(tested) is None:
             raise PollError("INVALID_PARAMS", "submission has no tested commit")
@@ -424,7 +436,7 @@ def retry_submission(directory, key, *, caller, request_for, checkout=None, dry_
                 workflow=request.get("workflow"),
             )
         if checkout is None:
-            _checkout_worker_repository(caller, tested)
+            _checkout_worker_repository(caller, tested, clone)
         else:
             checkout(tested)
         submitted = caller("run.submit", params)
@@ -459,16 +471,25 @@ def retry_submission(directory, key, *, caller, request_for, checkout=None, dry_
         )
 
 
-def _checkout_worker_repository(caller, sha):
+def _checkout_worker_repository(caller, sha, clone):
     """Check out the tested commit on the worker's clone before submitting a retry."""
 
     if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
         raise PollError("INVALID_PARAMS", "submission has no tested commit")
+    if not isinstance(clone, str | Path):
+        raise PollError("INVALID_PARAMS", "live retry requires --clone")
     described = caller("worker.describe", {})
     repository = described.get("repository") if isinstance(described, dict) else None
     if not isinstance(repository, str) or repository == "":
         raise PollError("WORKER_ERROR", "worker describe did not name a repository")
-    _checkout(Path(repository), sha)
+    try:
+        expected = Path(clone).resolve()
+        actual = Path(repository).resolve()
+    except OSError:
+        raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository") from None
+    if actual != expected:
+        raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository")
+    _checkout(actual, sha)
 
 
 def _base_commit_mismatched(caller, entry):
@@ -532,7 +553,7 @@ def _describe(entry, *, caller, recorded_states, retired):
     try:
         decision = caller("run.status", _status_params(entry))
     except PollError as exc:
-        if exc.kind == "STATUS_REFUSED":
+        if exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH:
             row["status_refused"] = str(exc)
             row["stuck"] = True
             return row
