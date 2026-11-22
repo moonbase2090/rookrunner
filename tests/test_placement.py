@@ -22,6 +22,7 @@ import unittest
 from execution_core.cli import _places_from_args, _run_poll
 from execution_core.poll import Pass, PollError, poll_once
 from execution_core.protocol import canonical
+from execution_core.submissions import retry_submission, stored_request
 from execution_core.worker import Worker
 from test_poll import TOKEN, _Handler, _git
 
@@ -516,6 +517,26 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual([item for item in self._saved()["submissions"] if "waiting" in item], [])
         self.assertEqual(self._runs(alpha), 3)
 
+    def _shared_worker(self, name="shared", runner_image=None):
+        ssh_helper = self.root / f"fetch-{name}.py"
+        ssh_helper.write_text(
+            f"#!{sys.executable}\n"
+            "import os\n"
+            f"os.execvp('git-upload-pack', ['git-upload-pack', {str(self.remote)!r}])\n"
+        )
+        ssh_helper.chmod(0o755)
+        _git(self.clone, "remote", "set-url", "origin", "git@fixture:acme/demo.git")
+        _git(self.clone, "config", "core.sshCommand", shlex.quote(str(ssh_helper)))
+        worker = Worker(self.clone, self.root / f"state-{name}", runner_image=runner_image)
+        worker.start()
+        worker.stop.set()
+        worker.scheduler.join(timeout=5)
+        if worker.scheduler.is_alive():
+            self.fail("scheduler did not stop")
+        worker.stop.clear()
+        self.workers.append(worker)
+        return worker
+
     def test_a_waiting_job_is_checked_out_again_when_it_shares_the_worker_clone(self):
         # A job that waited for capacity is submitted after later passes moved the
         # clone the worker snapshots. The worker would capture the wrong commit.
@@ -529,6 +550,158 @@ class PlacementTests(unittest.TestCase):
         pending.remote_repository = str(self.clone)
         pending._place_checkout(tip)
         self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.strip(), tip)
+
+    def test_waiting_job_on_shared_clone_submits_and_reports_tested_commit_after_clone_moves(self):
+        first_tip = self._tip()
+        shared = self._shared_worker("shared-wait")
+        filled = self._fill(shared)
+        places = [self._place("shared", shared, cap=1)]
+
+        first_clock = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
+        second_clock = datetime(2026, 11, 22, 12, 1, tzinfo=UTC)
+        third_clock = datetime(2026, 11, 22, 12, 2, tzinfo=UTC)
+
+        # Pass 1: capacity is full, so first_tip is queued in waiting backlog.
+        pass1 = self._poll(places, jobs=[JOB], clock=first_clock)
+        self.assertEqual(pass1["submitted"], [])
+        self.assertEqual(len(pass1["waiting"]), 1)
+
+        # Pass 2: another commit moves the shared clone while capacity is still full.
+        second_tip = self._advance()
+        pass2 = self._poll(places, jobs=[JOB], clock=second_clock)
+        self.assertEqual(pass2["submitted"], [])
+        self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.strip(), second_tip)
+
+        # Pass 3: capacity frees up; waiting job for first_tip must snapshot first_tip, not second_tip.
+        self._succeed(shared, filled)
+        pass3 = self._poll(places, jobs=[JOB], clock=third_clock)
+        self.assertEqual(len(pass3["submitted"]), 1)
+        run_id = pass3["submitted"][0]["run_id"]
+        record = shared.get(run_id)
+        manifest = json.loads(
+            (
+                shared.state / "snapshots" / record["input"]["snapshot_id"] / "manifest.json"
+            ).read_text()
+        )
+        self.assertEqual(manifest["base_commit"], first_tip)
+
+        self._succeed(shared, run_id)
+        pass4 = self._poll(places, jobs=[JOB], clock=third_clock)
+        self.assertNotIn("errors", pass4)
+        self.assertIn(
+            {"run_id": run_id, "state": "success", "action": "posted"},
+            pass4["statuses"],
+        )
+
+    def test_submissions_retry_checks_out_tested_commit_on_moved_shared_clone(self):
+        first_tip = self._tip()
+        shared = self._shared_worker("shared-retry")
+        places = [self._place("shared", shared, cap=2)]
+
+        first_pass = self._poll(places, jobs=[JOB])
+        original_run_id = first_pass["submitted"][0]["run_id"]
+        original_entry = next(
+            row for row in self._saved()["submissions"] if row.get("run_id") == original_run_id
+        )
+        # Fail the original run with a setup error, then move the shared clone to second_tip.
+        failed = shared.get(original_run_id)
+        failed.update(
+            state="failed",
+            exit_code=None,
+            error={"kind": "SETUP_FAILED", "message": "worker storage is full"},
+        )
+        with shared.guard, shared.db:
+            shared.save(failed)
+
+        second_tip = self._advance()
+        self._poll(places, jobs=[JOB])
+        self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.strip(), second_tip)
+
+        # Operator retries the failed run on first_tip while shared clone sits on second_tip.
+        db_path = shared.state / "runs.sqlite3"
+        retried = retry_submission(
+            self.poll_state,
+            original_entry["key"],
+            caller=self._caller(shared),
+            request_for=lambda run_id: stored_request(db_path, run_id),
+        )
+        self.assertEqual(retried["action"], "submitted")
+        new_run_id = retried["run_id"]
+        self.assertEqual(_git(self.clone, "rev-parse", "HEAD").stdout.strip(), first_tip)
+        new_record = shared.get(new_run_id)
+        manifest = json.loads(
+            (
+                shared.state / "snapshots" / new_record["input"]["snapshot_id"] / "manifest.json"
+            ).read_text()
+        )
+        self.assertEqual(manifest["base_commit"], first_tip)
+
+        self._succeed(shared, new_run_id)
+        decision = self._caller(shared)(
+            "run.status",
+            {
+                "run_id": new_run_id,
+                "tested_commit": first_tip,
+                "status_sha": first_tip,
+                "context": original_entry["context"],
+            },
+        )
+        self.assertEqual(decision, {"action": "post", "state": "success"})
+
+    def test_worker_submit_refuses_mismatched_commit_for_push_and_pull_request(self):
+        first_tip = self._tip()
+        second_tip = self._advance()
+        _git(self.clone, "fetch", "--quiet", "origin")
+        _git(self.clone, "checkout", "--detach", "--force", "--quiet", second_tip)
+        shared = self._shared_worker("shared-guard")
+        caller = self._caller(shared)
+        snapshots_dir = shared.state / "snapshots"
+
+        for event_name, extra in (
+            ("push", {"ref": "refs/heads/main", "after": first_tip}),
+            (
+                "pull_request",
+                {"ref": "refs/pull/1/merge", "after": first_tip, "action": "opened"},
+            ),
+        ):
+            params = {
+                "version": 1,
+                "submission_key": f"mismatch-{event_name}",
+                "workflow": JOB[0],
+                "job_id": JOB[1],
+                "event_name": event_name,
+                "event": extra,
+                "image": X86,
+            }
+            if event_name == "pull_request":
+                params["activity_type"] = "opened"
+            with self.assertRaises(PollError) as raised:
+                caller("run.submit", params)
+            self.assertEqual(raised.exception.kind, "SOURCE_UNSTABLE")
+            self.assertIn("HEAD does not match the submitted commit", str(raised.exception))
+
+        self.assertEqual(self._runs(shared), 0)
+        published = list(snapshots_dir.iterdir()) if snapshots_dir.exists() else []
+        self.assertEqual(published, [])
+
+        # Once the clone is checked out to first_tip, submission succeeds with matching base_commit.
+        _git(self.clone, "checkout", "--detach", "--force", "--quiet", first_tip)
+        accepted = caller(
+            "run.submit",
+            {
+                "version": 1,
+                "submission_key": "matched-push",
+                "workflow": JOB[0],
+                "job_id": JOB[1],
+                "event_name": "push",
+                "event": {"ref": "refs/heads/main", "after": first_tip},
+                "image": X86,
+            },
+        )
+        manifest = json.loads(
+            (snapshots_dir / accepted["input"]["snapshot_id"] / "manifest.json").read_text()
+        )
+        self.assertEqual(manifest["base_commit"], first_tip)
 
     def test_no_ready_place_records_nothing(self):
         alpha = self._worker("alpha")

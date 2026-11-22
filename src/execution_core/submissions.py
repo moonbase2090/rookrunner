@@ -17,7 +17,15 @@ import sqlite3
 import urllib.parse
 from datetime import UTC, datetime
 
-from .poll import PollError, _save_state, has_successor, is_capacity_wait, retry_submission_key
+from .poll import (
+    _SHA,
+    PollError,
+    _checkout,
+    _save_state,
+    has_successor,
+    is_capacity_wait,
+    retry_submission_key,
+)
 from .protocol import strict_json
 from .status import TERMINAL_STATUS, StatusError, github_state, require_repository
 
@@ -26,6 +34,7 @@ _ACTIVE = frozenset({"queued", "running"})
 _RETRY_EVENTS = frozenset({"push", "pull_request"})
 _RETRY_STATES = frozenset({"failed", "cancelled"})
 _CAPACITY_KEY = re.compile(r"poll-[0-9a-f]{64}\Z")
+_BASE_COMMIT_MISMATCH = "base_commit does not equal the tested commit"
 _KEPT = (
     "run_id",
     "event",
@@ -334,8 +343,11 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             return _outcome(entry, "abandoned", False)
         record = _run(caller, entry)
         final = _final_state(record)
+        mismatched = False
         if final == "success":
-            raise PollError("INVALID_PARAMS", "abandon does not post success")
+            if not _base_commit_mismatched(caller, entry):
+                raise PollError("INVALID_PARAMS", "abandon does not post success")
+            mismatched = True
         if final == "pending":
             if dry_run:
                 return _outcome(entry, "would_cancel", True)
@@ -343,7 +355,9 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             record = _run(caller, entry)
             final = _final_state(record)
             if final == "success":
-                raise PollError("INVALID_PARAMS", "abandon does not post success")
+                if not _base_commit_mismatched(caller, entry):
+                    raise PollError("INVALID_PARAMS", "abandon does not post success")
+                mismatched = True
             if final == "pending":
                 raise PollError("INVALID_PARAMS", "run is still active")
         _require_context(entry)
@@ -351,14 +365,18 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             return _outcome(entry, "would_post", True, state="error")
         _require_post(post)
         post(entry["status_sha"], "error", entry["context"])
-        if final in TERMINAL_STATUS:
-            caller("run.status", {**_status_params(entry), "record": final})
+        if final in TERMINAL_STATUS and not mismatched:
+            try:
+                caller("run.status", {**_status_params(entry), "record": final})
+            except PollError as exc:
+                if not (exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH):
+                    raise
         if not retired:
             _retire(directory, state, entry, abandoned=True)
         return _outcome(entry, "abandoned", False, state="error")
 
 
-def retry_submission(directory, key, *, caller, request_for, dry_run=False):
+def retry_submission(directory, key, *, caller, request_for, checkout=None, dry_run=False):
     """Submit one successor of a failed or cancelled push or pull request. Repeat is a no-op."""
 
     _require_key(key)
@@ -367,6 +385,9 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
         entry, _retired = _find(state, key)
         if entry.get("event") not in _RETRY_EVENTS or "run_id" not in entry:
             raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
+        tested = entry.get("tested_commit")
+        if not isinstance(tested, str) or _SHA.fullmatch(tested) is None:
+            raise PollError("INVALID_PARAMS", "submission has no tested commit")
         successor = retry_submission_key(entry["key"])
         if _successor_recorded(state, entry["key"], successor):
             return _outcome(entry, "already_retried", dry_run, submission_key=successor)
@@ -387,6 +408,10 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
                 submission_key=successor,
                 workflow=request.get("workflow"),
             )
+        if checkout is None:
+            _checkout_worker_repository(caller, tested)
+        else:
+            checkout(tested)
         submitted = caller("run.submit", params)
         if not isinstance(submitted, dict) or not isinstance(submitted.get("run_id"), str):
             raise PollError("WORKER_ERROR", "worker submit did not return a run")
@@ -414,6 +439,26 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             run_id=submitted["run_id"],
             workflow=request.get("workflow"),
         )
+
+
+def _checkout_worker_repository(caller, sha):
+    """Check out the tested commit on the worker's clone before submitting a retry."""
+
+    if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
+        raise PollError("INVALID_PARAMS", "submission has no tested commit")
+    described = caller("worker.describe", {})
+    repository = described.get("repository") if isinstance(described, dict) else None
+    if not isinstance(repository, str) or repository == "":
+        raise PollError("WORKER_ERROR", "worker describe did not name a repository")
+    _checkout(Path(repository), sha)
+
+
+def _base_commit_mismatched(caller, entry):
+    try:
+        caller("run.status", _status_params(entry))
+    except PollError as exc:
+        return exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH
+    return False
 
 
 def _restore_activity_type(params):
@@ -461,7 +506,14 @@ def _describe(entry, *, caller, recorded_states, retired):
     if recorded & TERMINAL_STATUS:
         row["final"] = _final_state(record)
         return row
-    decision = caller("run.status", _status_params(entry))
+    try:
+        decision = caller("run.status", _status_params(entry))
+    except PollError as exc:
+        if exc.kind == "STATUS_REFUSED":
+            row["status_refused"] = str(exc)
+            row["stuck"] = True
+            return row
+        raise
     if not isinstance(decision, dict):
         raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
     row["status_action"] = decision.get("action")

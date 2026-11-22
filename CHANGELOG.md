@@ -7,6 +7,19 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `submissions retry` now checks out the retried submission's tested commit on
+  the worker clone before calling `run.submit`. Before, retrying against a
+  shared clone left on another commit caused the worker to snapshot the wrong
+  HEAD and later refuse status reporting as `base_commit does not equal the
+  tested commit`.
+- The worker now rejects a `push` or `pull_request` `run.submit` at admission
+  with `SOURCE_UNSTABLE` when the repository HEAD does not match the submitted
+  `event.after` commit, instead of publishing a mismatched snapshot and queuing
+  an unreportable run.
+- `submissions list` and `submissions inspect` now report a `STATUS_REFUSED`
+  submission as stuck instead of failing, and `submissions abandon` can post
+  `error` and retire an already-mismatched run.
+
 ## [0.1.23] - 2026-11-20
 
 - When a branch or pull request list reaches the 20-page bound, the poll leaves
