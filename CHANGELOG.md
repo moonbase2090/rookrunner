@@ -9,6 +9,15 @@ This file does not reconstruct earlier milestones.
 
 ## [0.1.24] - 2026-11-22
 
+- Poll submissions now carry explicit durable lifecycle states. A capability
+  refusal blocks after its first occurrence until the worker engine identity
+  changes. A tested-commit mismatch blocks after its first reporting attempt
+  until an operator retries or abandons it. Block records retain the error
+  fingerprint, first and last observation, count, engine identity, and unblock
+  condition; rate limits keep their existing retry behavior.
+- `poll inspect`, `poll repair`, `poll retry`, and `poll abandon KEY --reason`
+  expose recovery through the poll command. Abandon reasons are retained in
+  atomically written tombstones, and retired keys are not rediscovered.
 - A commit trust lookup now asks GitHub for one file record instead of the full
   patch-bearing file list. Large commits no longer exceed the poller's 1 MiB
   response limit, and author, committer, and signature checks still use the

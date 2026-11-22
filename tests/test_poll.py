@@ -7,6 +7,7 @@ queued until the test changes it or the 24-hour rule cancels it.
 """
 
 import json
+import hashlib
 import os
 import shutil
 from datetime import datetime, timedelta, UTC
@@ -33,6 +34,7 @@ from execution_core.poll import (
 )
 from execution_core.protocol import canonical
 from execution_core.status import StatusError
+from execution_core.submissions import abandon_submission
 from execution_core.worker import Worker
 
 
@@ -326,6 +328,32 @@ class QueueTests(unittest.TestCase):
                 "2026-10-08T12:15:00+00:00",
             ),
         )
+
+    def test_capability_block_unblocks_only_after_engine_identity_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            entry = {
+                "key": "poll-" + "ab" * 32,
+                "state": "blocked",
+                "blocked": {
+                    "engine": {"version": "0.1.23"},
+                    "unblock": "engine_changed",
+                },
+            }
+            passed = poll_module.Pass.__new__(poll_module.Pass)
+            passed.state_dir = state_dir
+            passed.state = {
+                "version": 1,
+                "repository": "acme/demo",
+                "submissions": [entry],
+                "completed": {},
+            }
+
+            self.assertTrue(passed._blocked_for_engine(entry, {"version": "0.1.23"}))
+            self.assertFalse(passed._blocked_for_engine(entry, {"version": "0.1.24"}))
+            self.assertEqual(entry["state"], "claimed")
+            saved = json.loads((state_dir / "poll.json").read_text())
+            self.assertEqual(saved["submissions"][0]["state"], "claimed")
 
 
 class PollTests(unittest.TestCase):
@@ -1138,6 +1166,135 @@ class PollTests(unittest.TestCase):
         self._places([self._place("other", other, self._bound(other, calls))], datetime.now(UTC))
         self.assertEqual(other.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
         self.assertNotIn("run.submit", calls)
+
+    def test_old_poll_state_blocks_a_capability_refusal_after_one_worker_call(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        self.state.mkdir(exist_ok=True)
+        (self.state / "poll.json").write_text(
+            canonical(
+                {
+                    "version": 1,
+                    "repository": "acme/demo",
+                    "etags": {},
+                    "tips": {},
+                    "pulls": {},
+                    "submissions": [],
+                    "completed": {},
+                    "forks": [],
+                    "merge_absent": [],
+                }
+            )
+        )
+        original = self.caller
+        submit_calls = []
+
+        def refusing(method, params):
+            if method == "run.submit":
+                submit_calls.append(params["submission_key"])
+                raise PollError(
+                    "CAPABILITY_UNSUPPORTED",
+                    "jobs.check.timeout-minutes: capability is unsupported",
+                )
+            return original(method, params)
+
+        self.caller = refusing
+        try:
+            first_at = datetime(2026, 11, 22, 12, 0, tzinfo=UTC)
+            first = self.poll(clock=first_at)
+            saved = json.loads((self.state / "poll.json").read_text())
+            blocked = saved["submissions"][0]
+            self.assertEqual(blocked["state"], "blocked")
+            self.assertEqual(blocked["blocked"]["first_seen"], first_at.isoformat())
+            self.assertEqual(blocked["blocked"]["last_seen"], first_at.isoformat())
+            self.assertEqual(blocked["blocked"]["count"], 1)
+            self.assertEqual(blocked["blocked"]["kind"], "CAPABILITY_UNSUPPORTED")
+            self.assertRegex(blocked["blocked"]["fingerprint"], r"^sha256:[0-9a-f]{64}$")
+            self.assertIsInstance(blocked["blocked"]["engine"], dict)
+            self.assertEqual(blocked["blocked"]["unblock"], "engine_changed")
+            self.assertEqual(first["blocked"], [blocked["key"]])
+
+            # Replay discovery from the legacy cursors. The blocked key is
+            # durable, so the worker is not asked a second time.
+            saved["tips"] = {}
+            saved["etags"] = {}
+            (self.state / "poll.json").write_text(canonical(saved))
+            second = self.poll(clock=first_at + timedelta(minutes=5))
+            self.assertEqual(second["submitted"], [])
+            self.assertEqual(submit_calls, [blocked["key"]])
+            replayed = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+            self.assertEqual(replayed["blocked"], blocked["blocked"])
+
+            poll_path = self.state / "poll.json"
+            with poll_path.open() as old_poll:
+                abandoned = abandon_submission(
+                    self.state,
+                    blocked["key"],
+                    caller=refusing,
+                    post=None,
+                    reason="workflow needs a newer engine",
+                )
+                old_poll.seek(0)
+                self.assertEqual(json.load(old_poll)["submissions"][0]["state"], "blocked")
+            self.assertEqual(abandoned["action"], "abandoned")
+            tombstone = json.loads(poll_path.read_text())
+            self.assertEqual(tombstone["submissions"], [])
+            self.assertEqual(tombstone["completed"][blocked["key"]]["state"], "abandoned")
+            self.assertEqual(
+                tombstone["completed"][blocked["key"]]["abandon_reason"],
+                "workflow needs a newer engine",
+            )
+
+            tombstone["tips"] = {}
+            tombstone["etags"] = {}
+            poll_path.write_text(canonical(tombstone))
+            self.poll(clock=first_at + timedelta(minutes=10))
+            self.assertEqual(submit_calls, [blocked["key"]])
+        finally:
+            self.caller = original
+
+    def test_tested_commit_mismatch_blocks_after_the_first_reporting_pass(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        submitted = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(submitted)
+        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["base_commit"] = "0" * 40
+        encoded = canonical(manifest).encode()
+        manifest_path.write_bytes(encoded)
+        record["input"]["digest"] = hashlib.sha256(encoded).hexdigest()
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+
+        original = self.caller
+        status_calls = []
+
+        def counted(method, params):
+            if method == "run.status" and "record" not in params:
+                status_calls.append(params["run_id"])
+            return original(method, params)
+
+        self.caller = counted
+        try:
+            first = self.poll(clock=datetime(2026, 11, 22, 13, 0, tzinfo=UTC))
+            saved = json.loads((self.state / "poll.json").read_text())
+            entry = saved["submissions"][0]
+            self.assertEqual(first["blocked"], [entry["key"]])
+            self.assertEqual(entry["state"], "blocked")
+            self.assertEqual(entry["blocked"]["kind"], "STATUS_REFUSED")
+            self.assertEqual(entry["blocked"]["unblock"], "retry_or_abandon")
+
+            second = self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
+            self.assertEqual(second["blocked"], [])
+            self.assertEqual(status_calls, [submitted])
+            unchanged = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+            self.assertEqual(unchanged["blocked"], entry["blocked"])
+        finally:
+            self.caller = original
 
     def test_app_reporting_retires_an_unreadable_terminal_snapshot_once(self):
         tip = self._tip()
