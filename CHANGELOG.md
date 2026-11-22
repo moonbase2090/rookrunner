@@ -7,6 +7,7 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- An action path is passed as a path, and a path segment that starts with a dash is refused.
 - Poll submissions now carry explicit durable lifecycle states. A capability
   refusal blocks after its first occurrence until the worker engine identity
   changes. A tested-commit mismatch blocks after its first reporting attempt

@@ -3574,7 +3574,7 @@ jobs:
         image: {self.image}
         command: sleep infinity
     steps:
-      - run: sleep 30
+      - run: sleep 15
 """
         )
         root = self.root / "cancel-service"
@@ -3591,7 +3591,6 @@ jobs:
                 )
                 if listed.stdout.strip():
                     owner.request_cancel()
-                    owner.stop()
                     return
                 time.sleep(0.1)
 

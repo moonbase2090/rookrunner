@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from execution_core.actions import ActionStorageFull, stage_node24_actions
+from execution_core.actions import ActionStorageFull, parse_remote_uses, stage_node24_actions
 from execution_core.disk import usage
 from execution_core.plan import plan_snapshot
 from execution_core.protocol import canonical
@@ -519,6 +519,41 @@ runs:
         self.assertEqual(nearby["result"]["state"], "queued")
         self.assertNotIn("actions", nearby["result"]["input"])
         self.assertEqual(worker.action_store().fetches, 0)
+
+    def test_archive_passes_the_action_path_after_a_separator(self):
+        sha = self._action({"action.yml": HELLO, "nested/action.yml": NESTED})
+        workflow = self._workflow(self._uses(f"acme/hello/nested@{sha}"))
+        seen = []
+        real_run = subprocess.run
+
+        def spy(args, **kwargs):
+            seen.append(list(args))
+            return real_run(args, **kwargs)
+
+        self._start()
+        with patch("execution_core.actions.subprocess.run", side_effect=spy):
+            accepted = self._submit("separated", workflow)
+        self.assertEqual(accepted["result"]["state"], "queued")
+        archives = [argv for argv in seen if "archive" in argv]
+        self.assertEqual(1, len(archives))
+        archive_at = archives[0].index("archive")
+        self.assertEqual(
+            ["--format=tar", sha, "--", "nested"],
+            archives[0][archive_at + 1 :],
+        )
+
+    def test_a_dash_segment_is_not_fetched(self):
+        sha = "ab" * 20
+        self.assertIsNone(parse_remote_uses(f"acme/hello/-nested@{sha}"))
+        self.assertIsNone(parse_remote_uses(f"acme/-hello@{sha}"))
+        self.assertEqual("nested", parse_remote_uses(f"acme/hello/nested@{sha}").path)
+        pinned = self._action({"action.yml": HELLO, "nested/action.yml": NESTED})
+        workflow = self._workflow(self._uses(f"acme/hello/-nested@{pinned}"))
+        worker = self._start()
+        refused = self._submit("dash", workflow)
+        self.assertEqual(refused["error"]["data"]["kind"], "CAPABILITY_UNSUPPORTED")
+        self.assertIsNone(self._row("dash"))
+        self.assertEqual(0, worker.action_store().fetches)
 
     def test_path_pin_stores_that_directory(self):
         sha = self._action({"action.yml": HELLO, "nested/action.yml": NESTED})
