@@ -348,15 +348,7 @@ def abandon_submission(directory, key, *, caller, post, reason=None, dry_run=Fal
             if dry_run:
                 return _outcome(entry, "would_abandon", True, reason=reason)
             if not retired:
-                _retire(
-                    directory,
-                    state,
-                    entry,
-                    abandoned=True,
-                    state="abandoned",
-                    abandon_reason=reason,
-                    abandoned_at=datetime.now(UTC).isoformat(),
-                )
+                _retire_abandoned(directory, state, entry, reason)
             return _outcome(entry, "abandoned", False, reason=reason)
         record = _run(caller, entry)
         final = _final_state(record)
@@ -389,15 +381,7 @@ def abandon_submission(directory, key, *, caller, post, reason=None, dry_run=Fal
                 if not (exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH):
                     raise
         if not retired:
-            _retire(
-                directory,
-                state,
-                entry,
-                abandoned=True,
-                state="abandoned",
-                abandon_reason=reason,
-                abandoned_at=datetime.now(UTC).isoformat(),
-            )
+            _retire_abandoned(directory, state, entry, reason)
         return _outcome(entry, "abandoned", False, state="error", reason=reason)
 
 
@@ -632,6 +616,17 @@ def _retire_state(poll_state, entry, **extra):
 def _retire(directory, poll_state, entry, **extra):
     _retire_state(poll_state, entry, **extra)
     _save_state(Path(directory) / "poll.json", poll_state)
+
+
+def _retire_abandoned(directory, poll_state, entry, reason):
+    extra = {
+        "abandoned": True,
+        "state": "abandoned",
+        "abandoned_at": datetime.now(UTC).isoformat(),
+    }
+    if reason is not None:
+        extra["abandon_reason"] = reason
+    _retire(directory, poll_state, entry, **extra)
 
 
 def _outcome(entry, action, dry_run, **extra):

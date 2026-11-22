@@ -1622,6 +1622,8 @@ class Pass:
             return True
         if blocked.get("unblock") == "engine_changed" and blocked.get("engine") != engine:
             entry["state"] = "claimed"
+            # Submission may raise before its normal checkpoint, so persist the
+            # unblock transition here instead of restoring the stale block next pass.
             self._checkpoint()
             return False
         return True
