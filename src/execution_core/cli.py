@@ -353,7 +353,7 @@ def _place_caller_unused(_method, _params):
     raise PollError("WORKER_ERROR", "worker ssh call failed")
 
 
-def _place_from_json(text):
+def _place_from_json(text, *, job_ids=None):
     if (
         not isinstance(text, str)
         or text == ""
@@ -367,10 +367,10 @@ def _place_from_json(text):
         raise PollError("INVALID_PARAMS", "place is not accepted") from None
     if not isinstance(parsed, dict):
         raise PollError("INVALID_PARAMS", "place is not accepted")
-    allowed = {"name", "state", "cap", "image", "ssh"}
+    allowed = {"name", "state", "cap", "image", "ssh", "jobs"}
     if not {"name", "state", "cap", "image"} <= set(parsed) or set(parsed) - allowed:
         raise PollError("INVALID_PARAMS", "place is not accepted")
-    checked = accept_place({**parsed, "caller": _place_caller_unused})
+    checked = accept_place({**parsed, "caller": _place_caller_unused}, job_ids=job_ids)
     if checked["ssh"] is None:
         checked["caller"] = _worker_caller(checked["state"])
     else:
@@ -389,8 +389,9 @@ def _places_from_args(args):
         raise PollError("INVALID_PARAMS", "place and ssh host are set separately")
     places = []
     seen = set()
+    job_ids = {job for _workflow, job in getattr(args, "job", None) or ()}
     for item in raw:
-        place = _place_from_json(item)
+        place = _place_from_json(item, job_ids=job_ids)
         if place["name"] in seen:
             raise PollError("INVALID_PARAMS", "place is not accepted")
         seen.add(place["name"])
@@ -1395,7 +1396,8 @@ def main():
         action="append",
         help=(
             "one worker in placement order, as a JSON object with name, state, "
-            "cap, and image, and an optional ssh. Repeat for each worker. "
+            "cap, and image, and optional ssh and jobs keys. jobs is a list of "
+            "configured --job ids allowed there. Repeat for each worker. "
             "Omit it to keep one local socket or one --ssh-host."
         ),
     )

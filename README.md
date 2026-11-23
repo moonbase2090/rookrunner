@@ -35,6 +35,27 @@ The first time a workflow is seen, the poll records the latest due minute and do
 
 A due minute runs on the first poll at or after that minute. The engine does not choose the interval. The owner poll is every 5 minutes, so a shorter cron still runs at most once per poll.
 
+## Placement
+
+Run one poller per repository. Repeat `--place` to give its ordered list of
+workers. An optional `jobs` list restricts a place to those job IDs, as given
+to `--job WORKFLOW JOB_ID`. For example, a poll configured with a `build` job
+can include this fragment, replacing the alias, state path, and image digest:
+
+```sh
+--place '{"name":"first","ssh":"<ssh-alias>","state":"/path/state","cap":1,"image":"sha256:<digest>","jobs":["build"]}'
+```
+
+A place without `jobs` leaves job selection unrestricted. An unlisted job goes to the
+next eligible place, waits for eligible capacity, or reports `no_host`.
+Capacity-waiting jobs use the same filter when a place becomes free.
+The list must be non-empty, contain unique strings, and name only configured
+job IDs; invalid values fail startup with `INVALID_PARAMS`. The filter matches
+job IDs across workflows, not rendered job names or workflow paths.
+Existing recorded claims keep their place. See the
+[placement contract](docs/design/development-contract.md) for recovery behavior
+when a changed list excludes a recorded claim.
+
 ## Stuck submissions
 
 A poll submission stays active until a final commit status is recorded.

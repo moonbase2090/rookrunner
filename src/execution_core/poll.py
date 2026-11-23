@@ -1022,14 +1022,14 @@ def _place_state_accepted(path):
     )
 
 
-def accept_place(place):
+def accept_place(place, *, job_ids=None):
     """Return one place. ``caller`` talks to that worker and is not invoked here."""
 
     if not isinstance(place, dict):
         raise PollError("INVALID_PARAMS", "place is not accepted")
     internal = {"skip", "reachable", "connected", "remote_repository", "active"}
     public = {key: value for key, value in place.items() if key not in internal}
-    allowed = {"name", "ssh", "state", "cap", "image", "caller"}
+    allowed = {"name", "ssh", "state", "cap", "image", "caller", "jobs"}
     required = {"name", "state", "cap", "image", "caller"}
     if not required <= set(public) or set(public) - allowed:
         raise PollError("INVALID_PARAMS", "place is not accepted")
@@ -1048,7 +1048,20 @@ def accept_place(place):
         raise PollError("INVALID_PARAMS", "place is not accepted")
     if not callable(public["caller"]):
         raise PollError("INVALID_PARAMS", "place is not accepted")
-    return {
+    if "jobs" in public:
+        jobs = public["jobs"]
+        if (
+            not isinstance(jobs, list)
+            or not jobs
+            or not all(isinstance(job, str) and job for job in jobs)
+            or len(set(jobs)) != len(jobs)
+        ):
+            raise PollError(
+                "INVALID_PARAMS", "place jobs must be a non-empty list of unique strings"
+            )
+        if job_ids is not None and not set(jobs) <= job_ids:
+            raise PollError("INVALID_PARAMS", "place jobs must match configured --job ids")
+    accepted = {
         "name": name,
         "ssh": ssh,
         "state": public["state"],
@@ -1061,9 +1074,12 @@ def accept_place(place):
         "remote_repository": None,
         "active": 0,
     }
+    if "jobs" in public:
+        accepted["jobs"] = list(jobs)
+    return accepted
 
 
-def accept_places(places):
+def accept_places(places, *, job_ids=None):
     """Return the placement order. An empty list or a repeated name is refused."""
 
     if not isinstance(places, list) or not places:
@@ -1071,12 +1087,16 @@ def accept_places(places):
     accepted = []
     seen = set()
     for place in places:
-        item = accept_place(place)
+        item = accept_place(place, job_ids=job_ids)
         if item["name"] in seen:
             raise PollError("INVALID_PARAMS", "place is not accepted")
         seen.add(item["name"])
         accepted.append(item)
     return accepted
+
+
+def _place_allows_job(place, job_id):
+    return "jobs" not in place or job_id in place["jobs"]
 
 
 def _diff(clone, before, after):
@@ -1264,7 +1284,7 @@ class Pass:
         if not self.app_key and not self.credential_file:
             raise PollError("INVALID_PARAMS", "one post needs one credential")
         if self.places is not None:
-            self.places = accept_places(self.places)
+            self.places = accept_places(self.places, job_ids={job for _workflow, job in self.jobs})
             if self.ssh_host is not None:
                 raise PollError("INVALID_PARAMS", "place and ssh host are set separately")
         elif self.ssh_host is not None:
@@ -1528,8 +1548,10 @@ class Pass:
             seen.append(host)
             self._skip({"reason": "host_unknown", "host": host})
 
-    def _choose_place(self):
+    def _choose_place(self, job_id):
         for place in self.places:
+            if not _place_allows_job(place, job_id):
+                continue
             if place["skip"] == "host_full":
                 self._mark(place, "host_full")
                 continue
@@ -3128,13 +3150,15 @@ class Pass:
             )
         return not self.budget.stopped
 
-    def _capacity_pressure(self):
-        """True when every usable place is at its cap and at least one is full."""
+    def _capacity_pressure(self, job_id):
+        """True when every usable place for this job is full and at least one exists."""
 
         if not self.places:
             return False
         saw_full = False
         for place in self.places:
+            if not _place_allows_job(place, job_id):
+                continue
             if place.get("skip") == "host_full":
                 saw_full = True
                 continue
@@ -3234,6 +3258,18 @@ class Pass:
     def _finish_placed(self, claimed, place, params, event_name, ref, job_id):
         """Submit one claimed job. False means the pending post did not finish."""
 
+        if not _place_allows_job(place, job_id):
+            self.unplaced = True
+            self._skip(
+                {
+                    "reason": "no_host",
+                    "event": event_name,
+                    "ref": ref,
+                    "workflow": params.get("workflow"),
+                    "job_id": job_id,
+                }
+            )
+            return True
         self._bind(place)
         self._place_checkout(claimed["tested_commit"])
         try:
@@ -3304,10 +3340,6 @@ class Pass:
             ranked.append((since if isinstance(since, str) else "", index, entry))
         ranked.sort()
         for _since, _index, entry in ranked:
-            place = self._choose_place()
-            if place is None:
-                self._show_waiting(entry)
-                continue
             waiting = entry.get("waiting") or {}
             request = waiting.get("request")
             ref = waiting.get("ref")
@@ -3316,6 +3348,10 @@ class Pass:
                 continue
             params = dict(request)
             job_id = params.get("job_id")
+            place = self._choose_place(job_id)
+            if place is None:
+                self._show_waiting(entry)
+                continue
             event_name = entry.get("event")
             entry.pop("waiting", None)
             entry["host"] = place["name"]
@@ -3386,9 +3422,9 @@ class Pass:
                     continue
                 claimed = existing
             else:
-                place = self._choose_place()
+                place = self._choose_place(job_id)
                 if place is None:
-                    if self._capacity_pressure():
+                    if self._capacity_pressure(job_id):
                         self._remember_capacity(
                             key,
                             event_name,

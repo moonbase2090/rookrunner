@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A `--place` object can include a `jobs` allow-list of configured job IDs.
+  New jobs and capacity-waiting jobs skip places that exclude them. Omitting
+  the list retains existing placement behavior. Empty, duplicate, non-string,
+  or unknown job entries are rejected at startup.
 - A stale pull request merge ref (`refs/pull/N/merge`) right after a push is now
   treated as retryable instead of immediately posting a terminal `rookrunner/trust`
   error. While the merge ref settles, the poll skips the pull request without
