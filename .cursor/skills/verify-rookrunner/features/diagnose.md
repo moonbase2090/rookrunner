@@ -5,7 +5,7 @@
 ## Sub-features
 
 - `diagnose-since` with `--since 1h` includes a decision from this session and reports `cap_bytes` 262144.
-- `diagnose-filter` with `--since 1s` after a short wait omits a decision whose timestamp is older than that window.
+- `diagnose-filter` with an aware cutoff after a decision omits that older decision.
 
 ## How to get to it (user POV)
 
@@ -23,6 +23,7 @@ Preconditions:
 - **Miss the trigger.** Run `capture diagnose-submit .venv/bin/python -m execution_core --state "$STATE" submit --key "verify-diagnose-${RUN_ID}" --workflow .github/workflows/check.yml --job-id check --event '{}' --event-name workflow_dispatch --image rust@sha256:abababababababababababababababababababababababababababababababab`. `diagnose-submit.exit` is `0`. `diagnose-submit.stdout` has `triggered` false and does not have `run_id`.
 - **Read the bundle.** Run `capture diagnose .venv/bin/python -m execution_core --state "$STATE" diagnose --since 1h`. `diagnose.exit` is `0`.
 - **Proof.** `diagnose.stdout` contains `"reason":"not_triggered"` and `"cap_bytes":262144`. It contains `verify-diagnose-${RUN_ID}` inside `submission_key`. `diagnose.command` records the argv, and `diagnose.stderr` exists.
+- **Filter.** After that decision is recorded, set `CUTOFF` with `.venv/bin/python -c 'from datetime import datetime, UTC; print(datetime.now(UTC).isoformat())'`. Run `capture diagnose-filter .venv/bin/python -m execution_core --state "$STATE" diagnose --since "$CUTOFF"`. Require exit 0 and the earlier submission key absent from `skips`. No delay is needed.
 
 ## Gotchas
 

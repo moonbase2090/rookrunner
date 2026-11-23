@@ -112,6 +112,7 @@ The check imports the attribute and does not call it.
 
 ```status-features
 development worker | execution_core.worker:serve
+parallel worker slots | execution_core.worker:Worker
 mcp adapter | execution_core.mcp:serve_stdio
 terminal dashboard | execution_core.dashboard:serve_terminal
 status page | execution_core.status_page:serve

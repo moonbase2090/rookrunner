@@ -7,7 +7,10 @@ or reads a workflow. Version 1 stages the repository, plans one selected job, co
 history when that plan has fetch-depth 0, publishes and verifies the
 snapshot, and commits a queued run. The scheduler
 then materializes an attempt, records it, and runs that plan in one
-caller-pinned container. That container uses Docker network `none` unless
+caller-pinned container. `worker --cap N` allows N runs to execute at once,
+with one private attempt workspace and container lease per run. The default is one. Preparation and
+state transitions share the worker lock; container execution does not hold it.
+That container uses Docker network `none` unless
 this worker was started with network `bridge`. It mounts the Docker engine
 socket only when this worker was started with the docker socket flag. The
 job then keeps the caller uid and is added to the groups that can open
@@ -588,6 +591,7 @@ class Worker:
         state,
         disk_budget=None,
         *,
+        cap=1,
         network=DEFAULT_NETWORK,
         docker_socket=False,
         passwordless_sudo=False,
@@ -606,6 +610,9 @@ class Worker:
         oidc_pull_request=False,
         finished_folder_count=None,
     ):
+        if type(cap) is not int or cap < 1:
+            raise ValueError("worker cap must be a positive integer")
+        self.cap = cap
         if network not in {"bridge", "none"}:
             raise ValueError("container network must be bridge or none")
         if type(docker_socket) is not bool:
@@ -1058,10 +1065,10 @@ class Worker:
             raise OSError("attempt identity is not accepted")
         if state == "absent":
             directory = self.state / "ownership"
-            directory.mkdir(mode=0o700)
-        os.chmod(directory, 0o700)
+            directory.mkdir(mode=0o700, exist_ok=True)
         if directory.is_symlink() or not directory.is_dir():
             raise OSError("attempt identity is not accepted")
+        os.chmod(directory, 0o700)
         target = directory / attempt_id
         if os.path.lexists(target) and target.is_symlink():
             raise OSError("attempt identity is not accepted")
@@ -1160,19 +1167,38 @@ class Worker:
         return record
 
     def schedule(self):
+        slots = []
+        try:
+            for index in range(self.cap):
+                slot = threading.Thread(
+                    target=self._execute_slot, name=f"worker-slot-{index + 1}", daemon=True
+                )
+                slot.start()
+                slots.append(slot)
+        except Exception:
+            self._scheduler_failed()
+        finally:
+            for slot in slots:
+                slot.join()
+
+    def _execute_slot(self):
         try:
             self.execute_queue()
         except Exception:
-            # Fail closed if storage or execution breaks; never accept work into
-            # a dead scheduler. Restart reconciles a still-running record as lost.
-            with self.guard:
-                self.execution_error = "scheduler stopped; restart worker to reconcile runs"
+            self._scheduler_failed()
+
+    def _scheduler_failed(self):
+        # Keep inspection available, but stop every slot from claiming more work.
+        with self.guard:
+            self.execution_error = "scheduler stopped; restart worker to reconcile runs"
 
     def execute_queue(self):
         while not self.stop.is_set():
             lease = None
             picked = None
             with self.guard:
+                if self.execution_error is not None:
+                    return
                 picked = self._select_queued(conflicts_with_unresolved(self.unresolved))
                 if picked:
                     record, request = picked
@@ -1364,81 +1390,86 @@ class Worker:
         )
 
     def _run_accepted(self, record, request, owner=None):
-        pinned = record["input"]
-        event = request["event"]
-        event_digest = hashlib.sha256(canonical(event).encode("ascii")).hexdigest()
-        if event_digest != pinned["event_digest"]:
-            raise RunError("SETUP_FAILED", "event digest does not match the accepted event")
-        image = pinned["image_reference"]
-        if not isinstance(image, str) or not (
-            _IMAGE_ID.fullmatch(image) or _IMAGE_REF.fullmatch(image)
-        ):
-            raise RunError("SETUP_FAILED", "image is not pinned by digest")
-        if "sha256:" + image.rsplit("sha256:", 1)[1] != pinned["image_digest"]:
-            raise RunError("SETUP_FAILED", "image digest does not match the accepted pin")
-        snapshot = Path(self.state) / "snapshots" / pinned["snapshot_id"]
-        manifest = verify_snapshot(snapshot, pinned["digest"])
-        if (
-            manifest.get("workflow") != pinned["workflow"]
-            or manifest.get("workflow_digest") != pinned["workflow_digest"]
-        ):
-            raise RunError("SETUP_FAILED", "snapshot workflow does not match the accepted digest")
-        store = self.action_store()
-        with store.guard:
-            planned = plan_snapshot(snapshot, pinned["job_id"], action_store=store)
-        if planned["digest"] != pinned["plan_digest"]:
-            raise RunError("SETUP_FAILED", "planned digest does not match the accepted plan")
-        if self._abandoned(record["run_id"]):
-            raise _Abandoned()
-        attempts = Path(self.state) / "attempts"
-        if attempts.is_symlink():
-            raise RunError("SETUP_FAILED", "attempt directory is not accepted")
-        attempts.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(attempts, 0o700)
-        try:
-            reserve = usage(snapshot)
-        except OSError as exc:
-            self._note_refusal("snapshot could not be measured", 0, exc)
-            raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
-        # The snapshot is already in the state total. Reserve another copy
-        # for the attempt workspace. Do not delete the snapshot or other evidence.
-        if self._over_budget(reserve):
-            raise RunError("SETUP_FAILED", _STORAGE_FULL)
-        attempt_root = attempts / record["attempt_id"]
-        workspace = attempt_root / "workspace"
-        try:
-            attempt_root.mkdir(mode=0o700)
-        except FileExistsError as exc:
-            raise RunError("SETUP_FAILED", "attempt directory is not accepted") from exc
-        try:
-            os.chmod(attempt_root, 0o700)
-            self.state_usage.add(attempt_root)
-            materialize_attempt(snapshot, pinned["digest"], workspace)
-            self.state_usage.sync_path(attempt_root)
-        except Exception:
-            self._remove_workspace(attempt_root)
-            raise
-        if self._abandoned(record["run_id"]):
-            raise _Abandoned()
-        try:
-            actions_root = stage_node24_actions(
-                planned["plan"],
-                store,
-                attempt_root / "actions",
-                self._over_budget,
-            )
-        except ActionStorageFull as exc:
-            raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
-        except ActionUnavailable as exc:
-            message = (
-                "action directory changed"
-                if str(exc) == "action directory changed"
-                else "action repository could not be fetched"
-            )
-            raise RunError("SETUP_FAILED", message) from exc
-        if actions_root is not None:
-            self.state_usage.sync_path(attempt_root)
-        event_name = request.get("event_name") if isinstance(request, dict) else None
+        # Preparation shares the admission budget and action store. Check and
+        # materialize under one guard, then release it before container execution.
+        with self.guard:
+            pinned = record["input"]
+            event = request["event"]
+            event_digest = hashlib.sha256(canonical(event).encode("ascii")).hexdigest()
+            if event_digest != pinned["event_digest"]:
+                raise RunError("SETUP_FAILED", "event digest does not match the accepted event")
+            image = pinned["image_reference"]
+            if not isinstance(image, str) or not (
+                _IMAGE_ID.fullmatch(image) or _IMAGE_REF.fullmatch(image)
+            ):
+                raise RunError("SETUP_FAILED", "image is not pinned by digest")
+            if "sha256:" + image.rsplit("sha256:", 1)[1] != pinned["image_digest"]:
+                raise RunError("SETUP_FAILED", "image digest does not match the accepted pin")
+            snapshot = Path(self.state) / "snapshots" / pinned["snapshot_id"]
+            manifest = verify_snapshot(snapshot, pinned["digest"])
+            if (
+                manifest.get("workflow") != pinned["workflow"]
+                or manifest.get("workflow_digest") != pinned["workflow_digest"]
+            ):
+                raise RunError(
+                    "SETUP_FAILED", "snapshot workflow does not match the accepted digest"
+                )
+            store = self.action_store()
+            with store.guard:
+                planned = plan_snapshot(snapshot, pinned["job_id"], action_store=store)
+            if planned["digest"] != pinned["plan_digest"]:
+                raise RunError("SETUP_FAILED", "planned digest does not match the accepted plan")
+            if self._abandoned(record["run_id"]):
+                raise _Abandoned()
+            attempts = Path(self.state) / "attempts"
+            if attempts.is_symlink():
+                raise RunError("SETUP_FAILED", "attempt directory is not accepted")
+            attempts.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(attempts, 0o700)
+            try:
+                reserve = usage(snapshot)
+            except OSError as exc:
+                self._note_refusal("snapshot could not be measured", 0, exc)
+                raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
+            # The snapshot is already in the state total. Reserve another copy
+            # for the attempt workspace. Do not delete the snapshot or other evidence.
+            if self._over_budget(reserve):
+                raise RunError("SETUP_FAILED", _STORAGE_FULL)
+            attempt_root = attempts / record["attempt_id"]
+            workspace = attempt_root / "workspace"
+            try:
+                attempt_root.mkdir(mode=0o700)
+            except FileExistsError as exc:
+                raise RunError("SETUP_FAILED", "attempt directory is not accepted") from exc
+            try:
+                os.chmod(attempt_root, 0o700)
+                self.state_usage.add(attempt_root)
+                materialize_attempt(snapshot, pinned["digest"], workspace)
+                self.state_usage.sync_path(attempt_root)
+            except Exception:
+                self._remove_workspace(attempt_root)
+                raise
+            if self._abandoned(record["run_id"]):
+                raise _Abandoned()
+            try:
+                actions_root = stage_node24_actions(
+                    planned["plan"],
+                    store,
+                    attempt_root / "actions",
+                    self._over_budget,
+                )
+            except ActionStorageFull as exc:
+                raise RunError("SETUP_FAILED", _STORAGE_FULL) from exc
+            except ActionUnavailable as exc:
+                message = (
+                    "action directory changed"
+                    if str(exc) == "action directory changed"
+                    else "action repository could not be fetched"
+                )
+                raise RunError("SETUP_FAILED", message) from exc
+            if actions_root is not None:
+                self.state_usage.sync_path(attempt_root)
+            event_name = request.get("event_name") if isinstance(request, dict) else None
         # The admission checks above only bound the attempt before it starts.
         # The watch stops the owned container when the state grows past the
         # budget mid-run. The final check closes the race where the last
@@ -3410,6 +3441,7 @@ def serve(
     node24=None,
     runner_image=None,
     *,
+    cap=1,
     passwordless_sudo=False,
     job_privileges=False,
     secrets=False,
@@ -3429,6 +3461,7 @@ def serve(
         repository,
         state,
         disk_budget,
+        cap=cap,
         network=network,
         docker_socket=docker_socket,
         passwordless_sudo=passwordless_sudo,

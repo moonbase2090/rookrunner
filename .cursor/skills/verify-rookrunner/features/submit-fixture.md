@@ -28,6 +28,6 @@ Preconditions:
 ## Gotchas
 
 - `--backend development` is required for a fixture. Without it the client exits 2.
-- Reusing the same `--key` returns the existing run. It does not start a second fixture.
+- Reusing the same `--key` with identical fixture parameters returns the existing run. Changed parameters produce `IDEMPOTENCY_CONFLICT`.
 - `submit` exiting 0 means the worker accepted the fixture. Read `get` before calling the run successful.
 - Do not combine fixture flags with `--workflow`. The client rejects that mix.

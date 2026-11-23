@@ -25,14 +25,7 @@ Preconditions:
 - **Ask the worker.** Run `capture describe .venv/bin/python -m execution_core --state "$STATE" describe`.
 - **Proof.** `describe.exit` is `0`, `describe.command` ends with `describe`, and `describe.stderr` exists. In `describe.stdout`, `result.ready` is true, `result.repository` equals `REPO`, and `result.capabilities` contains `development.fixture`.
 
-## Gotchas
-
-- Exit 0 from `describe` is not enough. Match `repository` to this launch so a different worker is not accepted.
-- `describe` does not create a run and does not print logs.
-- A worker that has not opened `worker.sock` yet fails the client. Retry for a few seconds after launch, then treat a still-failing doctor as a broken instance.
-
-## Configured image readiness
-
+### Configured image readiness
 Use a separate state directory and worker process for this check. Keep the
 normal Launch/Doctor run without `--runner-image` as the development-fixture
 control. Do not reuse its state.
@@ -45,7 +38,8 @@ control. Do not reuse its state.
    runner image. Capture the failed readiness result before calling Doctor.
 3. With an available local pin in a separate worker, capture `describe` and
    require `ready` true and a null readiness error. Confirm the returned
-   `runner_image` matches that pin. A matching image proves availability only.
+   `runner_image` matches the pin's bare `sha256:` digest, including when the
+   input uses `repository@sha256:...`. A matching image proves availability only.
 4. Stop each owned worker as in Cleanup. Preserve the command and response
    evidence. Do not remove shared images for this check.
 
@@ -57,3 +51,8 @@ PYTHONPATH=src:tests .venv/bin/python -m unittest test_runner_readiness -v
 
 It covers missing images, removal/recovery, a mismatched pin, unavailable Docker,
 inspection timeouts, scheduler failure, pinned context, and no-image configuration.
+
+## Gotchas
+- Exit 0 from `describe` is not enough. Match `repository` to this launch so a different worker is not accepted.
+- `describe` does not create a run and does not print logs.
+- A worker that has not opened `worker.sock` yet fails the client. Retry for a few seconds after launch, then treat a still-failing doctor as a broken instance.

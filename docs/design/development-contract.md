@@ -32,6 +32,21 @@ state directory; another repository cannot reuse it. Distinct state directories
 are independent workers; this prototype does not provide a machine-wide
 repository lock. The repository must exist but need not yet be a Git checkout.
 
+`worker --cap N` sets the maximum number of accepted runs executing at once.
+It must be a positive integer and defaults to one. Fixed execution slots claim
+queued work under the worker lock, including the concurrency-group check and
+the durable `running` transition. Each run retains its own attempt directory,
+captured input, container lease, home, temporary files, and staged actions.
+Preparation and shared storage updates are serialized with admission; the lock
+is released before container execution. Cancelling one run leaves its peers
+running. Shutdown joins every slot before closing the database. A failed slot
+stops new queue claims and makes the worker not ready while inspection remains
+available.
+
+This execution limit is separate from a poll place's `cap`, which bounds queued
+plus running admissions. A place admission cap of two and worker execution cap
+of one still means one running run and one queued run.
+
 ## Operations
 
 | Method | Required parameters | Optional parameters |
