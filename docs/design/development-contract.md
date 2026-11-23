@@ -456,22 +456,36 @@ key already recorded for a host stays on that host, including when the
 run is lost.
 
 `poll --place` repeats in order. Each value is a JSON object with
-`name`, `state`, `cap`, and `image`, and an optional `ssh`. The name is
+`name`, `state`, `cap`, and `image`, and optional `ssh` and `jobs` keys. The name is
 what `poll.json` records as the host. A place without `ssh` uses the
 local socket in `state`. A place with `ssh` uses the same BatchMode
-client as `--ssh-host`. A new job goes to the first place whose image
+client as `--ssh-host`. If present, `jobs` is a non-empty list of unique
+strings, each naming a configured `--job WORKFLOW JOB_ID` job ID. Invalid
+values fail startup with `INVALID_PARAMS`. A place without `jobs` accepts
+any job ID. The filter matches IDs across workflows, not rendered job names.
+For example, after replacing the placeholders:
+
+```sh
+--place '{"name":"first","ssh":"<ssh-alias>","state":"/path/state","cap":1,"image":"sha256:<digest>","jobs":["build"]}'
+```
+
+A new job goes to the first place that allows its job ID, whose image
 matches, whose worker is ready, whose origin names the polled
-repository, and whose queued plus running runs are under `cap`. A place
-that does not match is named in the poll summary. A job with no ready
-place is left unrecorded. A job whose ready places are all at `cap` is
+repository, and whose queued plus running runs are under `cap`. Availability,
+image, and repository mismatches are named in the poll summary. A job with no
+eligible ready place is left unrecorded. A job whose eligible ready places are
+all at `cap` is
 recorded on the poll backlog with `waiting.since` and
 `waiting.reason` `capacity`. The pass summary lists that backlog in
 `waiting` and does not repeat a `no_host` skip for it. The oldest
-waiting job is submitted when a place has room. A key already recorded
-for a place stays on that place. `--place` is not combined with `--ssh-host` or
-`--remote-state`. Omitting `--place` keeps the single-worker path above.
-One invocation is still one repository. The operator runs one invocation
-per repository. Linux hosts still have no poll timer.
+waiting job is submitted when an eligible place has room. Capacity pressure is
+computed only from places that allow the job. A key already recorded
+for a place stays on that place. If a changed allow-list excludes a recorded
+claim with an unconfirmed submission, the claim is held with `no_host` rather
+than submitted there or redirected to another worker. Existing runs can still
+be followed and reported on their recorded place. `--place` is not combined
+with `--ssh-host` or `--remote-state`. Omitting `--place` keeps the single-worker
+path above. The operator schedules one poller per repository.
 
 The poll state keeps active submissions until terminal reporting completes.
 After reporting a `succeeded`, `failed`, or `cancelled` run, or after the worker

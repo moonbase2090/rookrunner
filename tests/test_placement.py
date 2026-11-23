@@ -261,7 +261,7 @@ class PlacementTests(unittest.TestCase):
 
         return caller
 
-    def _place(self, name, worker, cap=1, image=X86, ssh=None, caller=None):
+    def _place(self, name, worker, cap=1, image=X86, ssh=None, caller=None, jobs=None):
         place = {
             "name": name,
             "state": str(worker.state),
@@ -271,6 +271,8 @@ class PlacementTests(unittest.TestCase):
         }
         if ssh is not None:
             place["ssh"] = ssh
+        if jobs is not None:
+            place["jobs"] = jobs
         return place
 
     def _poll(self, places, image=X86, jobs=None, clock=None):
@@ -350,6 +352,142 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(self._saved()["submissions"][0]["host"], "mac")
         self.assertEqual(_git(worker.repository, "rev-parse", "HEAD").stdout.strip(), self._tip())
         self.assertEqual(self.commands(), [])
+
+    def test_a_place_admits_a_job_on_its_allow_list(self):
+        alpha = self._worker("alpha")
+        beta = self._worker("beta")
+        result = self._poll(
+            [self._place("alpha", alpha, jobs=["check"]), self._place("beta", beta)]
+        )
+        self.assertEqual([item["host"] for item in result["submitted"]], ["alpha"])
+        record = alpha.get(result["submitted"][0]["run_id"])
+        self.assertEqual(record["input"]["job_id"], "check")
+        self.assertEqual(self._runs(beta), 0)
+
+    def test_json_job_allow_list_routes_unlisted_jobs_to_the_next_place(self):
+        alpha = self._worker("alpha", accept=True)
+        beta = self._worker("beta", accept=True)
+        args = Namespace(
+            place=[
+                json.dumps(
+                    {
+                        "name": "alpha",
+                        "state": str(alpha.state),
+                        "cap": 2,
+                        "image": X86,
+                        "jobs": ["lint"],
+                    }
+                ),
+                json.dumps({"name": "beta", "state": str(beta.state), "cap": 2, "image": X86}),
+            ],
+            job=[JOB, LINT],
+            ssh_host=None,
+            remote_state=None,
+        )
+        result = self._poll(_places_from_args(args), jobs=[JOB, LINT])
+        self.assertEqual([item["host"] for item in result["submitted"]], ["beta", "alpha"])
+        check, lint = result["submitted"]
+        self.assertEqual(beta.get(check["run_id"])["input"]["job_id"], "check")
+        self.assertEqual(alpha.get(lint["run_id"])["input"]["job_id"], "lint")
+        self.assertEqual(self._runs(alpha), 1)
+        self.assertEqual(self._runs(beta), 1)
+
+    def test_places_without_job_allow_lists_keep_the_first_eligible_order(self):
+        alpha = self._worker("alpha")
+        beta = self._worker("beta")
+        result = self._poll(
+            [self._place("alpha", alpha, cap=2), self._place("beta", beta, cap=2)],
+            jobs=[JOB, LINT],
+        )
+        self.assertEqual([item["host"] for item in result["submitted"]], ["alpha", "alpha"])
+        self.assertEqual(
+            [alpha.get(item["run_id"])["input"]["job_id"] for item in result["submitted"]],
+            ["check", "lint"],
+        )
+        self.assertEqual(self._runs(beta), 0)
+
+    def test_waiting_job_skips_a_freed_place_that_excludes_it(self):
+        alpha = self._worker("alpha")
+        beta = self._worker("beta")
+        alpha_fill, beta_fill = self._fill(alpha), self._fill(beta)
+        places = [self._place("alpha", alpha, jobs=["lint"]), self._place("beta", beta)]
+        first = self._poll(places, jobs=[JOB, LINT])
+        self.assertEqual(first["submitted"], [])
+        self.assertEqual([item["job_id"] for item in first["waiting"]], ["check", "lint"])
+
+        self._succeed(alpha, alpha_fill)
+        second = self._poll(places, jobs=[JOB, LINT])
+        self.assertEqual([item["host"] for item in second["submitted"]], ["alpha"])
+        self.assertEqual(alpha.get(second["submitted"][0]["run_id"])["input"]["job_id"], "lint")
+        self.assertEqual([item["job_id"] for item in second["waiting"]], ["check"])
+        self.assertEqual(self._runs(beta), 1)
+
+        self._succeed(beta, beta_fill)
+        third = self._poll(places, jobs=[JOB, LINT])
+        self.assertEqual([item["host"] for item in third["submitted"]], ["beta"])
+        self.assertEqual(beta.get(third["submitted"][0]["run_id"])["input"]["job_id"], "check")
+        self.assertEqual(third["waiting"], [])
+        self.assertEqual(self._runs(alpha), 2)
+
+    def test_an_excluded_full_place_does_not_create_a_capacity_wait(self):
+        alpha = self._worker("alpha")
+        self._fill(alpha)
+        result = self._poll([self._place("alpha", alpha, jobs=["lint"])], jobs=[JOB, LINT])
+        self.assertEqual([item["job_id"] for item in result["waiting"]], ["lint"])
+        no_host = [item for item in result["skipped"] if item["reason"] == "no_host"]
+        self.assertEqual([item["job_id"] for item in no_host], ["check"])
+        self.assertEqual(self._runs(alpha), 1)
+
+    def test_an_excluded_recorded_claim_is_held_without_resubmission_or_redirection(self):
+        alpha = self._worker("alpha")
+        beta = self._worker("beta")
+
+        def lose_reply(method, params):
+            result = self._caller(alpha)(method, params)
+            if method == "run.submit":
+                raise PollError("WORKER_ERROR", "accepted reply lost")
+            return result
+
+        with self.assertRaisesRegex(PollError, "accepted reply lost"):
+            self._poll(
+                [self._place("alpha", alpha, cap=2, caller=lose_reply), self._place("beta", beta)],
+                jobs=[JOB, LINT],
+            )
+        original = self._saved()["submissions"][0]
+        self.assertNotIn("run_id", original)
+        result = self._poll(
+            [self._place("alpha", alpha, cap=2, jobs=["lint"]), self._place("beta", beta)],
+            jobs=[JOB, LINT],
+        )
+        held = next(item for item in self._saved()["submissions"] if item["key"] == original["key"])
+        self.assertEqual(held["host"], "alpha")
+        self.assertNotIn("run_id", held)
+        self.assertEqual([item["host"] for item in result["submitted"]], ["alpha"])
+        self.assertEqual(alpha.get(result["submitted"][0]["run_id"])["input"]["job_id"], "lint")
+        self.assertEqual(self._runs(alpha), 2)
+        self.assertEqual(self._runs(beta), 0)
+
+    def test_invalid_job_allow_lists_are_refused_before_admission(self):
+        worker = self._worker("alpha")
+        for jobs in (
+            None,
+            [],
+            "check",
+            {},
+            [1],
+            [True],
+            [""],
+            ["check", "check"],
+            ["unknown"],
+            ["check", "unknown"],
+        ):
+            with self.subTest(jobs=jobs):
+                place = {**self._place("alpha", worker), "jobs": jobs}
+                with self.assertRaises(PollError) as raised:
+                    self._poll([place], jobs=[JOB, LINT])
+                self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+                self.assertEqual(self._runs(worker), 0)
+                self.assertFalse((self.poll_state / "poll.json").exists())
 
     def test_order_skips_a_stopped_worker_and_a_full_cap(self):
         alpha = self._worker("alpha")
@@ -857,6 +995,76 @@ class PlacementTests(unittest.TestCase):
 
 
 class PlaceFlagTests(unittest.TestCase):
+    def test_invalid_job_allow_lists_are_refused_by_the_place_parser(self):
+        base = {"name": "first", "state": "/state", "cap": 1, "image": X86}
+        for jobs in (
+            None,
+            [],
+            "check",
+            {},
+            [1],
+            [True],
+            [""],
+            ["check", "check"],
+            ["unknown"],
+            ["check", "unknown"],
+        ):
+            with self.subTest(jobs=jobs):
+                args = Namespace(
+                    place=[json.dumps({**base, "jobs": jobs})],
+                    job=[JOB, LINT],
+                    ssh_host=None,
+                    remote_state=None,
+                )
+                with self.assertRaises(PollError) as raised:
+                    _places_from_args(args)
+                self.assertEqual(raised.exception.kind, "INVALID_PARAMS")
+
+    def test_unknown_job_is_refused_before_the_cli_reads_an_app_key(self):
+        with tempfile.TemporaryDirectory(prefix="place-jobs-") as directory:
+            root = Path(directory)
+            place = json.dumps(
+                {
+                    "name": "first",
+                    "ssh": "worker-host",
+                    "state": "/state",
+                    "cap": 1,
+                    "image": X86,
+                    "jobs": ["unknown"],
+                }
+            )
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "execution_core",
+                    "--state",
+                    str(root),
+                    "poll",
+                    "--repository",
+                    "acme/demo",
+                    "--clone",
+                    str(root),
+                    "--job",
+                    *JOB,
+                    "--app-key",
+                    str(root / "missing-key.pem"),
+                    "--place",
+                    place,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            error = json.loads(result.stderr)["error"]
+            self.assertEqual(error["kind"], "INVALID_PARAMS")
+            self.assertIn("jobs", error["message"])
+
     def test_a_bad_place_is_refused(self):
         base = {"name": "mac", "state": "/state", "cap": 1, "image": X86}
         samples = [
