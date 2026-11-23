@@ -16,8 +16,10 @@ to `error`.
   `failure` when that is the run's final state.
 - `submissions-retry` submits one derived successor and repeats as that same
   successor.
-- `submissions-cli` accepts `--dry-run` on every command and a live repair
+- `submissions-cli` accepts `--dry-run` on list, inspect, repair, abandon, and retry; a live repair
   posts `error`.
+- `submissions-capacity` reads persisted waits without a running worker and reports threshold breaches.
+- `submissions-migrate` previews or applies a bounded batch of legacy reporting records.
 - `poll-blocked` calls the worker once for a permanent capability refusal,
   keeps the error fingerprint and unblock metadata, and does not call it again
   while the engine identity is unchanged.
@@ -47,8 +49,14 @@ From the checkout, with the worker state and the poll state:
 `python3 -m execution_core --state STATE poll retry KEY --clone CLONE`
 
 Add `--dry-run` to read without posting, submitting, or writing `poll.json`.
+This applies to list, inspect, repair, abandon, retry, and migration. The
+read-only capacity command does not accept `--dry-run`.
 `--poll-state` selects the directory that holds `poll.json` when it is not
 `--state`.
+
+`python3 -m execution_core --state STATE submissions capacity --alert-after-seconds 3600`
+
+`python3 -m execution_core --state STATE submissions migrate --batch-size 10 --dry-run`
 
 ## Driving it with the execution_core CLI
 
@@ -66,11 +74,19 @@ Abandon of a succeeded run must post nothing. Retry must submit one run whose
 key is `poll-62a441d9f31c6d7aa0b6edc5d12d0c00c9ea3a235b56fae6d9bc82db962bd777`
 for the fixture key of `poll-` plus `ab` repeated.
 
+The same `test_submissions` module exercises the read-only capacity CLI,
+including missing state and threshold breaches. For bounded migration and
+restart recovery, also capture:
+
+```sh
+PYTHONPATH=src:tests .venv/bin/python -m unittest test_poll_migration -v
+```
+
 ## Gotchas
 
-- `--dry-run` still reads the worker. It does not write `poll.json`.
+- Recovery with `--dry-run` may still read the worker. It does not write `poll.json`.
 - A live repair or abandon reads `--credential-file` only when it posts.
-- Repair posts `success` only when the worker's final state is `success`.
+- Repair posts `success` only for a worker run in `succeeded` with exit code 0.
 - Abandon posts `error` and does not post `success`.
 - `poll abandon` refuses an omitted or empty `--reason`; legacy
   `submissions abandon` remains accepted without one.

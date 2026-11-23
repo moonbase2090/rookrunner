@@ -7,6 +7,11 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- `worker --cap N` executes up to N accepted runs at once, with separate attempt
+  workspaces and container leases. The default is one. Concurrency groups,
+  cancellation, storage accounting, and shutdown apply across all execution
+  slots. A poll place's `cap` remains its queued-plus-running admission limit.
+
 ## [0.1.25] - 2026-11-22
 
 - A `--place` object can include a `jobs` allow-list of configured job IDs.

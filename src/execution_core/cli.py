@@ -940,6 +940,12 @@ def main():
     worker = commands.add_parser("worker")
     worker.add_argument("--repository", required=True)
     worker.add_argument(
+        "--cap",
+        type=int,
+        default=1,
+        help="maximum jobs executing at once, with separate attempt workspaces (default 1)",
+    )
+    worker.add_argument(
         "--disk-budget-bytes",
         type=int,
         default=None,
@@ -1615,6 +1621,7 @@ def main():
                 args.disk_budget_bytes,
                 args.network,
                 args.docker_socket,
+                cap=args.cap,
                 node24=args.node24,
                 runner_image=args.runner_image,
                 passwordless_sudo=args.passwordless_sudo,

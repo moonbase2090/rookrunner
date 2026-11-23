@@ -30,4 +30,4 @@ Preconditions:
 - A succeeded run appearing in the filtered list does not prove omission. The failed run has to be absent from that list and present in the unfiltered list.
 - `list` without a filter can include older runs in the same state directory. Match `run_id` instead of assuming the array length is 1.
 - An unknown `--filter-state` value is a protocol error. The client exits non-zero.
-- `list` does not page unless `--cursor` is sent. A short verification session fits in the default page.
+- `list` returns up to 20 runs by default. Follow `result.next_cursor` with `--cursor` for subsequent pages. A short isolated session fits in the first page.

@@ -56,6 +56,17 @@ Existing recorded claims keep their place. See the
 [placement contract](docs/design/development-contract.md) for recovery behavior
 when a changed list excludes a recorded claim.
 
+`worker --cap 2` allows two accepted runs to execute at once. The default is
+one. Each run has its own captured source, attempt workspace, temporary and
+home directories, and container lease. Concurrency groups still serialize
+runs in the same group, and cancelling one run targets only its lease.
+
+The worker execution cap and a poll place's admission cap are separate.
+The place cap counts queued plus running runs; increasing it alone adds queue
+room. To execute two runs simultaneously on that place, start its worker with
+`--cap 2` and give the place an admission cap of at least two. Preparation and
+state updates remain serialized; container execution overlaps.
+
 ## Stuck submissions
 
 A poll submission stays active until a final commit status is recorded.
