@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.24. A published release section
+The current package version is 0.1.25. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.25] - 2026-11-22
 
 - A `--place` object can include a `jobs` allow-list of configured job IDs.
   New jobs and capacity-waiting jobs skip places that exclude them. Omitting
@@ -24,6 +26,9 @@ This file does not reconstruct earlier milestones.
   different worker repository. Submissions assigned to a named placement are
   refused instead of retried on the local worker. Submission inspection marks
   only the tested-commit mismatch as a stuck `STATUS_REFUSED` result.
+
+- The package version is 0.1.25. A wheel and a source tarball can be built
+  from this tree. This change does not create a tag.
 
 ## [0.1.24] - 2026-11-22
 
