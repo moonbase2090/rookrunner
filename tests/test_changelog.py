@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.23, 0.1.22, 0.1.21, 0.1.20, 0.1.19, 0.1.18, 0.1.17, 0.1.16, 0.1.15, 0.1.14, 0.1.13, 0.1.12, 0.1.11, 0.1.10, 0.1.9, 0.1.8, 0.1.7, 0.1.6, 0.1.5, 0.1.4, 0.1.3, and 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.24 through 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -84,14 +84,19 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
     def test_current_version_and_its_entries_are_released(self):
-        self.assertIn("The current package version is 0.1.23.", TEXT)
-        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.23]", 1)[0]
-        self.assertNotIn("The package version is 0.1.23.", unreleased)
+        self.assertIn("The current package version is 0.1.24.", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.24]", 1)[0]
+        self.assertNotIn("The package version is 0.1.24.", unreleased)
         self.assertNotIn("20-page bound", unreleased)
+        section = TEXT.split("## [0.1.24] - 2026-11-22", 1)[1].split("## [0.1.23]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.24.", prose)
+        self.assertIn("This change does not create a tag.", prose)
+        self.assertIn("one file record instead of the full patch-bearing file list", prose)
+        self.assertIn("paging record is now read in full once", prose)
         section = TEXT.split("## [0.1.23] - 2026-11-20", 1)[1].split("## [0.1.22]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.23.", prose)
-        self.assertIn("This change does not create a tag.", prose)
         self.assertIn("the poll leaves that list unapplied and keeps its previous cache", prose)
         self.assertIn("`storage refused:` line", prose)
         section = TEXT.split("## [0.1.22] - 2026-11-13", 1)[1].split("## [0.1.21]", 1)[0]

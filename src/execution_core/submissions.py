@@ -17,7 +17,15 @@ import sqlite3
 import urllib.parse
 from datetime import UTC, datetime
 
-from .poll import PollError, _save_state, has_successor, is_capacity_wait, retry_submission_key
+from .poll import (
+    _SHA,
+    PollError,
+    _checkout,
+    _save_state,
+    has_successor,
+    is_capacity_wait,
+    retry_submission_key,
+)
 from .protocol import strict_json
 from .status import TERMINAL_STATUS, StatusError, github_state, require_repository
 
@@ -26,6 +34,7 @@ _ACTIVE = frozenset({"queued", "running"})
 _RETRY_EVENTS = frozenset({"push", "pull_request"})
 _RETRY_STATES = frozenset({"failed", "cancelled"})
 _CAPACITY_KEY = re.compile(r"poll-[0-9a-f]{64}\Z")
+_BASE_COMMIT_MISMATCH = "base_commit does not equal the tested commit"
 _KEPT = (
     "run_id",
     "event",
@@ -38,6 +47,8 @@ _KEPT = (
     "abandoned",
     "reporting_disposition",
     "reporting_version",
+    "blocked",
+    "state",
 )
 
 
@@ -315,10 +326,17 @@ def repair_submission(directory, key, *, caller, recorded_states, post, dry_run=
         return _outcome(entry, "posted", False, state=posting)
 
 
-def abandon_submission(directory, key, *, caller, post, dry_run=False):
+def abandon_submission(directory, key, *, caller, post, reason=None, dry_run=False):
     """Post ``error`` for one submission and retire it. Never post ``success``."""
 
     _require_key(key)
+    if reason is not None and (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > 512
+        or any(character in reason for character in "\0\r\n")
+    ):
+        raise PollError("INVALID_PARAMS", "abandon reason is not accepted")
     with _locked(directory, dry_run):
         state = load_poll_state(directory)
         entry, retired = _find(state, key)
@@ -328,14 +346,17 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             raise PollError("INVALID_PARAMS", "a successor owns this status context")
         if "run_id" not in entry:
             if dry_run:
-                return _outcome(entry, "would_abandon", True)
+                return _outcome(entry, "would_abandon", True, reason=reason)
             if not retired:
-                _retire(directory, state, entry, abandoned=True)
-            return _outcome(entry, "abandoned", False)
+                _retire_abandoned(directory, state, entry, reason)
+            return _outcome(entry, "abandoned", False, reason=reason)
         record = _run(caller, entry)
         final = _final_state(record)
+        mismatched = False
         if final == "success":
-            raise PollError("INVALID_PARAMS", "abandon does not post success")
+            if not _base_commit_mismatched(caller, entry):
+                raise PollError("INVALID_PARAMS", "abandon does not post success")
+            mismatched = True
         if final == "pending":
             if dry_run:
                 return _outcome(entry, "would_cancel", True)
@@ -343,7 +364,9 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             record = _run(caller, entry)
             final = _final_state(record)
             if final == "success":
-                raise PollError("INVALID_PARAMS", "abandon does not post success")
+                if not _base_commit_mismatched(caller, entry):
+                    raise PollError("INVALID_PARAMS", "abandon does not post success")
+                mismatched = True
             if final == "pending":
                 raise PollError("INVALID_PARAMS", "run is still active")
         _require_context(entry)
@@ -351,14 +374,28 @@ def abandon_submission(directory, key, *, caller, post, dry_run=False):
             return _outcome(entry, "would_post", True, state="error")
         _require_post(post)
         post(entry["status_sha"], "error", entry["context"])
-        if final in TERMINAL_STATUS:
-            caller("run.status", {**_status_params(entry), "record": final})
+        if final in TERMINAL_STATUS and not mismatched:
+            try:
+                caller("run.status", {**_status_params(entry), "record": final})
+            except PollError as exc:
+                if not (exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH):
+                    raise
         if not retired:
-            _retire(directory, state, entry, abandoned=True)
-        return _outcome(entry, "abandoned", False, state="error")
+            _retire_abandoned(directory, state, entry, reason)
+        return _outcome(entry, "abandoned", False, state="error", reason=reason)
 
 
-def retry_submission(directory, key, *, caller, request_for, dry_run=False):
+def retry_submission(
+    directory,
+    key,
+    *,
+    caller,
+    request_for,
+    checkout=None,
+    clone=None,
+    host=None,
+    dry_run=False,
+):
     """Submit one successor of a failed or cancelled push or pull request. Repeat is a no-op."""
 
     _require_key(key)
@@ -367,11 +404,22 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
         entry, _retired = _find(state, key)
         if entry.get("event") not in _RETRY_EVENTS or "run_id" not in entry:
             raise PollError("INVALID_PARAMS", "retry requires a recorded push or pull-request run")
+        if entry.get("host") is not None and entry.get("host") != host:
+            raise PollError("INVALID_PARAMS", "retry must use the recorded worker placement")
+        tested = entry.get("tested_commit")
+        if not isinstance(tested, str) or _SHA.fullmatch(tested) is None:
+            raise PollError("INVALID_PARAMS", "submission has no tested commit")
         successor = retry_submission_key(entry["key"])
         if _successor_recorded(state, entry["key"], successor):
             return _outcome(entry, "already_retried", dry_run, submission_key=successor)
         record = _run(caller, entry)
-        if record.get("state") not in _RETRY_STATES:
+        blocked_mismatch = (
+            entry.get("state") == "blocked"
+            and isinstance(entry.get("blocked"), dict)
+            and entry["blocked"].get("unblock") == "retry_or_abandon"
+            and _base_commit_mismatched(caller, entry)
+        )
+        if record.get("state") not in _RETRY_STATES and not blocked_mismatch:
             raise PollError("INVALID_PARAMS", "only a failed or cancelled run can be retried")
         request = request_for(entry["run_id"])
         if not isinstance(request, dict) or request.get("version") != 1:
@@ -387,6 +435,10 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
                 submission_key=successor,
                 workflow=request.get("workflow"),
             )
+        if checkout is None:
+            _checkout_worker_repository(caller, tested, clone)
+        else:
+            checkout(tested)
         submitted = caller("run.submit", params)
         if not isinstance(submitted, dict) or not isinstance(submitted.get("run_id"), str):
             raise PollError("WORKER_ERROR", "worker submit did not return a run")
@@ -401,10 +453,13 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             "context": entry["context"],
             "pending": False,
             "reporting_version": 1,
+            "state": "submitted",
         }
         if "host" in entry:
             claimed["host"] = entry["host"]
         state["submissions"].append(claimed)
+        if blocked_mismatch:
+            _retire_state(state, entry, superseded=True)
         _save_state(Path(directory) / "poll.json", state)
         return _outcome(
             entry,
@@ -414,6 +469,35 @@ def retry_submission(directory, key, *, caller, request_for, dry_run=False):
             run_id=submitted["run_id"],
             workflow=request.get("workflow"),
         )
+
+
+def _checkout_worker_repository(caller, sha, clone):
+    """Check out the tested commit on the worker's clone before submitting a retry."""
+
+    if not isinstance(sha, str) or _SHA.fullmatch(sha) is None:
+        raise PollError("INVALID_PARAMS", "submission has no tested commit")
+    if not isinstance(clone, str | Path):
+        raise PollError("INVALID_PARAMS", "live retry requires --clone")
+    described = caller("worker.describe", {})
+    repository = described.get("repository") if isinstance(described, dict) else None
+    if not isinstance(repository, str) or repository == "":
+        raise PollError("WORKER_ERROR", "worker describe did not name a repository")
+    try:
+        expected = Path(clone).resolve()
+        actual = Path(repository).resolve()
+    except OSError:
+        raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository") from None
+    if actual != expected:
+        raise PollError("CLONE_MISMATCH", "dedicated clone must be the worker repository")
+    _checkout(actual, sha)
+
+
+def _base_commit_mismatched(caller, entry):
+    try:
+        caller("run.status", _status_params(entry))
+    except PollError as exc:
+        return exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH
+    return False
 
 
 def _restore_activity_type(params):
@@ -434,6 +518,7 @@ def _restore_activity_type(params):
 def _describe(entry, *, caller, recorded_states, retired):
     row = {
         "key": entry.get("key"),
+        "state": entry.get("state"),
         "retired": retired,
         "abandoned": entry.get("abandoned") is True,
         "stuck": False,
@@ -441,6 +526,10 @@ def _describe(entry, *, caller, recorded_states, retired):
     for field in ("run_id", "event", "context", "status_sha", "tested_commit"):
         if field in entry:
             row[field] = entry[field]
+    if entry.get("state") == "blocked" and isinstance(entry.get("blocked"), dict):
+        row["blocked"] = dict(entry["blocked"])
+        row["stuck"] = True
+        return row
     if entry.get("reporting_disposition") == "snapshot_unreadable":
         row["reporting_disposition"] = "snapshot_unreadable"
         row["final"] = "error"
@@ -461,7 +550,14 @@ def _describe(entry, *, caller, recorded_states, retired):
     if recorded & TERMINAL_STATUS:
         row["final"] = _final_state(record)
         return row
-    decision = caller("run.status", _status_params(entry))
+    try:
+        decision = caller("run.status", _status_params(entry))
+    except PollError as exc:
+        if exc.kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_MISMATCH:
+            row["status_refused"] = str(exc)
+            row["stuck"] = True
+            return row
+        raise
     if not isinstance(decision, dict):
         raise PollError("WORKER_ERROR", "worker status decision was not post, skip, or retry")
     row["status_action"] = decision.get("action")
@@ -520,22 +616,38 @@ def _successor_recorded(state, key, successor):
     return False
 
 
-def _retire(directory, state, entry, **extra):
-    completed = state.get("completed")
+def _retire_state(poll_state, entry, **extra):
+    completed = poll_state.get("completed")
     if isinstance(completed, list):
         completed = {item: {} for item in completed if isinstance(item, str)}
     if not isinstance(completed, dict):
         completed = {}
     kept = {field: entry[field] for field in _KEPT if field in entry}
     kept.update(extra)
+    kept["state"] = "abandoned" if kept.get("abandoned") is True else "retired"
     completed[entry["key"]] = kept
-    state["completed"] = completed
-    state["submissions"] = [
+    poll_state["completed"] = completed
+    poll_state["submissions"] = [
         item
-        for item in state["submissions"]
+        for item in poll_state["submissions"]
         if not isinstance(item, dict) or item.get("key") != entry["key"]
     ]
-    _save_state(Path(directory) / "poll.json", state)
+
+
+def _retire(directory, poll_state, entry, **extra):
+    _retire_state(poll_state, entry, **extra)
+    _save_state(Path(directory) / "poll.json", poll_state)
+
+
+def _retire_abandoned(directory, poll_state, entry, reason):
+    extra = {
+        "abandoned": True,
+        "state": "abandoned",
+        "abandoned_at": datetime.now(UTC).isoformat(),
+    }
+    if reason is not None:
+        extra["abandon_reason"] = reason
+    _retire(directory, poll_state, entry, **extra)
 
 
 def _outcome(entry, action, dry_run, **extra):

@@ -393,6 +393,23 @@ _PULL_COMMIT_LIMIT = 250
 _STOPPED = object()
 
 
+def _engine_identity(description):
+    """Return the durable identity used to decide whether a capability block changed."""
+
+    if not isinstance(description, dict):
+        return {"version": None}
+    release = description.get("engine_release")
+    if isinstance(release, dict) and release:
+        return {key: release[key] for key in sorted(release) if release[key] is not None}
+    version = description.get("version")
+    return {"version": version if isinstance(version, str) else None}
+
+
+def _error_fingerprint(kind, message):
+    body = f"{kind}\0{message}".encode("utf-8", errors="replace")
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
 def _association(value):
     """Return a non-empty association string, or None."""
 
@@ -1219,6 +1236,7 @@ class Pass:
         self.hold_branches = False
         self.hold_pulls = False
         self.remote_repository = None
+        self.engine = None
         self.budget = _Budget()
         self.sleep = time.sleep
         self.state = None
@@ -1229,6 +1247,7 @@ class Pass:
         self.signoff_seen = False
         self.signoff_present = False
         self.result = {
+            "blocked": [],
             "stopped": False,
             "submitted": [],
             "statuses": [],
@@ -1254,6 +1273,7 @@ class Pass:
         try:
             if self.places is None:
                 described = self.caller("worker.describe", {})
+                self.engine = _engine_identity(described)
                 if self.ssh_host is None:
                     if Path(described["repository"]).resolve() != self.clone.resolve():
                         raise PollError(
@@ -1272,6 +1292,8 @@ class Pass:
             else:
                 self._probe_places()
             self.state = _load_state(self.state_dir / "poll.json", self.repository)
+            if _normalize_submission_states(self.state):
+                _save_state(self.state_dir / "poll.json", self.state)
             completed = self.state.get("completed", {})
             if isinstance(completed, list):
                 completed = {key: {} for key in completed}
@@ -1424,6 +1446,7 @@ class Pass:
             self._mark(place, "unreachable")
             return
         place["reachable"] = True
+        place["engine"] = _engine_identity(described)
         mismatched = (
             described.get("runner_image") != place["image"]
             if self.image is None
@@ -1557,6 +1580,8 @@ class Pass:
 
     def _expire_placed(self):
         for entry in self.state["submissions"]:
+            if entry.get("state") == "blocked":
+                continue
             if not reporting_ready(self.state, entry):
                 continue
             if self._placed_caller(entry) is None or "run_id" not in entry:
@@ -1569,6 +1594,8 @@ class Pass:
         for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
+            if entry.get("state") == "blocked":
+                continue
             if not reporting_ready(self.state, entry):
                 continue
             if self._placed_caller(entry) is None or "run_id" not in entry:
@@ -1584,6 +1611,48 @@ class Pass:
 
     def _checkpoint(self):
         _save_state(self.state_dir / "poll.json", self.state)
+
+    def _entry_engine(self, entry):
+        place = self._place_for(entry.get("host")) if self.places is not None else None
+        return place.get("engine") if place is not None else self.engine
+
+    def _blocked_for_engine(self, entry, engine):
+        """Keep a permanent refusal dormant until its declared condition changes."""
+
+        if entry.get("state") != "blocked":
+            return False
+        blocked = entry.get("blocked")
+        if not isinstance(blocked, dict):
+            return True
+        if blocked.get("unblock") == "engine_changed" and blocked.get("engine") != engine:
+            entry["state"] = "claimed"
+            # Submission may raise before its normal checkpoint, so persist the
+            # unblock transition here instead of restoring the stale block next pass.
+            self._checkpoint()
+            return False
+        return True
+
+    def _block(self, entry, error, *, engine, unblock):
+        """Persist one permanent refusal and its stable incident identity."""
+
+        observed = self.clock.isoformat()
+        fingerprint = _error_fingerprint(error.kind, str(error))
+        previous = entry.get("blocked") if isinstance(entry.get("blocked"), dict) else {}
+        same = previous.get("fingerprint") == fingerprint
+        entry["state"] = "blocked"
+        entry["blocked"] = {
+            "fingerprint": fingerprint,
+            "first_seen": previous.get("first_seen", observed) if same else observed,
+            "last_seen": observed,
+            "count": previous.get("count", 0) + 1 if same else 1,
+            "kind": error.kind,
+            "message": str(error)[:512],
+            "engine": engine,
+            "unblock": unblock,
+        }
+        if entry["key"] not in self.result["blocked"]:
+            self.result["blocked"].append(entry["key"])
+        self._checkpoint()
 
     def _record_polls(self):
         """Stamp each worker reached in this pass. A refusal does not stop the save."""
@@ -1641,7 +1710,7 @@ class Pass:
 
     def _commit_body(self, sha):
         quoted = urllib.parse.quote(sha, safe="")
-        return self._object(f"/repos/{self.repository}/commits/{quoted}")
+        return self._object(f"/repos/{self.repository}/commits/{quoted}?per_page=1")
 
     def _array(self, path):
         """GET one JSON list, or None when the rate-limit budget stopped the pass."""
@@ -2926,11 +2995,14 @@ class Pass:
             )
             if existing is not None and not self._claims_this_host(existing):
                 continue
+            if existing is not None and self._blocked_for_engine(existing, self.engine):
+                continue
             if existing is not None and "run_id" in existing:
                 if not existing["pending"]:
                     if not self._post_pending(existing):
                         return False
                     existing["pending"] = True
+                    existing["state"] = "reporting"
                     self._checkpoint()
                     self.result["submitted"].append(
                         {"event": event_name, "ref": ref, "run_id": existing["run_id"]}
@@ -2971,6 +3043,7 @@ class Pass:
                     "status_sha": status_sha,
                     "context": context,
                     "pending": False,
+                    "state": "claimed",
                 }
                 claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
@@ -2996,6 +3069,28 @@ class Pass:
                         }
                     )
                     continue
+                if exc.kind == "CAPABILITY_UNSUPPORTED":
+                    if claimed is None:
+                        claimed = {
+                            "key": key,
+                            **self._retry_metadata(key),
+                            "event": event_name,
+                            "tested_commit": tested,
+                            "status_sha": status_sha,
+                            "context": context,
+                            "pending": False,
+                            "state": "claimed",
+                            "reporting_version": REPORTING_VERSION,
+                        }
+                        self.state["submissions"].append(claimed)
+                    self._block(
+                        claimed,
+                        exc,
+                        engine=self.engine,
+                        unblock="engine_changed",
+                    )
+                    self._skip({"reason": "blocked", "key": key, "kind": exc.kind})
+                    continue
                 raise
             if submitted.get("triggered") is False and "run_id" not in submitted:
                 if claimed is not None and "run_id" not in claimed:
@@ -3014,16 +3109,19 @@ class Pass:
                     "status_sha": status_sha,
                     "context": context,
                     "pending": False,
+                    "state": "submitted",
                 }
                 claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
             else:
                 claimed["run_id"] = submitted["run_id"]
+                claimed["state"] = "submitted"
             entry = claimed
             self._checkpoint()
             if not self._post_pending(entry):
                 return False
             entry["pending"] = True
+            entry["state"] = "reporting"
             self._checkpoint()
             self.result["submitted"].append(
                 {"event": event_name, "ref": ref, "run_id": submitted["run_id"]}
@@ -3118,6 +3216,7 @@ class Pass:
             "status_sha": status_sha,
             "context": context,
             "pending": False,
+            "state": "discovered",
             "waiting": {
                 "since": self.clock.isoformat(),
                 "reason": "capacity",
@@ -3156,6 +3255,15 @@ class Pass:
                     }
                 )
                 return True
+            if exc.kind == "CAPABILITY_UNSUPPORTED":
+                self._block(
+                    claimed,
+                    exc,
+                    engine=place.get("engine"),
+                    unblock="engine_changed",
+                )
+                self._skip({"reason": "blocked", "key": claimed["key"], "kind": exc.kind})
+                return True
             raise
         if submitted.get("triggered") is False and "run_id" not in submitted:
             if "run_id" not in claimed:
@@ -3165,6 +3273,7 @@ class Pass:
             )
             return True
         claimed["run_id"] = submitted["run_id"]
+        claimed["state"] = "submitted"
         place["active"] += 1
         if place["active"] >= place["cap"]:
             place["skip"] = "host_full"
@@ -3172,6 +3281,7 @@ class Pass:
         if not self._post_pending(claimed):
             return False
         claimed["pending"] = True
+        claimed["state"] = "reporting"
         self._checkpoint()
         self.result["submitted"].append(
             {
@@ -3209,6 +3319,7 @@ class Pass:
             event_name = entry.get("event")
             entry.pop("waiting", None)
             entry["host"] = place["name"]
+            entry["state"] = "claimed"
             self._checkpoint()
             if not self._finish_placed(entry, place, params, event_name, ref, job_id):
                 return False
@@ -3251,12 +3362,15 @@ class Pass:
                     if "run_id" not in existing:
                         self.unplaced = True
                     continue
+                if self._blocked_for_engine(existing, place.get("engine")):
+                    continue
                 if "run_id" in existing:
                     self._bind(place)
                     if not existing["pending"]:
                         if not self._post_pending(existing):
                             return False
                         existing["pending"] = True
+                        existing["state"] = "reporting"
                         self._checkpoint()
                         self.result["submitted"].append(
                             {
@@ -3311,6 +3425,7 @@ class Pass:
                     "status_sha": status_sha,
                     "context": context,
                     "pending": False,
+                    "state": "claimed",
                 }
                 claimed["reporting_version"] = REPORTING_VERSION
                 self.state["submissions"].append(claimed)
@@ -3355,6 +3470,8 @@ class Pass:
 
     def _expire_queued(self):
         for entry in self.state["submissions"]:
+            if entry.get("state") == "blocked":
+                continue
             if not reporting_ready(self.state, entry):
                 continue
             if not self._claims_this_host(entry) or "run_id" not in entry:
@@ -3367,6 +3484,8 @@ class Pass:
         for entry in list(self.state["submissions"]):
             if self.budget.stopped:
                 return
+            if entry.get("state") == "blocked":
+                continue
             if not reporting_ready(self.state, entry):
                 continue
             if not self._claims_this_host(entry) or "run_id" not in entry:
@@ -3385,6 +3504,16 @@ class Pass:
             kind = getattr(exc, "kind", None) or (
                 "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
             )
+            if (
+                kind == "STATUS_REFUSED"
+                and str(exc) == "base_commit does not equal the tested commit"
+            ):
+                self._block(
+                    entry,
+                    exc,
+                    engine=self.engine if self.places is None else self._entry_engine(entry),
+                    unblock="retry_or_abandon",
+                )
             failure = {"run_id": entry["run_id"], "kind": kind, "message": str(exc)}
             self.result.setdefault("errors", []).append(failure)
             print(canonical({"run_error": failure}), file=sys.stderr)  # noqa: T201  run id on stderr
@@ -3403,12 +3532,15 @@ class Pass:
             "abandoned",
             "reporting_disposition",
             "reporting_version",
+            "blocked",
         )
-        self.completed[key] = (
+        retired = (
             {field: entry[field] for field in retry_fields if field in entry}
             if entry.get("event") in {"push", "pull_request"} or entry.get("reporting_disposition")
             else {}
         )
+        retired["state"] = "abandoned" if entry.get("abandoned") is True else "retired"
+        self.completed[key] = retired
         self.state["submissions"] = [
             item for item in self.state["submissions"] if item is not entry
         ]
@@ -3637,6 +3769,36 @@ def _empty_state(repository):
         "forks": [],
         "merge_absent": [],
     }
+
+
+def _normalize_submission_states(state):
+    """Add explicit lifecycle states to pre-state-machine poll files."""
+
+    changed = False
+    submissions = state.get("submissions")
+    if isinstance(submissions, list):
+        for entry in submissions:
+            if not isinstance(entry, dict) or isinstance(entry.get("state"), str):
+                continue
+            if isinstance(entry.get("blocked"), dict):
+                entry["state"] = "blocked"
+            elif is_capacity_wait(entry):
+                entry["state"] = "discovered"
+            elif "run_id" not in entry:
+                entry["state"] = "claimed"
+            elif entry.get("pending") is True:
+                entry["state"] = "reporting"
+            else:
+                entry["state"] = "submitted"
+            changed = True
+    completed = state.get("completed")
+    if isinstance(completed, dict):
+        for meta in completed.values():
+            if not isinstance(meta, dict) or isinstance(meta.get("state"), str):
+                continue
+            meta["state"] = "abandoned" if meta.get("abandoned") is True else "retired"
+            changed = True
+    return changed
 
 
 def _load_state(path, repository):

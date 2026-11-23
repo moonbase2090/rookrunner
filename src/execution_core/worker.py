@@ -1894,9 +1894,22 @@ class Worker:
                 "WORKER_NOT_READY",
                 "an unresolved owned container blocks a new attempt",
             )
+        expected_commit = (
+            p["event"]["after"]
+            if p.get("event_name") in ("push", "pull_request")
+            and isinstance(p["event"], dict)
+            and isinstance(p["event"].get("after"), str)
+            and _STATUS_SHA.fullmatch(p["event"]["after"])
+            else None
+        )
         try:
             capture = SourceCapture(self.repository, self.state)
             with capture.prepare(p["workflow"]) as prepared:
+                if expected_commit is not None and prepared.base != expected_commit:
+                    raise Fault(
+                        "SOURCE_UNSTABLE",
+                        "repository HEAD does not match the submitted commit",
+                    )
                 try:
                     if p.get("event_name") in (
                         "push",

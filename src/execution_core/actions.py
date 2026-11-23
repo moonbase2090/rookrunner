@@ -66,7 +66,7 @@ def _owner_ok(text):
 
 
 def _segment_ok(text):
-    if text in {".", ".."} or text.endswith(".git") or len(text) > 100:
+    if text in {".", ".."} or text.endswith(".git") or text.startswith("-") or len(text) > 100:
         return False
     for char in text:
         if char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-":
@@ -375,7 +375,7 @@ class ActionStore:
             raise ActionUnavailable("action repository could not be fetched")
         archive_args = ["archive", "--format=tar", commit]
         if path:
-            archive_args.append(path)
+            archive_args.extend(["--", path])
         archived = _git(repo, *archive_args)
         if archived.returncode:
             raise ActionUnavailable("action repository could not be fetched")
