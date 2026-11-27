@@ -11,7 +11,11 @@ This file does not reconstruct earlier milestones.
 
 - Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS`
   to the job container's CPU quota and `MAKEFLAGS` to `-j2`. Workflow-defined
-  values take precedence. Each service container now has a one-CPU quota.
+  values take precedence. Cargo uses `CARGO_BUILD_JOBS` ahead of `build.jobs`
+  in `.cargo/config.toml`. Set the variable in the workflow or pass `--jobs N`
+  to Cargo to select another count.
+- Each service container now has a one-CPU quota, down from two. Database
+  services and other CPU-intensive services may take longer under load.
 
 - The package version is 0.1.27. A wheel and a source tarball can be built
   from this tree. This change does not create a tag.
