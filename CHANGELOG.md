@@ -20,6 +20,9 @@ This file does not reconstruct earlier milestones.
   `--package-cache-max-bytes` (default 4 GiB) while idle, is removed after
   `--package-cache-max-age-days` (default 14) without use, and is freed before a
   run is refused for storage. apt is not cached.
+- Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS`
+  to the job container's CPU quota and `MAKEFLAGS` to `-j2`. Workflow-defined
+  values take precedence. Each service container now has a one-CPU quota.
 
 ## [0.1.26] - 2026-11-25
 
