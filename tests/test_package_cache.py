@@ -446,6 +446,36 @@ class KeepingTests(unittest.TestCase):
                 namespace_for(_push("refs/heads/main"), name, REPOSITORY), DEFAULT_BRANCH_NAMESPACE
             )
 
+    def test_a_stray_file_beside_the_cache_directories_does_not_stop_admission_or_pruning(self):
+        old = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.cache.release(old)
+        for folder in (self.state / "package-cache" / DEFAULT_BRANCH_NAMESPACE,):
+            (folder / ".DS_Store").write_text("noise")
+            (folder / "notes.txt").write_text("noise")
+            (folder / "UPPERCASE").mkdir()
+        fresh = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_B, 77)
+        self.cache.release(fresh)
+        self.now += 100
+        self.assertEqual(sorted(self.cache.prune()), sorted([old.root, fresh.root]))
+        folder = self.state / "package-cache" / DEFAULT_BRANCH_NAMESPACE
+        self.assertTrue((folder / ".DS_Store").exists())
+        self.assertIsNone(self.cache.reclaim())
+
+    def test_a_file_with_several_hard_links_is_charged_once(self):
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        (mount.registry / "a").write_bytes(b"x" * 1_000_000)
+        os.link(mount.registry / "a", mount.registry / "b")
+        os.link(mount.registry / "a", mount.git / "c")
+        self.cache.release(mount)
+        kept = PackageCache(self.state, max_age_seconds=100, max_bytes=1_500_000)
+        again = kept.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertTrue((again.registry / "a").exists())
+        self.assertEqual((again.registry / "a").stat().st_nlink, 3)
+        kept.release(again)
+        two = PackageCache(self.state, max_age_seconds=100, max_bytes=1_000_000)
+        emptied = two.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertFalse((emptied.registry / "a").exists())
+
     def test_a_name_that_is_not_a_namespace_and_an_image_key_is_refused(self):
         for namespace, image in (("../x", IMAGE_A), (BRANCH_NAMESPACE, "../../etc"), ("x", "y")):
             with self.assertRaises(ValueError):

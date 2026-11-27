@@ -394,8 +394,12 @@ class PackageCache:
                 continue
             self._held.append(folder)
             for image in sorted(os.listdir(folder)):
+                # Anything that is not an image directory name, such as a file
+                # a desktop leaves beside them, is not a cache and is skipped.
+                if not _IMAGE.fullmatch(image):
+                    continue
                 path = self.unit_path(namespace, image)
-                if not _IMAGE.fullmatch(image) or self._users.get(path, 0):
+                if self._users.get(path, 0):
                     continue
                 stamp = self._stamp(folder, image)
                 if stamp is not None:
@@ -528,19 +532,27 @@ class PackageCache:
             _remove_at(folder, image)
 
 
-def _size_at(descriptor):
-    """Bytes of a tree measured through descriptors; a link counts by its own size."""
+def _size_at(descriptor, seen=None):
+    """Bytes of a tree measured through descriptors, each inode counted once.
 
+    A file with several hard links is charged one time, as the disk charges it.
+    A symlink counts by its own size and is not followed.
+    """
+
+    seen = set() if seen is None else seen
     total = os.fstat(descriptor).st_size
     for name in os.listdir(descriptor):
         info = os.lstat(name, dir_fd=descriptor)
         if stat.S_ISDIR(info.st_mode):
             child = _open_dir(name, descriptor)
             try:
-                total += _size_at(child)
+                total += _size_at(child, seen)
             finally:
                 os.close(child)
-        else:
+            continue
+        identity = (info.st_dev, info.st_ino)
+        if identity not in seen:
+            seen.add(identity)
             total += info.st_size
     return total
 
