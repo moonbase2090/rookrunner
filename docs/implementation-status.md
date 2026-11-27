@@ -17,7 +17,7 @@ name and build backend in `pyproject.toml`, and
 ## Package
 
 ```status-package
-version: 0.1.26
+version: 0.1.27
 distribution: execution-core
 build_backend: hatchling.build
 capability_version: 12

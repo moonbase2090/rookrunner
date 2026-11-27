@@ -45,9 +45,9 @@ otherwise to the container `PATH`. The runner then sets `GITHUB_WORKSPACE`,
 those names stay pointed at this attempt. `ROOKRUNNER_EVENT` is a read-only
 file holding the caller event as canonical JSON. It is not a GitHub event
 delivery. `GITHUB_*` and `RUNNER_*` names cannot be overwritten. The job
-can override `CI`, `HOME`, and the compiler defaults in `_soft_defaults`. When the Docker socket is mounted, `TMPDIR`, `TEMP`, and
-`TMP` can too. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an
-image.
+can override `CI`, `HOME`, and the compiler defaults in `_soft_defaults`.
+When the Docker socket is mounted, it can also override `TMPDIR`, `TEMP`,
+and `TMP`. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an image.
 
 `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH` are per-step files. A write
 applies to later steps in the same job, including a later step whose `if` is
@@ -72,8 +72,8 @@ Other network names are rejected. Service containers start only on
 `--memory 4g`,
 `--memory-swap 4g`, `--pids-limit 1024`, and a CPU quota of 2 for a job or
 1 for a service. The swap limit matches the memory limit, so the container
-does not add swap beyond that cap. A job container is created with `--security-opt
-no-new-privileges` and `--cap-drop ALL`. A service container is
+does not add swap beyond that cap. A job container is created with
+`--security-opt no-new-privileges` and `--cap-drop ALL`. A service container is
 created with `--security-opt no-new-privileges` and keeps the engine
 default capability set, including `CAP_CHOWN`. It does not receive
 `--cap-drop` or `--cap-add`. There is no workflow field that changes

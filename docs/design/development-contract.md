@@ -68,6 +68,19 @@ before a run is refused for storage the least recently used idle cache is
 removed. A cache in use is never removed. apt is not cached because its
 directories are written by root.
 
+A pull request can move while a poll pass runs: main advances, or the pull
+request is updated. When the fetched merge ref is not the listed base and head
+(or the head and the base branch's current tip), the poller reads the pull
+request again, at most three times in that pass, waiting one, two and four
+seconds. If the base or head changed, it skips the pull request for the pass
+without counting a mismatch or posting a status, and the next pass lists it
+again and checks it from scratch at the new SHAs. If the merge ref became the
+expected one, the pass uses it. If nothing changed, the mismatch counts toward
+the existing three-pass refusal. Each re-read writes a `trust_recheck` line to
+stderr with both sets of SHAs and the merge parents. No result from the old SHAs
+is carried to the new ones, and no refusal for authorship, a workflow change or a
+fork is skipped.
+
 The engine gives each job container two CPUs and each service one. To size a
 host, add two CPUs per active job and one per simultaneously active service,
 including jobs from other workers. Services share the job's execution slot.
@@ -77,8 +90,10 @@ currently reserve from a shared CPU pool.
 Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS` to the
 job CPU count and `MAKEFLAGS` to `-j` followed by that count. Workflow, job,
 prior `GITHUB_ENV`, and step values override each default in order. The
-`env` expression context uses the same values. A tool's command-line flags or
-its own jobserver can further control parallelism.
+`env` expression context uses the same values. Cargo gives `CARGO_BUILD_JOBS` precedence
+over `build.jobs` in the repository's `.cargo/config.toml`. To choose another
+count, set `CARGO_BUILD_JOBS` in the workflow or pass `--jobs` to Cargo. Other
+tools can also use their own command-line flags or jobservers.
 
 ## Operations
 

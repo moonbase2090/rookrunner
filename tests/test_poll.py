@@ -6,6 +6,8 @@ No test contacts GitHub. The scheduler is stopped so a submitted run stays
 queued until the test changes it or the 24-hour rule cancels it.
 """
 
+import contextlib
+import io
 import json
 import hashlib
 import os
@@ -20,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import urllib.parse
 
 import execution_core.poll as poll_module
@@ -166,6 +169,8 @@ class _Handler(BaseHTTPRequestHandler):
             kind = "branches"
         elif path.endswith("/pulls"):
             kind = "pulls"
+        elif "/pulls/" in path and path.rsplit("/", 1)[-1].isdigit():
+            kind = "pull"
         elif "/pulls/" in path and path.endswith("/commits"):
             kind = "pull_commits"
         elif "/pulls/" in path and path.endswith("/reviews"):
@@ -201,6 +206,17 @@ class _Handler(BaseHTTPRequestHandler):
             page = int(query.get("page", ["1"])[0])
             body = json.dumps(listed[(page - 1) * size : page * size]).encode()
             self._send(200, body, etag, remaining)
+            return
+        if kind == "pull":
+            number = int(path.rsplit("/", 1)[-1])
+            hook = getattr(self.server, "on_pull_read", None)
+            if hook is not None:
+                hook(number)
+            found = [item for item in self.server.pulls if item["number"] == number]
+            if not found:
+                self._send(404, b"{}", None, remaining)
+                return
+            self._send(200, json.dumps(found[0]).encode(), None, remaining)
             return
         if kind == "commit":
             sha = path.rsplit("/", 1)[-1]
@@ -350,7 +366,7 @@ class QueueTests(unittest.TestCase):
             }
 
             self.assertTrue(passed._blocked_for_engine(entry, {"version": "0.1.24"}))
-            self.assertFalse(passed._blocked_for_engine(entry, {"version": "0.1.26"}))
+            self.assertFalse(passed._blocked_for_engine(entry, {"version": "0.1.27"}))
             self.assertEqual(entry["state"], "claimed")
             saved = json.loads((state_dir / "poll.json").read_text())
             self.assertEqual(saved["submissions"][0]["state"], "claimed")
@@ -358,6 +374,9 @@ class QueueTests(unittest.TestCase):
 
 class PollTests(unittest.TestCase):
     def setUp(self):
+        delay = patch("execution_core.poll._RECHECK_DELAY_SECONDS", 0)
+        delay.start()
+        self.addCleanup(delay.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix="poll-")
         self.root = Path(self.tmp.name)
         self.remote = self.root / "origin.git"
@@ -2294,6 +2313,182 @@ class PollTests(unittest.TestCase):
         self.assertEqual(len(pulls), 1)
         self.assertEqual(self.runs(), 1)
         self.assertTrue((self.clone / "feature-9.txt").exists())
+
+    def _advance_feature(self, number, filename):
+        name = f"feature-{number}"
+        _git(self.seed, "checkout", "-q", name)
+        (self.seed / filename).write_text("more\n")
+        self._commit_all("more")
+        _git(self.seed, "push", "origin", name)
+        head = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        _git(self.seed, "checkout", "-q", "main")
+        return head
+
+    def _publish_merge(self, number, base, head, message):
+        merge = self._merge_commit(base, head, message)
+        _git(self.seed, "push", "--force", "origin", f"{merge}:refs/pull/{number}/merge")
+        return merge
+
+    def _recheck_lines(self, text):
+        found = []
+        for line in text.splitlines():
+            if line.startswith('{"trust_recheck"'):
+                found.append(json.loads(line)["trust_recheck"])
+        return found
+
+    def _poll_logged(self, **extra):
+        log = io.StringIO()
+        with (
+            patch("execution_core.poll._RECHECK_DELAY_SECONDS", 0),
+            contextlib.redirect_stderr(log),
+        ):
+            result = self.poll(**extra)
+        return result, self._recheck_lines(log.getvalue())
+
+    def _pull_reads(self):
+        return [
+            request["path"]
+            for request in self.server.requests
+            if request["path"].split("?", 1)[0].endswith("/pulls/9")
+        ]
+
+    def test_a_pull_request_that_moved_to_a_new_head_mid_check_is_rechecked_at_the_new_head(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head1 = self._open_feature(9, mutate)
+        head2 = self._advance_feature(9, "more-9.txt")
+        self._publish_merge(9, tip, head2, "merge two")
+
+        def moved(_number):
+            self.server.pulls[0]["head"]["sha"] = head2
+
+        self.server.on_pull_read = moved
+        first, lines = self._poll_logged()
+        self.assertIn({"reason": "pull_request_moved", "number": 9}, first["skipped"])
+        self.assertEqual(first["warnings"], [])
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assert_trust_posts(head1, [])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("9", saved.get("merge_mismatches", {}))
+        self.assertNotIn("pulls", saved["etags"])
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["listed"], {"base": tip, "head": head1})
+        self.assertEqual(lines[0]["current"], {"base": tip, "head": head2})
+        self.assertEqual(lines[0]["outcome"], "moved")
+        second, _lines = self._poll_logged()
+        self.assertEqual(second["warnings"], [])
+        pulls = [item for item in self.submits if item.get("event_name") == "pull_request"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0]["event"]["pull_request"]["head"]["sha"], head2)
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_base_that_moved_again_mid_check_is_rechecked_at_the_new_base(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        (self.seed / "second.txt").write_text("two\n")
+        self._commit_all("second")
+        _git(self.seed, "push", "origin", "main")
+        second_base = self._tip()
+        self._publish_merge(9, second_base, head, "merge on the second base")
+        (self.seed / "third.txt").write_text("three\n")
+        self._commit_all("third")
+        _git(self.seed, "push", "origin", "main")
+        third_base = self._tip()
+
+        def moved(_number):
+            self.server.pulls[0]["base"]["sha"] = third_base
+            self._publish_merge(9, third_base, head, "merge on the third base")
+
+        self.server.on_pull_read = moved
+        first, lines = self._poll_logged()
+        self.assertIn({"reason": "pull_request_moved", "number": 9}, first["skipped"])
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("9", saved.get("merge_mismatches", {}))
+        self.assertEqual(lines[0]["listed"], {"base": tip, "head": head})
+        self.assertEqual(lines[0]["current"], {"base": third_base, "head": head})
+        second, _lines = self._poll_logged()
+        self.assertEqual(second["warnings"], [])
+        pulls = [item for item in self.submits if item.get("event_name") == "pull_request"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0]["event"]["pull_request"]["base"]["sha"], third_base)
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_merge_that_settles_during_the_recheck_is_used_in_the_same_pass(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        _git(self.seed, "checkout", "-q", "main")
+        self._publish_merge(9, side, head, "stale merge")
+        real = self._merge_commit(tip, head, "settled merge")
+
+        def settle(_number):
+            _git(self.seed, "push", "--force", "origin", f"{real}:refs/pull/9/merge")
+
+        self.server.on_pull_read = settle
+        result, lines = self._poll_logged()
+        self.assertEqual(result["warnings"], [])
+        self.assertNotIn(
+            "merge_commit_mismatch", [item.get("reason") for item in result["skipped"]]
+        )
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["outcome"], "unchanged")
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_merge_that_never_settles_is_rechecked_a_bounded_number_of_times_then_counted(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        _git(self.seed, "checkout", "-q", "-b", "side", tip)
+        (self.seed / "side.txt").write_text("side\n")
+        self._commit_all("side")
+        side = _git(self.seed, "rev-parse", "HEAD").stdout.strip()
+        _git(self.seed, "checkout", "-q", "main")
+        self._publish_merge(9, side, head, "stale merge")
+        first, lines = self._poll_logged()
+        self.assertEqual(len(self._pull_reads()), 3)
+        self.assertEqual([line["attempt"] for line in lines], [1, 2, 3])
+        self.assertEqual({line["limit"] for line in lines}, {3})
+        self.assertEqual({line["outcome"] for line in lines}, {"unchanged"})
+        self.assertEqual(lines[0]["merge_parents"][0], side)
+        self.assertEqual(first["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["merge_mismatches"], {"9": {"head": head, "count": 1}})
+        self.assert_trust_posts(head, [])
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_workflow_change_by_an_untrusted_author_is_still_refused_after_the_head_moved(self):
+        _tip, head1 = self._open_feature(9, self._workflow_edit, association="CONTRIBUTOR")
+        head2 = self._advance_feature(9, "more-9.txt")
+        _git(self.seed, "checkout", "-q", "main")
+        self._publish_merge(9, _tip, head2, "merge two")
+        for sha in (head1, head2):
+            self.server.authors[sha] = "writer"
+            self.server.committers[sha] = "writer"
+        self.server.permissions = {"Mona": "read", "writer": "write"}
+
+        def moved(_number):
+            self.server.pulls[0]["head"]["sha"] = head2
+
+        self.server.on_pull_read = moved
+        first, _lines = self._poll_logged(allow_pr_workflow=["OWNER"])
+        self.assertIn({"reason": "pull_request_moved", "number": 9}, first["skipped"])
+        self.assertEqual(self.runs(), 0)
+        second, _lines = self._poll_logged(allow_pr_workflow=["OWNER"])
+        self.assertEqual(self.runs(), 0)
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(second["skipped"], [{"reason": "workflow_changed", "number": 9}])
+        self.assertEqual(second["warnings"][0]["sha"], head2)
+        self.assertIn("author cannot write to the repository", second["warnings"][0]["message"])
 
     def test_a_merge_on_neither_base_is_refused_and_posts_an_error_status(self):
         def mutate(seed):
