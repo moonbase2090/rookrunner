@@ -47,6 +47,19 @@ This execution limit is separate from a poll place's `cap`, which bounds queued
 plus running admissions. A place admission cap of two and worker execution cap
 of one still means one running run and one queued run.
 
+A pull request can move while a poll pass runs: main advances, or the pull
+request is updated. When the fetched merge ref is not the listed base and head
+(or the head and the base branch's current tip), the poller reads the pull
+request again, at most three times in that pass, waiting one, two and four
+seconds. If the base or head changed, it skips the pull request for the pass
+without counting a mismatch or posting a status, and the next pass lists it
+again and checks it from scratch at the new SHAs. If the merge ref became the
+expected one, the pass uses it. If nothing changed, the mismatch counts toward
+the existing three-pass refusal. Each re-read writes a `trust_recheck` line to
+stderr with both sets of SHAs and the merge parents. No result from the old SHAs
+is carried to the new ones, and no refusal for authorship, a workflow change or a
+fork is skipped.
+
 The engine gives each job container two CPUs and each service one. To size a
 host, add two CPUs per active job and one per simultaneously active service,
 including jobs from other workers. Services share the job's execution slot.
