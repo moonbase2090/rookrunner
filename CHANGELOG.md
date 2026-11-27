@@ -19,7 +19,11 @@ This file does not reconstruct earlier milestones.
   image. The cache counts toward the disk budget, is emptied when it passes
   `--package-cache-max-bytes` (default 4 GiB) while idle, is removed after
   `--package-cache-max-age-days` (default 14) without use, and is freed before a
-  run is refused for storage. apt is not cached.
+  run is refused for storage. apt is not cached. A ref the operator lists for
+  file-backed secrets, an event without the repository id or default branch, and
+  a worker whose repository cannot be verified from `--github-repository` or the
+  clone's `origin` remote get no cache. Cache removal and preparation never
+  follow a symlink.
 
 ## [0.1.27] - 2026-11-27
 

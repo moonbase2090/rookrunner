@@ -53,7 +53,7 @@ worker picks the namespace from the stored event and the operator's override:
 a push, schedule or dispatch on the default branch is `default-branch`; any
 other push to a branch, and a pull request whose head and base repository ids
 equal the event repository's id, is `branches`; everything else, a fork, an
-untrusted override, another repository, a tag or an unknown event, has no cache.
+untrusted override, another repository, a tag, an unknown event, a ref the operator lists for file-backed secrets, or an event that lacks the repository id (or, for a push, the default branch), has no cache. A worker without a verified repository name (`--github-repository`, else the clone's `origin` remote) uses no cache at all.
 The job never chooses. One `/github/cache` mount holds the pip, uv, npm, pnpm,
 yarn and Go module caches and the install directories; cargo's registry, git
 checkouts and the two lock files that cargo takes before it touches the registry

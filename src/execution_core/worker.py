@@ -160,7 +160,7 @@ from .checks import MAX_CHECK_TEXT_BYTES, check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .oidc_endpoint import OidcRun, OidcSettings
 from .oidc_keys import OidcError, load_key_set
-from .package_cache import PackageCache, image_key, namespace_for
+from .package_cache import PackageCache, image_key, namespace_for, repository_from_clone
 from .secrets import SecretAccess
 from .socket_lock import (
     accept_socket_flags,
@@ -692,6 +692,11 @@ class Worker:
         if package_cache_max_bytes is not None:
             cache_limits["max_bytes"] = package_cache_max_bytes
         self.package_cache = PackageCache(self.state, **cache_limits) if package_cache else None
+        self.cache_repository = (
+            None
+            if not package_cache
+            else self.github_repository or repository_from_clone(self.repository)
+        )
         self.oidc = _oidc_settings(
             oidc_issuer,
             oidc_pull_request,
@@ -2231,8 +2236,9 @@ class Worker:
         namespace = namespace_for(
             event,
             event_name,
-            self.github_repository,
+            self.cache_repository,
             record.get("untrusted_override") is True,
+            self.secret_refs or (),
         )
         image = image_key(image_digest)
         if namespace is None or image is None:

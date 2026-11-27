@@ -2,6 +2,7 @@
 
 """The package cache: who may use it, how it is kept, and what a job sees."""
 
+import ast
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 
 from execution_core.disk import usage
 from execution_core.package_cache import (
@@ -22,11 +24,11 @@ from execution_core.package_cache import (
     PackageCache,
     image_key,
     namespace_for,
+    repository_from_clone,
 )
 from execution_core.run import _create_args, run_job
 from execution_core.worker import Worker
 
-from dockerutil import foreign_ids
 from test_run import EVENT, _capture, _plan
 
 REPOSITORY = "owner/project"
@@ -105,9 +107,60 @@ class NamespaceTests(unittest.TestCase):
         )
         self.assertIsNone(namespace_for(_push("refs/heads/topic"), "schedule", REPOSITORY))
 
-    def test_a_worker_without_a_repository_name_still_checks_forks(self):
-        self.assertEqual(namespace_for(_pull(), "pull_request", None), BRANCH_NAMESPACE)
-        self.assertIsNone(namespace_for(_pull(head_id=900), "pull_request", None))
+    def test_a_worker_without_a_verified_repository_gets_no_cache(self):
+        self.assertIsNone(namespace_for(_push("refs/heads/main"), "push", None))
+        self.assertIsNone(namespace_for(_pull(), "pull_request", None))
+        self.assertIsNone(namespace_for(_pull(), "pull_request", ""))
+
+    def test_an_event_missing_the_repository_id_or_the_default_branch_gets_no_cache(self):
+        no_id = _push("refs/heads/main")
+        del no_id["repository"]["id"]
+        self.assertIsNone(namespace_for(no_id, "push", REPOSITORY))
+        no_default = _push("refs/heads/topic")
+        del no_default["repository"]["default_branch"]
+        self.assertIsNone(namespace_for(no_default, "push", REPOSITORY))
+        empty_default = {**_push("refs/heads/main"), "repository": _repository(default="")}
+        self.assertIsNone(namespace_for(empty_default, "push", REPOSITORY))
+        no_pull_id = _pull()
+        del no_pull_id["repository"]["id"]
+        self.assertIsNone(namespace_for(no_pull_id, "pull_request", REPOSITORY))
+
+    def test_a_ref_listed_for_secrets_gets_no_cache_while_other_branches_keep_theirs(self):
+        listed = ("refs/heads/release/1",)
+        self.assertIsNone(
+            namespace_for(_push("refs/heads/release/1"), "push", REPOSITORY, secret_refs=listed)
+        )
+        self.assertEqual(
+            namespace_for(_push("refs/heads/topic"), "push", REPOSITORY, secret_refs=listed),
+            BRANCH_NAMESPACE,
+        )
+        self.assertEqual(
+            namespace_for(_push("refs/heads/main"), "push", REPOSITORY, secret_refs=listed),
+            DEFAULT_BRANCH_NAMESPACE,
+        )
+        self.assertEqual(
+            namespace_for(_pull(), "pull_request", REPOSITORY, secret_refs=listed),
+            BRANCH_NAMESPACE,
+        )
+
+    def test_the_repository_comes_from_the_clone_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clone = Path(directory)
+            subprocess.run(["git", "init", "-q", str(clone)], check=True)
+            self.assertIsNone(repository_from_clone(clone))
+            for url, name in (
+                ("https://github.com/owner/project.git", "owner/project"),
+                ("https://github.com/owner/project", "owner/project"),
+                ("git@github.com:owner/project.git", "owner/project"),
+                ("not a url", None),
+            ):
+                subprocess.run(
+                    ["git", "-C", str(clone), "remote", "remove", "origin"], capture_output=True
+                )
+                subprocess.run(
+                    ["git", "-C", str(clone), "remote", "add", "origin", url], check=True
+                )
+                self.assertEqual(repository_from_clone(clone), name, url)
 
     def test_the_image_key_is_the_front_of_a_sha256_digest(self):
         self.assertEqual(image_key("sha256:" + "0123456789abcdef" + "f" * 48), "0123456789abcdef")
@@ -279,6 +332,60 @@ class KeepingTests(unittest.TestCase):
             self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
         self.assertEqual(list(target.iterdir()), [])
 
+    def test_a_symlink_where_the_cache_expects_a_directory_or_a_lock_is_refused_untouched(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        outside.chmod(0o755)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        self.cache.release(mount)
+        for name in ("git", ".package-cache"):
+            path = mount.root / name
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            path.symlink_to(outside)
+            with self.assertRaises(OSError):
+                self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+            self.assertEqual(outside.stat().st_mode & 0o777, 0o755, name)
+            path.unlink()
+            self.cache.release(self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A))
+            self.cache.release(mount)
+
+    def test_removal_never_follows_a_symlink_out_of_the_cache(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        (outside / "kept.txt").write_text("keep\n")
+        (outside / "kept.txt").chmod(0o644)
+        outside.chmod(0o755)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        (mount.registry / "to-dir").symlink_to(outside)
+        (mount.registry / "to-file").symlink_to(outside / "kept.txt")
+        (mount.registry / "dangling").symlink_to(self.state / "does-not-exist")
+        nested = mount.shared / "go-mod" / "a" / "b"
+        nested.mkdir(parents=True)
+        (nested / "link").symlink_to(outside)
+        (nested / "file").write_text("x")
+        nested.chmod(0o555)
+        self.cache.release(mount)
+        self.now += 100
+        self.assertEqual(self.cache.prune(), [mount.root])
+        self.assertFalse(mount.root.exists())
+        self.assertEqual((outside / "kept.txt").read_text(), "keep\n")
+        self.assertEqual((outside / "kept.txt").stat().st_mode & 0o777, 0o644)
+        self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
+
+    def test_a_cache_root_that_is_itself_a_symlink_is_unlinked_not_followed(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        (outside / "kept.txt").write_text("keep\n")
+        folder = self.state / "package-cache" / BRANCH_NAMESPACE
+        folder.mkdir(parents=True)
+        (folder / IMAGE_A).symlink_to(outside)
+        self.cache._remove(folder / IMAGE_A)
+        self.assertFalse((folder / IMAGE_A).is_symlink())
+        self.assertEqual((outside / "kept.txt").read_text(), "keep\n")
+
     def test_a_name_that_is_not_a_namespace_and_an_image_key_is_refused(self):
         for namespace, image in (("../x", IMAGE_A), (BRANCH_NAMESPACE, "../../etc"), ("x", "y")):
             with self.assertRaises(ValueError):
@@ -290,6 +397,15 @@ class KeepingTests(unittest.TestCase):
                 PackageCache(self.state, max_age_seconds=bad)
             with self.assertRaises(ValueError):
                 PackageCache(self.state, max_bytes=bad)
+
+
+def _clone(directory, url="https://github.com/owner/project.git"):
+    clone = Path(directory) / "clone"
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    if url is not None:
+        subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", url], check=True)
+    return clone
 
 
 class WorkerBudgetTests(unittest.TestCase):
@@ -332,7 +448,8 @@ class WorkerBudgetTests(unittest.TestCase):
     def test_a_run_gets_the_cache_of_its_event_and_image_and_an_override_or_fork_gets_none(self):
         digest = "sha256:" + IMAGE_A + "0" * 48
         with tempfile.TemporaryDirectory() as directory:
-            worker = Worker(directory, Path(directory) / "state")
+            worker = Worker(_clone(directory), Path(directory) / "state")
+            self.assertEqual(worker.cache_repository, REPOSITORY)
             main = _push("refs/heads/main")
             mount = worker._acquire_package_cache(main, "push", {}, digest)
             self.assertEqual(mount.namespace, DEFAULT_BRANCH_NAMESPACE)
@@ -349,14 +466,45 @@ class WorkerBudgetTests(unittest.TestCase):
             )
             self.assertIsNone(worker._acquire_package_cache(main, "push", {}, "not a digest"))
 
+    def test_a_run_on_a_ref_listed_for_secrets_gets_no_cache_but_an_ordinary_branch_does(self):
+        digest = "sha256:" + IMAGE_A + "0" * 48
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(_clone(directory), Path(directory) / "state")
+            worker.secret_refs = ["refs/heads/release/1"]
+            self.assertIsNone(
+                worker._acquire_package_cache(_push("refs/heads/release/1"), "push", {}, digest)
+            )
+            ordinary = worker._acquire_package_cache(_push("refs/heads/topic"), "push", {}, digest)
+            self.assertEqual(ordinary.namespace, BRANCH_NAMESPACE)
+
+    def test_a_worker_that_cannot_verify_its_repository_gets_no_cache(self):
+        digest = "sha256:" + IMAGE_A + "0" * 48
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(_clone(directory, url=None), Path(directory) / "state")
+            self.assertIsNone(worker.cache_repository)
+            self.assertIsNone(
+                worker._acquire_package_cache(_push("refs/heads/main"), "push", {}, digest)
+            )
+            self.assertFalse((worker.state / "package-cache").exists())
+
+    def test_an_event_for_another_repository_gets_no_cache_on_a_verified_worker(self):
+        digest = "sha256:" + IMAGE_A + "0" * 48
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(
+                _clone(directory, "https://github.com/owner/other.git"), Path(directory) / "state"
+            )
+            self.assertIsNone(
+                worker._acquire_package_cache(_push("refs/heads/main"), "push", {}, digest)
+            )
+
     def test_a_run_gets_no_cache_when_it_is_off_or_cannot_be_prepared(self):
         digest = "sha256:" + IMAGE_A + "0" * 48
         with tempfile.TemporaryDirectory() as directory:
-            off = Worker(directory, Path(directory) / "off", package_cache=False)
+            off = Worker(_clone(directory), Path(directory) / "off", package_cache=False)
             self.assertIsNone(
                 off._acquire_package_cache(_push("refs/heads/main"), "push", {}, digest)
             )
-            blocked = Worker(directory, Path(directory) / "blocked")
+            blocked = Worker(directory + "/clone", Path(directory) / "blocked")
             blocked.state.mkdir()
             (blocked.state / "package-cache").write_text("a file, not a directory")
             self.assertIsNone(
@@ -484,14 +632,17 @@ class JobCacheTests(unittest.TestCase):
             raise AssertionError("Docker is required")
         cls.image_root = tempfile.TemporaryDirectory(prefix="cache-image-")
         cls.images = {}
+        cls.tags = []
+        suite = uuid.uuid4().hex[:12]
         for name, text in (("with", _IMAGE_WITH_CARGO), ("without", _IMAGE_WITHOUT_CARGO)):
             folder = Path(cls.image_root.name) / name
             folder.mkdir()
             (folder / "Dockerfile").write_text(text)
-            tag = f"rookrunner-cache-{name}"
+            tag = f"rookrunner-cache-{suite}-{name}"
             subprocess.run(
                 ["docker", "build", "--quiet", "-t", tag, folder], check=True, capture_output=True
             )
+            cls.tags.append(tag)
             cls.images[name] = subprocess.run(
                 ["docker", "image", "inspect", "--format", "{{.Id}}", tag],
                 check=True,
@@ -501,8 +652,8 @@ class JobCacheTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for name in ("with", "without"):
-            subprocess.run(["docker", "rmi", "-f", f"rookrunner-cache-{name}"], capture_output=True)
+        for tag in cls.tags:
+            subprocess.run(["docker", "rmi", "-f", tag], capture_output=True)
         cls.image_root.cleanup()
 
     def setUp(self):
@@ -511,13 +662,27 @@ class JobCacheTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cache = PackageCache(self.root / "cache-state")
         self.count = 0
+        # A wrapper around the real client records every create, so teardown
+        # removes exactly the containers this test made and no one else's.
+        self.log = self.root / "docker-calls"
+        self.docker = self.root / "docker"
+        self.docker.write_text(
+            "#!/usr/bin/env python3\n"
+            "import subprocess, sys\n"
+            f"with open({str(self.log)!r}, 'a', encoding='utf-8') as handle:\n"
+            "    handle.write(repr(sys.argv[1:]) + '\\n')\n"
+            f"raise SystemExit(subprocess.call([{shutil.which('docker')!r}, *sys.argv[1:]]))\n"
+        )
+        self.docker.chmod(0o755)
 
     def tearDown(self):
-        names = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "name=rookrunner-"], capture_output=True, text=True
-        )
-        for container in foreign_ids(names.stdout):
-            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+        if not self.log.exists():
+            return
+        for line in self.log.read_text().splitlines():
+            call = ast.literal_eval(line)
+            if call[:1] == ["create"] and "--name" in call:
+                name = call[call.index("--name") + 1]
+                subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
     def _job(self, workflow, image="with", mount=None):
         self.count += 1
@@ -531,6 +696,7 @@ class JobCacheTests(unittest.TestCase):
             _plan(workflow),
             self.images[image],
             EVENT,
+            docker=str(self.docker),
             package_cache=mount,
         )
         return result, workspace

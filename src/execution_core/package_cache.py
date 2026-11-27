@@ -27,8 +27,8 @@ to a package index refresh.
 
 import os
 import re
-import shutil
-import sys
+import stat
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -91,15 +91,19 @@ def _pull_repository_id(pull, side):
     return _integer(repo.get("id")) if isinstance(repo, dict) else None
 
 
-def namespace_for(event, event_name, repository, untrusted_override=False):
+def namespace_for(event, event_name, repository, untrusted_override=False, secret_refs=()):
     """Return the namespace a run may use, or None when it may use no cache.
 
-    `repository` is the worker's `owner/name` when it is configured, and
-    None when it is not. The answer reads only the stored event the poller
-    built and the override flag the operator set.
+    `repository` is the worker's verified `owner/name`. Without it, or without
+    the repository id (and, for a push, the default branch) in the stored
+    event, the worker cannot tell which namespace applies and the run gets no
+    cache. A ref the operator lists for file-backed secrets also gets none, so
+    a credentialed run never reads what an uncredentialed one wrote.
+    The answer reads only the stored event the poller built, the override
+    flag and the secret refs the operator set.
     """
 
-    if untrusted_override is not False:
+    if untrusted_override is not False or not isinstance(repository, str) or repository == "":
         return None
     if not isinstance(event, dict):
         return None
@@ -107,9 +111,12 @@ def namespace_for(event, event_name, repository, untrusted_override=False):
     ref = event.get("ref")
     if (
         not isinstance(stored, dict)
-        or (repository is not None and stored.get("full_name") != repository)
+        or stored.get("full_name") != repository
+        or _integer(stored.get("id")) is None
         or not isinstance(ref, str)
     ):
+        return None
+    if ref in tuple(secret_refs or ()):
         return None
     if event_name == "pull_request":
         pull = event.get("pull_request")
@@ -118,14 +125,48 @@ def namespace_for(event, event_name, repository, untrusted_override=False):
         if head is None or head != base or head != _integer(stored.get("id")):
             return None
         return BRANCH_NAMESPACE
-    if event_name not in _PUSH_EVENTS or not ref.startswith("refs/heads/"):
-        return None
     default = stored.get("default_branch")
-    if isinstance(default, str) and default != "" and ref == "refs/heads/" + default:
+    if (
+        event_name not in _PUSH_EVENTS
+        or not ref.startswith("refs/heads/")
+        or not isinstance(default, str)
+        or default == ""
+    ):
+        return None
+    if ref == "refs/heads/" + default:
         return DEFAULT_BRANCH_NAMESPACE
     if event_name == "push":
         return BRANCH_NAMESPACE
     return None
+
+
+_ORIGIN = re.compile(
+    r"^(?:[a-z][a-z0-9+.-]*://[^/]+/|[^@/\s]+@[^:/\s]+:)([\w.-]+/[\w.-]+?)(?:\.git)?/?$"
+)
+
+
+def repository_from_clone(clone):
+    """Return the `owner/name` the clone's `origin` remote names, or None.
+
+    The poller builds each event for the repository it polls, and the worker's
+    clone is that repository, so the remote is the identity the worker can
+    check an event against when no name was configured.
+    """
+
+    try:
+        done = subprocess.run(
+            ["git", "-C", os.fspath(clone), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    found = _ORIGIN.match(done.stdout.strip())
+    return found.group(1) if found else None
 
 
 def image_key(digest):
@@ -268,25 +309,40 @@ class PackageCache:
                 parent = parent / part
                 self._directory(parent)
         for name in LOCK_FILES:
-            lock = path / name
-            if lock.is_symlink() or (lock.exists() and not lock.is_file()):
-                raise OSError("package cache lock is not accepted")
-            lock.touch(mode=0o600, exist_ok=True)
+            descriptor = os.open(
+                path / name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+            )
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise OSError("package cache lock is not accepted")
+                os.fchmod(descriptor, 0o600)
+            finally:
+                os.close(descriptor)
         self._touch(path)
 
     @staticmethod
     def _directory(path):
-        if path.is_symlink():
-            raise OSError("package cache directory is not accepted")
         path.mkdir(mode=0o700, exist_ok=True)
-        os.chmod(path, 0o700)
+        # Open without following a link, then change the mode of what was opened.
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(descriptor, 0o700)
+        finally:
+            os.close(descriptor)
 
     def _touch(self, path):
-        if path.is_dir() and not path.is_symlink():
-            stamp = path / _STAMP
-            stamp.touch(mode=0o600, exist_ok=True)
-            now = self._clock()
-            os.utime(stamp, (now, now))
+        try:
+            descriptor = os.open(
+                path / _STAMP, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+            )
+        except OSError:
+            return
+        try:
+            if stat.S_ISREG(os.fstat(descriptor).st_mode):
+                now = self._clock()
+                os.utime(descriptor, (now, now))
+        finally:
+            os.close(descriptor)
 
     @staticmethod
     def _stamp(path):
@@ -307,17 +363,37 @@ class PackageCache:
 
     @staticmethod
     def _remove(path):
-        if path.is_symlink():
-            path.unlink()
+        """Remove a cache tree without following a symlink anywhere in it.
+
+        A directory is made writable only through a descriptor opened without
+        following links, which a Go module cache needs because it is read-only.
+        Anything that is not a directory is unlinked itself, never its target.
+        """
+
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
             return
+        if not stat.S_ISDIR(info.st_mode):
+            os.unlink(path)
+            return
+        parent = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            _remove_at(parent, os.path.basename(path))
+        finally:
+            os.close(parent)
 
-        def writable(function, name, _error):
-            # A Go module cache is read-only on purpose. Make the entry
-            # removable, then try that one removal again.
-            os.chmod(os.path.dirname(name), 0o700)
-            os.chmod(name, 0o700)
-            function(name)
 
-        if path.exists():
-            handler = {"onexc" if sys.version_info >= (3, 12) else "onerror": writable}
-            shutil.rmtree(path, **handler)
+def _remove_at(parent, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        os.fchmod(descriptor, 0o700)
+        for child in os.listdir(descriptor):
+            info = os.lstat(child, dir_fd=descriptor)
+            if stat.S_ISDIR(info.st_mode):
+                _remove_at(descriptor, child)
+            else:
+                os.unlink(child, dir_fd=descriptor)
+    finally:
+        os.close(descriptor)
+    os.rmdir(name, dir_fd=parent)

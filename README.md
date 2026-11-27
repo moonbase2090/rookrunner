@@ -82,7 +82,7 @@ cached. apt is not cached.
 The worker decides from the stored event, not from the job: a push to the
 default branch uses one cache, and other branches and same-repository pull
 requests use another. A fork, an untrusted override, a different repository or
-any other event gets no cache and writes nothing to one. Each cache is also
+any other event gets no cache and writes nothing to one. So does a run on a ref the operator lists for file-backed secrets, and any run when the worker cannot verify its repository: the name comes from `--github-repository` or the clone's `origin` remote, and the event must carry the repository id (and, for a push, the default branch). Each cache is also
 kept per runner image. It counts toward the disk budget, is emptied while idle
 once it passes `--package-cache-max-bytes` (default 4 GiB), is removed after
 `--package-cache-max-age-days` (default 14) without use, and is freed before a
