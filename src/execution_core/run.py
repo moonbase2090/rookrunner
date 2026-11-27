@@ -44,8 +44,8 @@ otherwise to the container `PATH`. The runner then sets `GITHUB_WORKSPACE`,
 `ROOKRUNNER_EVENT`, `GITHUB_ENV`, `GITHUB_OUTPUT`, and `GITHUB_PATH`, so
 those names stay pointed at this attempt. `ROOKRUNNER_EVENT` is a read-only
 file holding the caller event as canonical JSON. It is not a GitHub event
-delivery. `GITHUB_*` and `RUNNER_*` names cannot be overwritten. `CI` and
-`HOME` can. When the Docker socket is mounted, `TMPDIR`, `TEMP`, and
+delivery. `GITHUB_*` and `RUNNER_*` names cannot be overwritten. The job
+can override `CI`, `HOME`, and the compiler defaults in `_soft_defaults`. When the Docker socket is mounted, `TMPDIR`, `TEMP`, and
 `TMP` can too. `GITHUB_ACTIONS` stays unset. `runs-on` does not select an
 image.
 
@@ -70,9 +70,9 @@ GitHub-hosted runners have that access by default
 Other network names are rejected. Service containers start only on
 `bridge`. A job container and a service container are created with
 `--memory 4g`,
-`--memory-swap 4g`, `--pids-limit 1024`, and `--cpus 2`. The swap
-limit matches the memory limit, so the container does not add swap
-beyond that cap. A job container is created with `--security-opt
+`--memory-swap 4g`, `--pids-limit 1024`, and a CPU quota of 2 for a job or
+1 for a service. The swap limit matches the memory limit, so the container
+does not add swap beyond that cap. A job container is created with `--security-opt
 no-new-privileges` and `--cap-drop ALL`. A service container is
 created with `--security-opt no-new-privileges` and keeps the engine
 default capability set, including `CAP_CHOWN`. It does not receive
@@ -362,7 +362,8 @@ _NETWORKS = {"bridge", "none"}
 # the memory value rather than Docker's default of twice that.
 _CONTAINER_MEMORY = "4g"
 _CONTAINER_PIDS = "1024"
-_CONTAINER_CPUS = "2"
+_JOB_CPUS = 2
+_SERVICE_CPUS = 1
 # Inside the job, the Docker client looks at this socket. GitHub's
 # permission error names the same path.
 # https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/monitor-and-troubleshoot#troubleshooting-containers-in-self-hosted-runners
@@ -487,6 +488,7 @@ def _protected_defaults(job=None, workflow=None):
 def _soft_defaults():
     """Values a later env layer may replace.
 
+    Each attempt defaults compiler parallelism to its job CPU quota.
     `CI` and `HOME` are set for an attempt. `TMPDIR`, `TEMP`, and `TMP`
     are set only when the job has the shared socket directory.
     """
@@ -494,7 +496,14 @@ def _soft_defaults():
     attempt = _ATTEMPT.get()
     if attempt is None:
         return {}
-    values = {"CI": "true", "HOME": _HOME}
+    values = {
+        "CI": "true",
+        "HOME": _HOME,
+        "CARGO_BUILD_JOBS": str(_JOB_CPUS),
+        "NUM_JOBS": str(_JOB_CPUS),
+        "MAKEFLAGS": f"-j{_JOB_CPUS}",
+        "RAYON_NUM_THREADS": str(_JOB_CPUS),
+    }
     socket_temp = attempt.get("socket_temp")
     if socket_temp:
         values["TMPDIR"] = socket_temp
@@ -1527,7 +1536,7 @@ def _prepare_runner_account(docker, reference, account, deadline, passwordless_s
     _setup("runner account setup failed")
 
 
-def _limit_args():
+def _limit_args(cpus):
     """Return the resource flags applied to every job and service container."""
 
     return [
@@ -1538,7 +1547,7 @@ def _limit_args():
         "--pids-limit",
         _CONTAINER_PIDS,
         "--cpus",
-        _CONTAINER_CPUS,
+        str(cpus),
     ]
 
 
@@ -1656,7 +1665,7 @@ def _create_args(
         network,
         "--user",
         f"{os.getuid()}:{os.getgid()}",
-        *_limit_args(),
+        *_limit_args(_JOB_CPUS),
         *_job_isolation_args(passwordless_sudo, job_privileges),
     ]
     if oidc_host:
@@ -1965,7 +1974,7 @@ def _service_create_args(service_name, network_name, service, job_name):
         service["id"],
         "--label",
         f"rookrunner.owner={job_name}",
-        *_limit_args(),
+        *_limit_args(_SERVICE_CPUS),
         *_service_isolation_args(),
     ]
     for key in sorted(service.get("env") or {}):
@@ -3743,7 +3752,7 @@ def _expression_values(
 ):
     """Contexts for one step `if`. Missing properties stay missing.
 
-    `env` starts with `CI` and `HOME` while an attempt is running, then the
+    `env` starts with the attempt defaults from `_soft_defaults`, then the
     workflow env, the job env, `GITHUB_ENV` from earlier steps in this job,
     then this step's env. The caller passes those maps already rendered.
     This function does not expand them again. The default `GITHUB_*` and

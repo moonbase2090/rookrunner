@@ -47,6 +47,18 @@ This execution limit is separate from a poll place's `cap`, which bounds queued
 plus running admissions. A place admission cap of two and worker execution cap
 of one still means one running run and one queued run.
 
+The engine gives each job container two CPUs and each service one. To size a
+host, add two CPUs per active job and one per simultaneously active service,
+including jobs from other workers. Services share the job's execution slot.
+Docker enforces the individual container quotas. Independent workers do not
+currently reserve from a shared CPU pool.
+
+Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS` to the
+job CPU count and `MAKEFLAGS` to `-j` followed by that count. Workflow, job,
+prior `GITHUB_ENV`, and step values override each default in order. The
+`env` expression context uses the same values. A tool's command-line flags or
+its own jobserver can further control parallelism.
+
 ## Operations
 
 | Method | Required parameters | Optional parameters |

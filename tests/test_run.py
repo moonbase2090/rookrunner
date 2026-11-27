@@ -874,13 +874,20 @@ class ContextValueTests(unittest.TestCase):
 
     def test_soft_defaults_set_temp_only_for_a_socket_job(self):
         shared = "/tmp/rookrunner-socket-example"
+        defaults = {
+            "CI": "true",
+            "HOME": "/github/home",
+            "CARGO_BUILD_JOBS": "2",
+            "NUM_JOBS": "2",
+            "RAYON_NUM_THREADS": "2",
+            "MAKEFLAGS": "-j2",
+        }
         token = _ATTEMPT.set({"socket_temp": shared})
         try:
             self.assertEqual(
                 _soft_defaults(),
                 {
-                    "CI": "true",
-                    "HOME": "/github/home",
+                    **defaults,
                     "TMP": shared,
                     "TEMP": shared,
                     "TMPDIR": shared,
@@ -890,7 +897,7 @@ class ContextValueTests(unittest.TestCase):
             _ATTEMPT.reset(token)
         token = _ATTEMPT.set({"arch": "ARM64"})
         try:
-            self.assertEqual(_soft_defaults(), {"CI": "true", "HOME": "/github/home"})
+            self.assertEqual(_soft_defaults(), defaults)
         finally:
             _ATTEMPT.reset(token)
         self.assertEqual(_soft_defaults(), {})
@@ -2565,6 +2572,33 @@ jobs:
         self.assertEqual(result["steps"][0]["status"], "skipped")
         self.assertEqual(result["steps"][0]["job_id"], "build")
         self.assertFalse((workspace / "ran.txt").exists())
+
+    def test_compile_defaults_follow_workflow_env_precedence(self):
+        workflow = """on: push
+env:
+  CARGO_BUILD_JOBS: '5'
+jobs:
+  build:
+    env:
+      MAKEFLAGS: '-k -j3'
+    steps:
+      - run: |
+          echo "$CARGO_BUILD_JOBS|$NUM_JOBS|$MAKEFLAGS|$RAYON_NUM_THREADS"
+          echo 'NUM_JOBS=7' >> "$GITHUB_ENV"
+      - env:
+          RAYON_NUM_THREADS: '1'
+        if: env.CARGO_BUILD_JOBS == '5' && env.NUM_JOBS == '7' && env.RAYON_NUM_THREADS == '1'
+        run: echo "$CARGO_BUILD_JOBS|$NUM_JOBS|$MAKEFLAGS|$RAYON_NUM_THREADS"
+"""
+        root = self.root / "compiler-env"
+        root.mkdir()
+        _, snapshot, digest, workspace = _capture(root, workflow)
+        result = run_job(snapshot, digest, workspace, _plan(workflow), self.image, EVENT)
+        self.assertEqual((result["status"], result["exit_code"]), ("succeeded", 0), result)
+        self.assertEqual(
+            [step["stdout"].strip() for step in result["steps"]],
+            ["5|2|-k -j3|2", "5|7|-k -j3|1"],
+        )
 
     def test_environment_files_apply_to_later_steps(self):
         root = self.root / "commands"

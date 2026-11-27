@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS`
+  to the job container's CPU quota and `MAKEFLAGS` to `-j2`. Workflow-defined
+  values take precedence. Each service container now has a one-CPU quota.
+
 ## [0.1.26] - 2026-11-25
 
 - `worker --cap N` executes up to N accepted runs at once, with separate attempt
