@@ -7,6 +7,17 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- When the merge ref of a pull request does not match the base and head the
+  list gave, the poller now reads the pull request again, up to three times in
+  the same pass with a growing wait, before the mismatch counts. A pull request
+  whose head or base moved meanwhile is skipped for that pass without a refusal
+  and is checked from scratch at the new SHAs on the next pass, with nothing
+  reused from the old ones. A merge ref that settles during the wait is used at
+  once. A mismatch that persists still counts toward the three-pass refusal.
+  Each re-read logs a `trust_recheck` line on stderr that names the listed and
+  the current base and head and the merge ref's parents. The trust gate is not
+  loosened: authorship, workflow-change and fork refusals are decided on the
+  new SHAs exactly as before.
 - Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS`
   to the job container's CPU quota and `MAKEFLAGS` to `-j2`. Workflow-defined
   values take precedence. Cargo uses `CARGO_BUILD_JOBS` ahead of `build.jobs`
