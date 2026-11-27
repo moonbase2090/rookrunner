@@ -122,7 +122,7 @@ class KeepingTests(unittest.TestCase):
         self.state = Path(self.temp.name)
         self.now = 1_000_000.0
         self.cache = PackageCache(
-            self.state, max_age_seconds=100, max_bytes=20_000, clock=lambda: self.now
+            self.state, max_age_seconds=100, max_bytes=1_000_000, clock=lambda: self.now
         )
 
     def test_a_cache_is_private_and_holds_the_pieces_a_job_mounts(self):
@@ -248,7 +248,7 @@ class KeepingTests(unittest.TestCase):
 
     def test_an_idle_cache_over_the_size_limit_starts_empty_but_a_busy_one_is_kept(self):
         first = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
-        (first.registry / "big").write_bytes(b"x" * 50_000)
+        (first.registry / "big").write_bytes(b"x" * 2_000_000)
         second = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
         self.assertTrue((second.registry / "big").exists())
         self.cache.release(first)
