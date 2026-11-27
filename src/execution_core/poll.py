@@ -177,6 +177,11 @@ _GET_TIMEOUT_SECONDS = 10
 _GIT_TIMEOUT_SECONDS = 30
 _MAX_BODY = 1024 * 1024
 _MERGE_MISMATCH_LIMIT = 3
+# A merge ref that does not match the listed base and head may only mean the pull
+# request moved while the pass ran. Re-read it this many times in the same pass,
+# waiting this long, then twice that, and so on, before the mismatch counts.
+_MERGE_RECHECK_LIMIT = 3
+_RECHECK_DELAY_SECONDS = 1.0
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
 # The worker's plan error when the workflow at that commit has no such job.
@@ -1914,8 +1919,83 @@ class Pass:
         ):
             self._clear_merge_mismatch(number, head_sha)
             return merge
+        # The listed base and head can be out of date: main moved, or the pull
+        # request was updated, between the list and this fetch. Read the pull
+        # request again, from scratch, a bounded number of times.
+        for attempt in range(1, _MERGE_RECHECK_LIMIT + 1):
+            time.sleep(_RECHECK_DELAY_SECONDS * (2 ** (attempt - 1)))
+            fresh = self._reread_pull(number)
+            if fresh is None:
+                break
+            fresh_base, fresh_head, _fresh_ref = fresh
+            moved = fresh_head != head_sha or fresh_base != base_sha
+            self._log_recheck(
+                number, attempt, base_sha, head_sha, fresh_base, fresh_head, parents, moved
+            )
+            if moved:
+                # Nothing from the listed SHAs is reused. The next pass lists
+                # the pull request again and checks it at the new base and head.
+                self._skip({"reason": "pull_request_moved", "number": number})
+                self.hold_pulls = True
+                return None
+            merge = _fetch_sha(self.clone, f"refs/pull/{number}/merge")
+            if merge is None:
+                break
+            parents = _merge_parents(self.clone, merge)
+            if parents == (base_sha, head_sha) or _moved_base_merge(
+                self.clone, parents, head_sha, base_ref
+            ):
+                self._clear_merge_mismatch(number, head_sha)
+                return merge
         self._record_merge_mismatch(number, head_sha)
         return None
+
+    def _reread_pull(self, number):
+        """Return the pull request's current ``(base, head, base ref)``, or None."""
+
+        try:
+            listed = _get_json(
+                self.api_base,
+                f"/repos/{self.repository}/pulls/{number}",
+                None,
+                self.list_token,
+            )
+        except PollError:
+            return None
+        self.budget.observe(listed["remaining"])
+        body = listed.get("body")
+        if not isinstance(body, dict):
+            return None
+        base = body.get("base")
+        head = body.get("head")
+        base_sha = base.get("sha") if isinstance(base, dict) else None
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        if _SHA.fullmatch(base_sha or "") is None or _SHA.fullmatch(head_sha or "") is None:
+            return None
+        return base_sha, head_sha, base.get("ref") if isinstance(base.get("ref"), str) else None
+
+    def _log_recheck(
+        self, number, attempt, base_sha, head_sha, fresh_base, fresh_head, parents, moved
+    ):
+        """Name both sets of SHAs on stderr, so a moved pull request can be followed."""
+
+        print(  # noqa: T201  recheck record on stderr
+            canonical(
+                {
+                    "trust_recheck": {
+                        "number": number,
+                        "attempt": attempt,
+                        "limit": _MERGE_RECHECK_LIMIT,
+                        "listed": {"base": base_sha, "head": head_sha},
+                        "current": {"base": fresh_base, "head": fresh_head},
+                        "merge_parents": list(parents) if parents else None,
+                        "outcome": "moved" if moved else "unchanged",
+                    }
+                }
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _seen_pull(self, number, base_sha, head_sha, item, override, seen):
         """Post signoff for a pull request whose head and base already ran.
