@@ -7,6 +7,20 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A worker keeps a package download cache per repository and host, on by
+  default (`worker --no-package-cache` turns it off). Jobs share cargo's
+  registry, git checkouts and package cache lock files, the pip, uv, npm, pnpm
+  and yarn caches, the Go module cache, and install directories for tools that
+  `cargo install`, `pipx` and `uv tool` put on `PATH`. Build output such as
+  `target/`, `node_modules/` and the Go build cache stays in the job. The worker
+  chooses the cache from the stored event: pushes to the default branch have one,
+  other branches and same-repository pull requests another, and a fork, an
+  untrusted override or any other event has none. Each is also kept per runner
+  image. The cache counts toward the disk budget, is emptied when it passes
+  `--package-cache-max-bytes` (default 4 GiB) while idle, is removed after
+  `--package-cache-max-age-days` (default 14) without use, and is freed before a
+  run is refused for storage. apt is not cached.
+
 ## [0.1.26] - 2026-11-25
 
 - `worker --cap N` executes up to N accepted runs at once, with separate attempt

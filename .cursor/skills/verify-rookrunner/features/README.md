@@ -49,4 +49,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Retry a failed poll submission](./poll-retry.md) uses isolated local fixtures and the real CLI to verify explicit retry identity and current trust checks.
 - [Route jobs between places](./place-jobs.md) verifies per-place job filters, startup validation, capacity waits, and recorded claims with isolated fixtures.
 - [Execute runs in parallel](./worker-parallelism.md) proves worker slots, isolation, groups, cancellation, shutdown, and failure handling with real containers.
+- [Share package download caches](./package-cache.md) proves per-repository, per-trust-namespace download caches, cargo's shared lock, the disk budget, and age pruning with real containers.
 - [Close a poll submission that has no final status](./submissions.md) lists stuck poll submissions and verifies inspect, abandon, retry, and repair, including `--dry-run`.

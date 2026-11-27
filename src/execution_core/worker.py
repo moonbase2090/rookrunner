@@ -160,6 +160,7 @@ from .checks import MAX_CHECK_TEXT_BYTES, check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .oidc_endpoint import OidcRun, OidcSettings
 from .oidc_keys import OidcError, load_key_set
+from .package_cache import PackageCache, image_key, namespace_for
 from .secrets import SecretAccess
 from .socket_lock import (
     accept_socket_flags,
@@ -609,6 +610,9 @@ class Worker:
         oidc_issuer=None,
         oidc_pull_request=False,
         finished_folder_count=None,
+        package_cache=True,
+        package_cache_max_age=None,
+        package_cache_max_bytes=None,
     ):
         if type(cap) is not int or cap < 1:
             raise ValueError("worker cap must be a positive integer")
@@ -680,6 +684,14 @@ class Worker:
         if not Path(self.repository).is_dir():
             raise ValueError("repository must be a directory")
         self.state = Path(state).absolute()
+        if type(package_cache) is not bool:
+            raise ValueError("package cache must be a boolean")
+        cache_limits = {}
+        if package_cache_max_age is not None:
+            cache_limits["max_age_seconds"] = package_cache_max_age
+        if package_cache_max_bytes is not None:
+            cache_limits["max_bytes"] = package_cache_max_bytes
+        self.package_cache = PackageCache(self.state, **cache_limits) if package_cache else None
         self.oidc = _oidc_settings(
             oidc_issuer,
             oidc_pull_request,
@@ -1474,6 +1486,7 @@ class Worker:
         # The watch stops the owned container when the state grows past the
         # budget mid-run. The final check closes the race where the last
         # bytes land after the last poll.
+        cache_mount = self._acquire_package_cache(event, event_name, record, pinned["image_digest"])
         watch = _BudgetWatch(self, owner).start()
         try:
             outcome = run_job(
@@ -1514,9 +1527,14 @@ class Worker:
                         untrusted_override=record.get("untrusted_override") is True,
                     )
                 ),
+                package_cache=cache_mount,
             )
         finally:
             watch.join()
+            if cache_mount is not None:
+                self.package_cache.release(cache_mount)
+                with contextlib.suppress(OSError):
+                    self.state_usage.sync_path(self.package_cache.root)
         if watch.exceeded or self._runtime_over_budget():
             raise RunError("SETUP_FAILED", _STORAGE_FULL)
         return outcome
@@ -2177,6 +2195,7 @@ class Worker:
         except OSError as exc:
             self._note_refusal("state files could not be read", incoming, exc)
             return True
+        self._prune_package_cache()
         if self._usage_fits(incoming):
             self._prune_finished_run_folders(0)
             return False
@@ -2193,10 +2212,57 @@ class Worker:
             return False
         self._reclaim_terminal_attempts()
         self._prune_finished_run_folders(incoming)
+        self._reclaim_package_cache(incoming)
         refused = not self._usage_fits(incoming)
         if refused:
             self._note_refusal("state would exceed the budget", incoming)
         return refused
+
+    def _acquire_package_cache(self, event, event_name, record, image_digest):
+        """Return the cache this run may use, or None.
+
+        The stored event, the operator's override and the pinned image decide,
+        never the job. A cache that cannot be prepared costs the run nothing
+        but the cache.
+        """
+
+        if self.package_cache is None:
+            return None
+        namespace = namespace_for(
+            event,
+            event_name,
+            self.github_repository,
+            record.get("untrusted_override") is True,
+        )
+        image = image_key(image_digest)
+        if namespace is None or image is None:
+            return None
+        try:
+            return self.package_cache.acquire(namespace, image)
+        except OSError:
+            return None
+
+    def _prune_package_cache(self):
+        """Remove package cache namespaces nobody used for the maximum age."""
+
+        if self.package_cache is None:
+            return
+        if self.package_cache.prune():
+            self.state_usage.refresh()
+
+    def _reclaim_package_cache(self, incoming):
+        """Free the least recently used idle package cache while the state does not fit."""
+
+        if self.package_cache is None:
+            return
+        while not self._usage_fits(incoming):
+            path = self.package_cache.reclaim()
+            if path is None:
+                return
+            try:
+                self.state_usage.refresh()
+            except OSError:
+                return
 
     def _note_refusal(self, reason, incoming, exc=None):
         """Say on stderr why a storage refusal happened.
@@ -3455,6 +3521,9 @@ def serve(
     oidc_issuer=None,
     oidc_pull_request=False,
     finished_folder_count=None,
+    package_cache=True,
+    package_cache_max_age=None,
+    package_cache_max_bytes=None,
 ):
     pin_docker_context(resolve_docker_context(docker_context))
     worker = Worker(
@@ -3478,6 +3547,9 @@ def serve(
         oidc_issuer=oidc_issuer,
         oidc_pull_request=oidc_pull_request,
         finished_folder_count=finished_folder_count,
+        package_cache=package_cache,
+        package_cache_max_age=package_cache_max_age,
+        package_cache_max_bytes=package_cache_max_bytes,
     )
     if worker.host_control_warning:
         print(  # noqa: T201  host-control warning on stderr
