@@ -120,12 +120,13 @@ class WorkflowSubmitTests(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", self.repo, *args], check=True, capture_output=True)
 
-    def write_workflows(self):
+    def write_workflows(self, extra=()):
         (self.repo / "source.txt").write_text("original\n")
         for name, text in (
             (".github/workflows/test.yml", WORKFLOW),
             (".github/workflows/unsupported.yml", UNSUPPORTED),
             (".github/workflows/invalid.yml", INVALID),
+            *extra,
         ):
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,6 +281,30 @@ class WorkflowSubmitTests(unittest.TestCase):
         self.assertEqual(self.rpc("run.list", {})["runs"], [])
         snaps = self.state / "snapshots"
         self.assertEqual([] if not snaps.exists() else list(snaps.iterdir()), [])
+
+    def test_invalid_upload_inputs_are_refused_before_admission(self):
+        cases = [
+            ("retention-days", "91", "INVALID_PARAMS", -32602),
+            ("compression-level", "6", "CAPABILITY_UNSUPPORTED", -32000),
+            ("unknown-input", "yes", "CAPABILITY_UNSUPPORTED", -32000),
+            ("name", r'"bundle\0name"', "INVALID_PARAMS", -32602),
+        ]
+        self.write_workflows(
+            (
+                f".github/workflows/{key}.yml",
+                "on: push\njobs:\n  build:\n    steps:\n"
+                "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a\n"
+                f"        with:\n          path: bundle.txt\n          {key}: {value}\n",
+            )
+            for key, value, _, _ in cases
+        )
+        for key, _, kind, code in cases:
+            with self.subTest(key=key):
+                params = self.params(workflow=f".github/workflows/{key}.yml", submission_key=key)
+                reply = call(self.state, "run.submit", params)
+                self.assert_fault(reply, kind, code)
+                self.assertIn(f"jobs.build.steps.0.with.{key}", reply["error"]["message"])
+        self.assertEqual(self.rpc("run.list", {})["runs"], [])
 
     def test_workflow_over_file_limit_creates_no_run(self):
         self.write_workflows()

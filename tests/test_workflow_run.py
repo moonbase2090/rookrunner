@@ -246,6 +246,25 @@ class WorkflowRunTests(unittest.TestCase):
         body.update(overrides)
         return body
 
+    def test_retention_days_uploads_the_named_artifact(self):
+        self.write_workflow("""on: push
+jobs:
+  build:
+    steps:
+      - run: echo built > bundle.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bundle
+          path: bundle.txt
+          retention-days: 1
+""")
+        accepted = self.rpc("run.submit", self.params())
+        run_id = accepted["run_id"]
+        done = self.await_state(run_id, {"succeeded", "failed"})
+        self.assertEqual((done["state"], done["exit_code"]), ("succeeded", 0), done)
+        artifacts = self.rpc("run.artifacts", {"run_id": run_id})["artifacts"]
+        self.assertIn(("bundle", "bundle.txt"), [(a.get("name"), a["path"]) for a in artifacts])
+
     def test_node24_is_recorded_on_the_run_and_stays_read_only(self):
         self.assertNotIn("node24", self.rpc("worker.describe", {}))
         self.worker.terminate()

@@ -101,13 +101,12 @@ and no name-length limit.
 | `include-hidden-files` | A boolean. Omitted means false |
 | `archive` | A boolean. Omitted means the files are recorded and not zipped |
 | `overwrite` | Boolean `false`, or omitted |
+| `retention-days` | A decimal integer from 1 to 90, or omitted |
 
-`retention-days` and `compression-level`, when present, are
-`CAPABILITY_UNSUPPORTED` and name the field. The action file allows
-retention of 1 to 90 days, with `0` meaning the repository default,
-and a compression level of 0 to 9. This worker does not expire
-artifacts and does not compress them. Scorecard's upload steps omit
-both keys.
+Submission validates literal `retention-days` values. For an expression, the
+step validates the resolved value before recording any files. The worker keeps
+artifacts with the local run and applies its own retention policy.
+`compression-level` is unsupported and submission names the input field.
 
 `overwrite: true` is `CAPABILITY_UNSUPPORTED` and names the field.
 Omitted `overwrite` and `overwrite: false` mean a second use of the
@@ -273,7 +272,7 @@ secrets design. macOS stays deferred.
 2. An omitted `archive` records each regular file and does not zip.
    `archive: false` with one file uses the file name. More than one
    file fails the step.
-3. `retention-days`, `compression-level`, and `overwrite: true` are
+3. `compression-level` and `overwrite: true` are
    `CAPABILITY_UNSUPPORTED` and name the field.
 4. `token` on the SARIF uses is `CAPABILITY_UNSUPPORTED` and names the
    field. An in-workspace `sarif_file` is labeled `codeql-sarif`.
