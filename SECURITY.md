@@ -38,7 +38,8 @@ thread uses that same context.
 
 A job container and a service container are created with a memory
 limit of 4g, no swap beyond that limit, a process limit of 1024, and
-a CPU limit of 2. Job containers use Docker network `none` by default.
+a CPU limit of 2 for jobs or 1 for services. Job containers use Docker
+network `none` by default.
 `worker --network bridge` opts in to egress. Service containers start
 only with that opt-in. A job container is created with
 `--security-opt no-new-privileges` and `--cap-drop ALL`. A service

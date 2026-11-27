@@ -20,7 +20,6 @@ _EXPECTED = {
     "--memory": "4g",
     "--memory-swap": "4g",
     "--pids-limit": "1024",
-    "--cpus": "2",
 }
 
 
@@ -29,7 +28,7 @@ def _flag(args, name):
 
 
 class ContainerLimitTests(unittest.TestCase):
-    def test_job_and_service_creates_use_the_same_limits(self):
+    def test_job_and_service_creates_apply_their_cpu_and_memory_limits(self):
         job = _create_args(
             "job",
             "/workspace",
@@ -53,11 +52,13 @@ class ContainerLimitTests(unittest.TestCase):
             {"id": "echo", "image": "image@sha256:aa"},
             "job",
         )
-        for args in (job, service):
+        for args, cpus in [(job, "2"), (service, "1")]:
             self.assertEqual(
                 {name: _flag(args, name) for name in _EXPECTED},
                 _EXPECTED,
             )
+            self.assertEqual(_flag(args, "--cpus"), cpus)
+            self.assertEqual(args.count("--cpus"), 1)
             self.assertEqual(args.count("--memory"), 1)
         self.assertEqual(_flag(job, "--network"), "bridge")
         self.assertNotIn("--privileged", job)
