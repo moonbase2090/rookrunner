@@ -350,7 +350,7 @@ class QueueTests(unittest.TestCase):
             }
 
             self.assertTrue(passed._blocked_for_engine(entry, {"version": "0.1.24"}))
-            self.assertFalse(passed._blocked_for_engine(entry, {"version": "0.1.26"}))
+            self.assertFalse(passed._blocked_for_engine(entry, {"version": "0.1.27"}))
             self.assertEqual(entry["state"], "claimed")
             saved = json.loads((state_dir / "poll.json").read_text())
             self.assertEqual(saved["submissions"][0]["state"], "claimed")
