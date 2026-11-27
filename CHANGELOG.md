@@ -22,8 +22,10 @@ This file does not reconstruct earlier milestones.
   run is refused for storage. apt is not cached. A ref the operator lists for
   file-backed secrets, an event without the repository id or default branch, and
   a worker whose repository cannot be verified from `--github-repository` or the
-  clone's `origin` remote get no cache. Cache removal and preparation never
-  follow a symlink.
+  clone's `origin` remote get no cache. The cache is bound to the repository id
+  it was filled for and is emptied for another, a schedule or dispatch event
+  without that id gets none, and every step on the cache tree descends through
+  descriptors opened without following links.
 
 ## [0.1.27] - 2026-11-27
 

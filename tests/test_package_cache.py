@@ -179,7 +179,7 @@ class KeepingTests(unittest.TestCase):
         )
 
     def test_a_cache_is_private_and_holds_the_pieces_a_job_mounts(self):
-        mount = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A, 77)
         for path in (mount.root, mount.registry, mount.git, mount.shared):
             self.assertEqual(path.stat().st_mode & 0o777, 0o700, path)
         for name in (
@@ -203,14 +203,14 @@ class KeepingTests(unittest.TestCase):
 
     def test_caches_of_different_namespaces_or_images_share_no_path(self):
         paths = {
-            self.cache.acquire(namespace, image).root
+            self.cache.acquire(namespace, image, 77).root
             for namespace in (DEFAULT_BRANCH_NAMESPACE, BRANCH_NAMESPACE)
             for image in (IMAGE_A, IMAGE_B)
         }
         self.assertEqual(len(paths), 4)
 
     def test_the_mounts_put_cargos_parts_under_the_image_cargo_home_and_the_rest_in_one_mount(self):
-        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         destinations = {
             part.split("destination=")[1]
             for part in mount.mount_args("/usr/local/cargo")
@@ -250,16 +250,16 @@ class KeepingTests(unittest.TestCase):
         self.assertEqual(CacheMount.path_prefixes(), [f"{CARGO_TOOLS_ROOT}/bin", TOOLS_BIN])
 
     def test_cached_files_survive_between_jobs(self):
-        first = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        first = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         (first.registry / "crate").write_text("bytes")
         self.cache.release(first)
-        second = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        second = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.assertEqual((second.registry / "crate").read_text(), "bytes")
 
     def test_a_cache_idle_for_the_maximum_age_is_removed_and_a_used_one_is_not(self):
-        idle = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A)
+        idle = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(idle)
-        busy = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        busy = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.now += 99
         self.assertEqual(self.cache.prune(), [])
         self.now += 1
@@ -268,50 +268,50 @@ class KeepingTests(unittest.TestCase):
         self.assertTrue(busy.root.exists())
 
     def test_one_image_ageing_out_leaves_the_other_image_of_the_same_namespace(self):
-        old = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        old = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(old)
         self.now += 60
-        fresh = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_B)
+        fresh = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_B, 77)
         self.cache.release(fresh)
         self.now += 60
         self.assertEqual(self.cache.prune(), [old.root])
         self.assertTrue(fresh.root.exists())
 
     def test_using_a_cache_restarts_its_age(self):
-        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(mount)
         self.now += 90
-        again = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        again = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(again)
         self.now += 90
         self.assertEqual(self.cache.prune(), [])
         self.assertTrue(mount.root.exists())
 
     def test_reclaiming_frees_the_idle_cache_used_longest_ago_and_skips_busy_ones(self):
-        old = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A)
+        old = self.cache.acquire(DEFAULT_BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(old)
         self.now += 10
-        recent = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        recent = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(recent)
         self.assertEqual(self.cache.reclaim(), old.root)
         self.assertTrue(recent.root.exists())
-        busy = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        busy = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.assertIsNone(self.cache.reclaim())
         self.assertTrue(busy.root.exists())
 
     def test_an_idle_cache_over_the_size_limit_starts_empty_but_a_busy_one_is_kept(self):
-        first = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        first = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         (first.registry / "big").write_bytes(b"x" * 2_000_000)
-        second = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        second = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.assertTrue((second.registry / "big").exists())
         self.cache.release(first)
         self.cache.release(second)
-        third = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        third = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.assertFalse((third.registry / "big").exists())
         self.assertTrue(third.registry.is_dir())
 
     def test_a_read_only_go_module_cache_is_still_removed(self):
-        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         module = mount.shared / "go-mod" / "example.com" / "dep@v1.0.0"
         module.mkdir(parents=True)
         (module / "dep.go").write_text("package dep\n")
@@ -323,20 +323,22 @@ class KeepingTests(unittest.TestCase):
         self.assertEqual(self.cache.prune(), [mount.root])
         self.assertFalse(mount.root.exists())
 
-    def test_a_symlinked_namespace_is_refused(self):
+    def test_a_symlinked_namespace_is_replaced_by_a_real_directory_never_followed(self):
         target = self.state / "elsewhere"
         target.mkdir()
+        (target / "kept.txt").write_text("keep\n")
         (self.state / "package-cache").mkdir()
         (self.state / "package-cache" / BRANCH_NAMESPACE).symlink_to(target)
-        with self.assertRaises(OSError):
-            self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
-        self.assertEqual(list(target.iterdir()), [])
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertFalse((self.state / "package-cache" / BRANCH_NAMESPACE).is_symlink())
+        self.assertTrue(mount.registry.is_dir())
+        self.assertEqual([item.name for item in target.iterdir()], ["kept.txt"])
 
     def test_a_symlink_where_the_cache_expects_a_directory_or_a_lock_is_refused_untouched(self):
         outside = self.state / "outside"
         outside.mkdir()
         outside.chmod(0o755)
-        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.cache.release(mount)
         for name in ("git", ".package-cache"):
             path = mount.root / name
@@ -346,10 +348,10 @@ class KeepingTests(unittest.TestCase):
                 path.unlink()
             path.symlink_to(outside)
             with self.assertRaises(OSError):
-                self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+                self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
             self.assertEqual(outside.stat().st_mode & 0o777, 0o755, name)
             path.unlink()
-            self.cache.release(self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A))
+            self.cache.release(self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77))
             self.cache.release(mount)
 
     def test_removal_never_follows_a_symlink_out_of_the_cache(self):
@@ -358,7 +360,7 @@ class KeepingTests(unittest.TestCase):
         (outside / "kept.txt").write_text("keep\n")
         (outside / "kept.txt").chmod(0o644)
         outside.chmod(0o755)
-        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         (mount.registry / "to-dir").symlink_to(outside)
         (mount.registry / "to-file").symlink_to(outside / "kept.txt")
         (mount.registry / "dangling").symlink_to(self.state / "does-not-exist")
@@ -375,21 +377,79 @@ class KeepingTests(unittest.TestCase):
         self.assertEqual((outside / "kept.txt").stat().st_mode & 0o777, 0o644)
         self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
 
-    def test_a_cache_root_that_is_itself_a_symlink_is_unlinked_not_followed(self):
+    def test_a_symlink_in_any_ancestor_is_refused_before_anything_is_measured_or_removed(self):
+        outside = self.state / "outside"
+        (outside / BRANCH_NAMESPACE / IMAGE_A).mkdir(parents=True)
+        big = outside / BRANCH_NAMESPACE / IMAGE_A / "big"
+        big.write_bytes(b"x" * 2_000_000)
+        outside.chmod(0o755)
+        # The cache root itself is a link out of the state directory.
+        (self.state / "package-cache").symlink_to(outside)
+        with self.assertRaises(OSError):
+            self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertEqual(self.cache.prune(), [])
+        self.assertIsNone(self.cache.reclaim())
+        self.assertTrue(big.exists())
+        (self.state / "package-cache").unlink()
+        # A link below the cache root is unlinked, and what it pointed at is
+        # neither measured, emptied nor removed.
+        (self.state / "package-cache").mkdir()
+        (self.state / "package-cache" / BRANCH_NAMESPACE).symlink_to(outside / BRANCH_NAMESPACE)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertTrue(big.exists())
+        self.assertFalse((self.state / "package-cache" / BRANCH_NAMESPACE).is_symlink())
+        self.assertTrue(mount.registry.is_dir())
+        self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
+
+    def test_a_link_planted_where_a_cache_is_measured_is_not_followed(self):
         outside = self.state / "outside"
         outside.mkdir()
-        (outside / "kept.txt").write_text("keep\n")
-        folder = self.state / "package-cache" / BRANCH_NAMESPACE
-        folder.mkdir(parents=True)
-        (folder / IMAGE_A).symlink_to(outside)
-        self.cache._remove(folder / IMAGE_A)
-        self.assertFalse((folder / IMAGE_A).is_symlink())
-        self.assertEqual((outside / "kept.txt").read_text(), "keep\n")
+        (outside / "huge").write_bytes(b"x" * 5_000_000)
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.cache.release(mount)
+        (mount.registry / "link").symlink_to(outside)
+        again = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertTrue((again.registry / "link").is_symlink())
+        self.assertTrue((outside / "huge").exists())
+
+    def test_a_cache_filled_for_one_repository_is_emptied_for_another(self):
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        (mount.registry / "crate").write_text("bytes")
+        self.cache.release(mount)
+        same = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertEqual((same.registry / "crate").read_text(), "bytes")
+        self.cache.release(same)
+        other = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 78)
+        self.assertFalse((other.registry / "crate").exists())
+        self.assertEqual((self.state / "package-cache" / "repository").read_text(), "78\n")
+        self.cache.release(other)
+        back = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.assertFalse((back.registry / "crate").exists())
+
+    def test_a_cache_in_use_is_not_emptied_for_another_repository(self):
+        busy = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        (busy.registry / "crate").write_text("bytes")
+        with self.assertRaises(OSError):
+            self.cache.acquire(BRANCH_NAMESPACE, IMAGE_B, 78)
+        self.assertEqual((busy.registry / "crate").read_text(), "bytes")
+
+    def test_a_repository_id_must_be_a_positive_integer(self):
+        for bad in (None, 0, -1, True, "77", 1.5):
+            with self.assertRaises(ValueError):
+                self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, bad)
+
+    def test_a_scheduled_or_dispatched_event_without_the_repository_id_gets_no_cache(self):
+        for name in ("schedule", "workflow_dispatch"):
+            event = {"ref": "refs/heads/main", "repository": {"full_name": REPOSITORY}}
+            self.assertIsNone(namespace_for(event, name, REPOSITORY))
+            self.assertEqual(
+                namespace_for(_push("refs/heads/main"), name, REPOSITORY), DEFAULT_BRANCH_NAMESPACE
+            )
 
     def test_a_name_that_is_not_a_namespace_and_an_image_key_is_refused(self):
         for namespace, image in (("../x", IMAGE_A), (BRANCH_NAMESPACE, "../../etc"), ("x", "y")):
             with self.assertRaises(ValueError):
-                self.cache.acquire(namespace, image)
+                self.cache.acquire(namespace, image, 77)
 
     def test_the_limits_must_be_positive_integers(self):
         for bad in (0, -1, True, 1.5, "7"):
@@ -415,7 +475,7 @@ class WorkerBudgetTests(unittest.TestCase):
             worker.execute_queue = lambda: worker.stop.wait()
             worker.start()
             try:
-                mount = worker.package_cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+                mount = worker.package_cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
                 (mount.registry / "crate").write_bytes(b"x" * 100_000)
                 worker.package_cache.release(mount)
                 worker.state_usage.sync_path(worker.package_cache.root)
@@ -435,7 +495,7 @@ class WorkerBudgetTests(unittest.TestCase):
             worker.execute_queue = lambda: worker.stop.wait()
             worker.start()
             try:
-                mount = worker.package_cache.acquire(BRANCH_NAMESPACE, IMAGE_A)
+                mount = worker.package_cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
                 (mount.registry / "crate").write_bytes(b"x" * 100_000)
                 worker.state_usage.sync_path(worker.package_cache.root)
                 with worker.guard:
@@ -702,7 +762,7 @@ class JobCacheTests(unittest.TestCase):
         return result, workspace
 
     def _mount(self, namespace=BRANCH_NAMESPACE):
-        return self.cache.acquire(namespace, IMAGE_A)
+        return self.cache.acquire(namespace, IMAGE_A, 77)
 
     def _seen(self, workspace):
         return (workspace / "seen.txt").read_text().splitlines()

@@ -25,6 +25,8 @@ job could leave files the worker cannot age out, and the saving is small next
 to a package index refresh.
 """
 
+import contextlib
+import errno
 import os
 import re
 import stat
@@ -32,8 +34,6 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-
-from .disk import usage
 
 CACHE_DIR = "package-cache"
 DEFAULT_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
@@ -145,6 +145,13 @@ _ORIGIN = re.compile(
 )
 
 
+def repository_id(event):
+    """Return the repository id the stored event carries, or None."""
+
+    stored = event.get("repository") if isinstance(event, dict) else None
+    return _integer(stored.get("id")) if isinstance(stored, dict) else None
+
+
 def repository_from_clone(clone):
     """Return the `owner/name` the clone's `origin` remote names, or None.
 
@@ -217,8 +224,41 @@ class CacheMount:
         return (self.root, self.shared, self.registry, self.git)
 
 
+_OPEN = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_dir(name, dir_fd=None):
+    """Open a directory and refuse a link, on every platform.
+
+    Some systems let ``O_NOFOLLOW`` through when ``O_DIRECTORY`` is also set,
+    so the entry is checked with ``lstat`` first and compared with what was
+    opened, which also catches a swap between the two calls.
+    """
+
+    before = os.lstat(name, dir_fd=dir_fd)
+    if not stat.S_ISDIR(before.st_mode):
+        raise OSError(errno.ELOOP, "package cache entry is not a directory")
+    descriptor = os.open(name, _OPEN, dir_fd=dir_fd)
+    after = os.fstat(descriptor)
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        os.close(descriptor)
+        raise OSError(errno.ELOOP, "package cache entry changed while it was opened")
+    return descriptor
+
+
+_MARKER = "repository"
+
+
 class PackageCache:
-    """The caches under one state directory, and who is using them."""
+    """The caches under one state directory, and who is using them.
+
+    Every step walks down from the state directory through directory
+    descriptors opened without following a link, so a link planted anywhere
+    in the tree is refused or unlinked and never followed, whether the step
+    prepares, measures or removes a cache. The cache also remembers which
+    repository id it was filled for and empties itself when a different one
+    reuses the state directory.
+    """
 
     def __init__(
         self,
@@ -232,7 +272,8 @@ class PackageCache:
             raise ValueError("package cache age must be a positive integer")
         if type(max_bytes) is not int or max_bytes < 1:
             raise ValueError("package cache size must be a positive integer")
-        self.root = Path(state) / CACHE_DIR
+        self.state = Path(state)
+        self.root = self.state / CACHE_DIR
         self.max_age_seconds = max_age_seconds
         self.max_bytes = max_bytes
         self._clock = clock
@@ -244,14 +285,34 @@ class PackageCache:
             raise ValueError("package cache name is not accepted")
         return self.root / namespace / image
 
-    def acquire(self, namespace, image):
+    def acquire(self, namespace, image, repository):
         """Prepare one cache for a job and count the job as its user."""
 
         path = self.unit_path(namespace, image)
+        if type(repository) is not int or repository < 1:
+            raise ValueError("package cache repository id is not accepted")
         with self._lock:
-            if self._users.get(path, 0) == 0:
-                self._discard_if_over(path)
-            self._prepare(path)
+            self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+            state = self._open_state()
+            try:
+                root = self._open_child(state, CACHE_DIR, create=True)
+                try:
+                    self._bind_repository(root, repository)
+                    folder = self._open_child(root, namespace, create=True)
+                    try:
+                        if self._users.get(path, 0) == 0:
+                            self._discard_if_over(folder, image)
+                        unit = self._open_child(folder, image, create=True)
+                        try:
+                            self._prepare(unit)
+                        finally:
+                            os.close(unit)
+                    finally:
+                        os.close(folder)
+                finally:
+                    os.close(root)
+            finally:
+                os.close(state)
             self._users[path] = self._users.get(path, 0) + 1
         return CacheMount(namespace, image, path)
 
@@ -259,7 +320,24 @@ class PackageCache:
         with self._lock:
             path = mount.root
             self._users[path] = max(0, self._users.get(path, 0) - 1)
-            self._touch(path)
+            with contextlib.suppress(OSError):
+                state = self._open_state()
+                try:
+                    root = self._open_child(state, CACHE_DIR)
+                    try:
+                        folder = self._open_child(root, mount.namespace)
+                        try:
+                            unit = self._open_child(folder, mount.image)
+                            try:
+                                self._touch(unit)
+                            finally:
+                                os.close(unit)
+                        finally:
+                            os.close(folder)
+                    finally:
+                        os.close(root)
+                finally:
+                    os.close(state)
 
     def prune(self):
         """Remove idle caches nobody used for the maximum age. Return their paths."""
@@ -267,50 +345,134 @@ class PackageCache:
         removed = []
         now = self._clock()
         with self._lock:
-            for path, stamp in self._idle():
-                if now - stamp >= self.max_age_seconds:
-                    self._remove(path)
-                    removed.append(path)
+            try:
+                for namespace, image, stamp, folder in self._idle():
+                    if now - stamp >= self.max_age_seconds:
+                        _remove_at(folder, image)
+                        removed.append(self.unit_path(namespace, image))
+            finally:
+                self._close_idle()
         return removed
 
     def reclaim(self):
         """Remove the idle cache used longest ago. Return its path, or None."""
 
         with self._lock:
-            idle = sorted(self._idle(), key=lambda item: (item[1], str(item[0])))
-            if not idle:
-                return None
-            self._remove(idle[0][0])
-            return idle[0][0]
+            idle = sorted(self._idle(), key=lambda item: (item[2], item[0], item[1]))
+            try:
+                if not idle:
+                    return None
+                namespace, image, _stamp, folder = idle[0]
+                _remove_at(folder, image)
+                return self.unit_path(namespace, image)
+            finally:
+                self._close_idle()
 
     def _idle(self):
+        """List idle caches as ``(namespace, image, stamp, folder descriptor)``.
+
+        The folder descriptors stay open until ``_close_idle`` so the caller
+        removes through the descriptor it measured.
+        """
+
+        self._held = []
         found = []
+        try:
+            state = self._open_state()
+        except OSError:
+            return found
+        self._held.append(state)
+        try:
+            root = self._open_child(state, CACHE_DIR)
+        except OSError:
+            return found
+        self._held.append(root)
         for namespace in NAMESPACES:
-            folder = self.root / namespace
-            if folder.is_symlink() or not folder.is_dir():
+            try:
+                folder = self._open_child(root, namespace)
+            except OSError:
                 continue
-            for path in sorted(folder.iterdir()):
-                if not _IMAGE.fullmatch(path.name) or self._users.get(path, 0):
+            self._held.append(folder)
+            for image in sorted(os.listdir(folder)):
+                path = self.unit_path(namespace, image)
+                if not _IMAGE.fullmatch(image) or self._users.get(path, 0):
                     continue
-                stamp = self._stamp(path)
+                stamp = self._stamp(folder, image)
                 if stamp is not None:
-                    found.append((path, stamp))
+                    found.append((namespace, image, stamp, folder))
         return found
 
-    def _prepare(self, path):
-        self.root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        for directory in (self.root, path.parent, path):
-            self._directory(directory)
-        for name in ("registry", "git", "shared"):
-            self._directory(path / name)
-        for name in _SHARED_DIRS:
-            parent = path / "shared"
-            for part in name.split("/"):
-                parent = parent / part
-                self._directory(parent)
+    def _close_idle(self):
+        for descriptor in getattr(self, "_held", []):
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+        self._held = []
+
+    def _open_state(self):
+        return _open_dir(self.state)
+
+    @staticmethod
+    def _open_child(parent, name, create=False):
+        if create:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(name, 0o700, dir_fd=parent)
+        descriptor = _open_dir(name, parent)
+        if create:
+            os.fchmod(descriptor, 0o700)
+        return descriptor
+
+    def _bind_repository(self, root, repository):
+        """Keep the cache for one repository id. A different id empties it first."""
+
+        try:
+            descriptor = os.open(_MARKER, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root)
+        except FileNotFoundError:
+            recorded = None
+        else:
+            try:
+                recorded = os.read(descriptor, 64).decode("ascii", "replace").strip()
+            finally:
+                os.close(descriptor)
+        if recorded == str(repository):
+            return
+        if recorded is not None or os.listdir(root):
+            if any(self._users.values()):
+                raise OSError("package cache belongs to another repository and is in use")
+            for namespace in os.listdir(root):
+                if namespace == _MARKER:
+                    continue
+                info = os.lstat(namespace, dir_fd=root)
+                if stat.S_ISDIR(info.st_mode):
+                    _remove_at(root, namespace)
+                else:
+                    os.unlink(namespace, dir_fd=root)
+        descriptor = os.open(
+            _MARKER, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600, dir_fd=root
+        )
+        try:
+            os.write(descriptor, f"{repository}\n".encode("ascii"))
+        finally:
+            os.close(descriptor)
+
+    def _prepare(self, unit):
+        for name in ("registry", "git"):
+            os.close(self._open_child(unit, name, create=True))
+        shared = self._open_child(unit, "shared", create=True)
+        try:
+            for name in _SHARED_DIRS:
+                parent = os.dup(shared)
+                try:
+                    for part in name.split("/"):
+                        child = self._open_child(parent, part, create=True)
+                        os.close(parent)
+                        parent = child
+                finally:
+                    os.close(parent)
+        finally:
+            os.close(shared)
         for name in LOCK_FILES:
             descriptor = os.open(
-                path / name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+                name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=unit
             )
             try:
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
@@ -318,22 +480,12 @@ class PackageCache:
                 os.fchmod(descriptor, 0o600)
             finally:
                 os.close(descriptor)
-        self._touch(path)
+        self._touch(unit)
 
-    @staticmethod
-    def _directory(path):
-        path.mkdir(mode=0o700, exist_ok=True)
-        # Open without following a link, then change the mode of what was opened.
-        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fchmod(descriptor, 0o700)
-        finally:
-            os.close(descriptor)
-
-    def _touch(self, path):
+    def _touch(self, unit):
         try:
             descriptor = os.open(
-                path / _STAMP, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+                _STAMP, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=unit
             )
         except OSError:
             return
@@ -345,55 +497,74 @@ class PackageCache:
             os.close(descriptor)
 
     @staticmethod
-    def _stamp(path):
+    def _stamp(folder, image):
         try:
-            return (path / _STAMP).lstat().st_mtime
+            unit = _open_dir(image, folder)
         except OSError:
             return None
-
-    def _discard_if_over(self, path):
         try:
-            size = usage(path)
+            return os.lstat(_STAMP, dir_fd=unit).st_mtime
+        except OSError:
+            return None
+        finally:
+            os.close(unit)
+
+    def _discard_if_over(self, folder, image):
+        try:
+            unit = _open_dir(image, folder)
         except FileNotFoundError:
             return
         except OSError:
-            size = None
+            unit = None
+        size = None
+        if unit is not None:
+            try:
+                size = _size_at(unit)
+            except OSError:
+                size = None
+            finally:
+                os.close(unit)
         if size is None or size > self.max_bytes:
-            self._remove(path)
+            _remove_at(folder, image)
 
-    @staticmethod
-    def _remove(path):
-        """Remove a cache tree without following a symlink anywhere in it.
 
-        A directory is made writable only through a descriptor opened without
-        following links, which a Go module cache needs because it is read-only.
-        Anything that is not a directory is unlinked itself, never its target.
-        """
+def _size_at(descriptor):
+    """Bytes of a tree measured through descriptors; a link counts by its own size."""
 
-        try:
-            info = os.lstat(path)
-        except FileNotFoundError:
-            return
-        if not stat.S_ISDIR(info.st_mode):
-            os.unlink(path)
-            return
-        parent = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            _remove_at(parent, os.path.basename(path))
-        finally:
-            os.close(parent)
+    total = os.fstat(descriptor).st_size
+    for name in os.listdir(descriptor):
+        info = os.lstat(name, dir_fd=descriptor)
+        if stat.S_ISDIR(info.st_mode):
+            child = _open_dir(name, descriptor)
+            try:
+                total += _size_at(child)
+            finally:
+                os.close(child)
+        else:
+            total += info.st_size
+    return total
 
 
 def _remove_at(parent, name):
-    descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    """Remove ``name`` under ``parent`` without following a link anywhere in it.
+
+    A directory is made writable only through a descriptor opened without
+    following links, which a Go module cache needs because it is read-only.
+    Anything that is not a directory is unlinked itself, never its target.
+    """
+
+    try:
+        info = os.lstat(name, dir_fd=parent)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(info.st_mode):
+        os.unlink(name, dir_fd=parent)
+        return
+    descriptor = _open_dir(name, parent)
     try:
         os.fchmod(descriptor, 0o700)
         for child in os.listdir(descriptor):
-            info = os.lstat(child, dir_fd=descriptor)
-            if stat.S_ISDIR(info.st_mode):
-                _remove_at(descriptor, child)
-            else:
-                os.unlink(child, dir_fd=descriptor)
+            _remove_at(descriptor, child)
     finally:
         os.close(descriptor)
     os.rmdir(name, dir_fd=parent)

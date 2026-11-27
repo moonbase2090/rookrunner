@@ -160,7 +160,13 @@ from .checks import MAX_CHECK_TEXT_BYTES, check_mapping, check_summary
 from .job_token import JobTokenConfig, public_token_revocation
 from .oidc_endpoint import OidcRun, OidcSettings
 from .oidc_keys import OidcError, load_key_set
-from .package_cache import PackageCache, image_key, namespace_for, repository_from_clone
+from .package_cache import (
+    PackageCache,
+    image_key,
+    namespace_for,
+    repository_from_clone,
+    repository_id,
+)
 from .secrets import SecretAccess
 from .socket_lock import (
     accept_socket_flags,
@@ -2244,7 +2250,7 @@ class Worker:
         if namespace is None or image is None:
             return None
         try:
-            return self.package_cache.acquire(namespace, image)
+            return self.package_cache.acquire(namespace, image, repository_id(event))
         except OSError:
             return None
 
