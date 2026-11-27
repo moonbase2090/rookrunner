@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.26. A published release section
+The current package version is 0.1.27. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.27] - 2026-11-27
 
 - When the merge ref of a pull request does not match the base and head the
   list gave, the poller now reads the pull request again, up to three times in
@@ -25,6 +27,9 @@ This file does not reconstruct earlier milestones.
   to Cargo to select another count.
 - Each service container now has a one-CPU quota, down from two. Database
   services and other CPU-intensive services may take longer under load.
+
+- The package version is 0.1.27. A wheel and a source tarball can be built
+  from this tree. This change does not create a tag.
 
 ## [0.1.26] - 2026-11-25
 
