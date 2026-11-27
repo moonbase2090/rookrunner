@@ -358,8 +358,8 @@ class PackageCache:
         """Remove the idle cache used longest ago. Return its path, or None."""
 
         with self._lock:
-            idle = sorted(self._idle(), key=lambda item: (item[2], item[0], item[1]))
             try:
+                idle = sorted(self._idle(), key=lambda item: (item[2], item[0], item[1]))
                 if not idle:
                     return None
                 namespace, image, _stamp, folder = idle[0]

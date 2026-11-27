@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 from execution_core.disk import usage
 from execution_core.package_cache import (
@@ -475,6 +476,31 @@ class KeepingTests(unittest.TestCase):
         two = PackageCache(self.state, max_age_seconds=100, max_bytes=1_000_000)
         emptied = two.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
         self.assertFalse((emptied.registry / "a").exists())
+
+    def _open_descriptors(self):
+        return len(os.listdir("/dev/fd" if os.path.isdir("/dev/fd") else "/proc/self/fd"))
+
+    def test_a_failed_listing_closes_every_descriptor_in_prune_and_reclaim(self):
+        mount = self.cache.acquire(BRANCH_NAMESPACE, IMAGE_A, 77)
+        self.cache.release(mount)
+        self.now += 100
+        real = os.listdir
+        for call in (self.cache.prune, self.cache.reclaim):
+            before = self._open_descriptors()
+
+            def broken(target, real=real):
+                if isinstance(target, int):
+                    raise OSError("listing failed")
+                return real(target)
+
+            with (
+                patch("execution_core.package_cache.os.listdir", broken),
+                self.assertRaises(OSError),
+            ):
+                call()
+            self.assertEqual(self._open_descriptors(), before, call.__name__)
+        self.assertEqual(self.cache.prune(), [mount.root])
+        self.assertEqual(self._open_descriptors(), before)
 
     def test_a_name_that_is_not_a_namespace_and_an_image_key_is_refused(self):
         for namespace, image in (("../x", IMAGE_A), (BRANCH_NAMESPACE, "../../etc"), ("x", "y")):
