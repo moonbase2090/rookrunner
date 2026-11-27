@@ -56,8 +56,10 @@ currently reserve from a shared CPU pool.
 Job steps default `CARGO_BUILD_JOBS`, `NUM_JOBS`, and `RAYON_NUM_THREADS` to the
 job CPU count and `MAKEFLAGS` to `-j` followed by that count. Workflow, job,
 prior `GITHUB_ENV`, and step values override each default in order. The
-`env` expression context uses the same values. A tool's command-line flags or
-its own jobserver can further control parallelism.
+`env` expression context uses the same values. Cargo gives `CARGO_BUILD_JOBS` precedence
+over `build.jobs` in the repository's `.cargo/config.toml`. To choose another
+count, set `CARGO_BUILD_JOBS` in the workflow or pass `--jobs` to Cargo. Other
+tools can also use their own command-line flags or jobservers.
 
 ## Operations
 
