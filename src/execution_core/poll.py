@@ -1277,6 +1277,10 @@ class Pass:
         self.retry_key = None
         self.retry_applied = False
         self.auto_retry = None
+        # Heads of the pull requests that were open when this pass listed them,
+        # or None when this pass did not list them.
+        self.open_pull_heads = None
+        self.listed_tips = None
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
         self.allow_pr_workflow_sha = _allow_pr_workflow_sha(allow_pr_workflow_sha)
@@ -1533,13 +1537,20 @@ class Pass:
         self._log_auto_retry("superseded", entry, attempt)
 
     def _still_current(self, entry):
-        """Return whether the entry's commit is still a current pull request head or branch tip."""
+        """Return whether the entry's commit is still a current pull request head or branch tip.
+
+        A pull request or branch counts only when this pass listed it. State
+        keeps the heads of pull requests that have since closed and the tips
+        of branches that were deleted, so it is not evidence of a current
+        commit. When the pass did not list open pull requests the answer is
+        unknown, and the entry stays deferred rather than being retired.
+        """
 
         sha = entry.get("status_sha")
         if entry.get("event") == "pull_request":
-            pulls = self.state.get("pulls")
-            heads = [item.get("head") for item in pulls.values()] if isinstance(pulls, dict) else []
-            return sha in heads
+            return self.open_pull_heads is None or sha in self.open_pull_heads
+        if self.listed_tips is not None:
+            return sha in self.listed_tips
         tips = self.state.get("tips")
         return isinstance(tips, dict) and sha in tips.values()
 
@@ -2255,6 +2266,11 @@ class Pass:
             ref = _ref_name(self.clone, "heads", name)
             if not self._push(ref, sha):
                 return
+        self.listed_tips = {
+            item["commit"]["sha"]
+            for item in body
+            if isinstance(item.get("commit"), dict) and isinstance(item["commit"].get("sha"), str)
+        }
         if self.hold_branches:
             return
         self.state["etags"]["branches"] = etag
@@ -2275,6 +2291,11 @@ class Pass:
             if not self._pull(item):
                 return
             open_numbers.add(str(item["number"]))
+        self.open_pull_heads = {
+            item["head"]["sha"]
+            for item in body
+            if isinstance(item.get("head"), dict) and isinstance(item["head"].get("sha"), str)
+        }
         self._prune_merge_mismatches(open_numbers)
         if self.signoff_seen and not self.signoff_present:
             self._skip({"reason": "signoff_absent"})

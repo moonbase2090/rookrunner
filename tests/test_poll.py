@@ -1497,6 +1497,93 @@ class PollTests(unittest.TestCase):
         self.assertEqual(still["state"], "blocked")
         self.assertEqual(still["retry_attempt"], poll_module.AUTO_RETRY_LIMIT)
 
+    def _refuse_run(self, run_id):
+        record = self.worker.get(run_id)
+        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+        manifest = json.loads((snapshot / "manifest.json").read_text())
+        manifest["base_commit"] = "0" * 40
+        encoded = canonical(manifest).encode()
+        (snapshot / "manifest.json").write_bytes(encoded)
+        record["input"]["digest"] = hashlib.sha256(encoded).hexdigest()
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+
+    def test_a_refused_pull_request_run_is_superseded_when_the_pull_request_has_closed(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        run_id = self.poll()["submitted"][0]["run_id"]
+        self._refuse_run(run_id)
+        blocked = self.poll(clock=datetime(2026, 11, 22, 13, 0, tzinfo=UTC))
+        entry = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+        self.assertEqual(blocked["blocked"], [entry["key"]])
+        # The pull request closes. State still remembers its head.
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertEqual(saved["pulls"]["9"]["head"], head)
+        self.server.pulls = []
+        self.server.etags["pulls"] = "pulls-closed"
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
+        after = json.loads((self.state / "poll.json").read_text())
+        retired = after["completed"][entry["key"]]
+        self.assertIs(retired["superseded"], True)
+        self.assertEqual(retired["state"], "abandoned")
+        self.assertEqual(after["submissions"], [])
+        latest = [post for post in self._status_posts() if post["sha"] == head][-1]
+        self.assertEqual(latest["state"], "error")
+        self.assertEqual(latest["description"], poll_module.SUPERSEDED_TEXT)
+        self.assertEqual(self.runs(), 1)
+        self.assertEqual(
+            [item["outcome"] for item in self._auto_lines(log)], ["retry", "superseded"]
+        )
+
+    def test_a_refused_pull_request_run_stays_deferred_while_its_pull_request_is_open(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        _tip, head = self._open_feature(9, mutate)
+        run_id = self.poll()["submitted"][0]["run_id"]
+        self._refuse_run(run_id)
+        self.poll(clock=datetime(2026, 11, 22, 13, 0, tzinfo=UTC))
+        entry = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+        self.assertEqual(entry["state"], "blocked")
+        # Same head, still open: the retry is submitted rather than superseded.
+        second = self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
+        self.assertEqual(self.runs(), 2)
+        self.assertEqual(len(second["submitted"]), 1)
+        self.assertFalse(
+            [
+                post
+                for post in self._status_posts()
+                if post["description"] == poll_module.SUPERSEDED_TEXT
+            ]
+        )
+        self.assertEqual(
+            json.loads((self.state / "poll.json").read_text())["pulls"]["9"]["head"], head
+        )
+
+    def test_the_currency_check_ignores_state_and_unknown_means_current(self):
+        passed = poll_module.Pass.__new__(poll_module.Pass)
+        passed.state = {"pulls": {"9": {"head": "a" * 40}}, "tips": {"refs/heads/main": "b" * 40}}
+        pull = {"event": "pull_request", "status_sha": "a" * 40}
+        push = {"event": "push", "status_sha": "b" * 40}
+        passed.open_pull_heads = None
+        passed.listed_tips = None
+        self.assertTrue(passed._still_current(pull))
+        self.assertTrue(passed._still_current(push))
+        passed.open_pull_heads = set()
+        passed.listed_tips = set()
+        self.assertFalse(passed._still_current(pull))
+        self.assertFalse(passed._still_current(push))
+        passed.open_pull_heads = {"a" * 40}
+        passed.listed_tips = {"b" * 40}
+        self.assertTrue(passed._still_current(pull))
+        self.assertTrue(passed._still_current(push))
+
     def test_a_base_commit_refusal_for_a_commit_that_was_replaced_is_retired_as_superseded(self):
         tip, first_run, entry = self._block_on_base_mismatch()
         (self.seed / "newer.txt").write_text("newer\n")
