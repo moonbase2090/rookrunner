@@ -25,12 +25,12 @@ job could leave files the worker cannot age out, and the saving is small next
 to a package index refresh.
 """
 
+import configparser
 import contextlib
 import errno
 import os
 import re
 import stat
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -157,22 +157,21 @@ def repository_from_clone(clone):
 
     The poller builds each event for the repository it polls, and the worker's
     clone is that repository, so the remote is the identity the worker can
-    check an event against when no name was configured.
+    check an event against when no name was configured. The remote is read
+    from the clone's own git config; a clone whose `.git` is not a directory
+    gives no identity.
     """
 
+    config = Path(clone) / ".git" / "config"
+    parser = configparser.RawConfigParser(strict=False)
     try:
-        done = subprocess.run(
-            ["git", "-C", os.fspath(clone), "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        if config.is_symlink() or not config.is_file():
+            return None
+        parser.read_string(config.read_text(encoding="utf-8", errors="replace"))
+        url = parser.get('remote "origin"', "url")
+    except (OSError, configparser.Error):
         return None
-    if done.returncode != 0:
-        return None
-    found = _ORIGIN.match(done.stdout.strip())
+    found = _ORIGIN.match(url.strip())
     return found.group(1) if found else None
 
 

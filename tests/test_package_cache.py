@@ -163,6 +163,22 @@ class NamespaceTests(unittest.TestCase):
                 )
                 self.assertEqual(repository_from_clone(clone), name, url)
 
+    def test_reading_the_clone_origin_starts_no_process_and_trusts_only_a_plain_git_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clone = _clone(directory)
+            with patch("subprocess.run", side_effect=AssertionError("no process")):
+                self.assertEqual(repository_from_clone(clone), REPOSITORY)
+            moved = Path(directory) / "moved"
+            shutil.copytree(clone, moved, symlinks=True)
+            (moved / ".git").rename(moved / "real-git")
+            (moved / ".git").write_text("gitdir: real-git\n")
+            self.assertIsNone(repository_from_clone(moved))
+            elsewhere = Path(directory) / "other"
+            shutil.copytree(clone, elsewhere, symlinks=True)
+            (elsewhere / ".git" / "config").rename(elsewhere / "config-real")
+            (elsewhere / ".git" / "config").symlink_to(elsewhere / "config-real")
+            self.assertIsNone(repository_from_clone(elsewhere))
+
     def test_the_image_key_is_the_front_of_a_sha256_digest(self):
         self.assertEqual(image_key("sha256:" + "0123456789abcdef" + "f" * 48), "0123456789abcdef")
         for bad in (None, "abc", "sha256:xyz", "sha256:" + "A" * 64, "sha256:12"):
