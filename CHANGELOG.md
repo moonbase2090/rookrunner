@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- The automatic retry of a base-commit refusal decides whether a commit is
+  still current from the pull requests and branches the pass just listed, not
+  from the heads and tips kept in state. A pull request that has closed, or a
+  branch that was deleted or moved, now ends in the superseded error status
+  instead of staying deferred. When the pass did not list them, the entry stays
+  deferred.
+
 ## [0.1.28] - 2026-11-27
 
 - A poll submission blocked because the run's snapshot was not captured at the
