@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.27. A published release section
+The current package version is 0.1.28. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.28] - 2026-11-27
 
 - A poll submission blocked because the run's snapshot was not captured at the
   tested commit (`base_commit does not equal the tested commit`) is now retried
@@ -54,6 +56,9 @@ This file does not reconstruct earlier milestones.
 - Owned artifact uploads now run with `retention-days` from 1 to 90. The
   worker keeps artifacts with the local run. Submission reports the field
   for unsupported upload inputs and invalid literal values.
+
+- The package version is 0.1.28. A wheel and a source tarball can be built
+  from this tree. This change does not create a tag.
 
 ## [0.1.27] - 2026-11-27
 
