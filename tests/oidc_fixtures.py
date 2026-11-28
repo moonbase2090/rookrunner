@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""Public test-only RSA keys and fixed RFC 7638 SHA-256 thumbprints.
+"""Test-only private RSA keys and fixed RFC 7638 SHA-256 thumbprints.
 
 The DER keys were generated with OpenSSL. Each thumbprint was checked with
 `openssl dgst -sha256 -binary` over the public JWK's literal e, kty, n members
