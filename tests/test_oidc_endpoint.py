@@ -3,7 +3,7 @@
 """The per-job token request endpoint, the env contract, the audit log, and
 the worker and planner gates.
 
-Public test keys are decoded under a temporary directory. No test reads
+Test-only private keys are decoded under a temporary directory. No test reads
 the configured key directory and no test contacts a cloud provider.
 """
 
