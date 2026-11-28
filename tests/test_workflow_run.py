@@ -15,7 +15,6 @@ import time
 import unittest
 
 from execution_core.cli import call
-from execution_core.protocol import canonical
 from dockerutil import foreign_ids, foreign_named
 from schema_support import validate_response, validator
 
@@ -322,7 +321,7 @@ jobs:
         self.assertEqual(done["input"]["image_digest"], self.image)
         self.assertEqual([step["exit_code"] for step in done["steps"]], [0, 0])
         self.assertEqual(done["steps"][0]["stdout"], "original\n")
-        self.assertEqual(done["steps"][1]["stdout"], canonical(EVENT) + "\n")
+        self.assertEqual(done["steps"][1]["stdout"], '{"kind":"local","n":1}\n')
         attempt = self.state / "attempts" / done["attempt_id"]
         self.assertFalse(attempt.exists())
         self.assert_no_containers()

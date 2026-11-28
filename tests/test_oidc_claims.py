@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 
@@ -20,8 +19,8 @@ from execution_core.oidc_claims import (
     mint_refusal,
     require_audience,
 )
-from execution_core.checks import _load_rsa_key
-from execution_core.oidc_keys import OidcError, OidcKey, load_key_set, publish
+from execution_core.oidc_keys import OidcError, load_key_set, publish
+from oidc_fixtures import KEY_IDS, write_key
 
 ISSUER = "https://oidc.example.com"
 REPOSITORY = "octo-org/octo-repo"
@@ -282,23 +281,8 @@ class SignedTokenTests(unittest.TestCase):
             oidc.mkdir(parents=True)
             os.chmod(root / "keys", 0o700)
             os.chmod(oidc, 0o700)
-            generated = root / "generated.pem"
-            subprocess.run(
-                [
-                    "openssl",
-                    "genpkey",
-                    "-algorithm",
-                    "RSA",
-                    "-pkeyopt",
-                    "rsa_keygen_bits:2048",
-                    "-out",
-                    str(generated),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            kid = OidcKey(*_load_rsa_key(generated.read_bytes())).kid
-            generated.rename(oidc / f"{kid}.pem")
+            kid = KEY_IDS["a"]
+            write_key(oidc / f"{kid}.pem")
             os.chmod(oidc / f"{kid}.pem", 0o600)
             (oidc / "active").write_text(kid)
             os.chmod(oidc / "active", 0o600)
