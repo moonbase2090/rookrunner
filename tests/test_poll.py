@@ -372,6 +372,79 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(saved["submissions"][0]["state"], "claimed")
 
 
+class StaleClaimTests(unittest.TestCase):
+    def _pass(self, directory, entries, now):
+        passed = poll_module.Pass.__new__(poll_module.Pass)
+        passed.state_dir = Path(directory)
+        passed.clock = now
+        passed.result = {"skipped": []}
+        passed.state = {
+            "version": 1,
+            "repository": "acme/demo",
+            "submissions": entries,
+            "completed": {},
+        }
+        return passed
+
+    def _claim(self, suffix, **extra):
+        return {"key": "poll-" + suffix * 64, "state": "claimed", "host": "alpha", **extra}
+
+    def test_only_a_run_less_claim_older_than_the_limit_is_released(self):
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=UTC)
+        old = (now - timedelta(seconds=poll_module.CLAIM_STALE_SECONDS)).isoformat()
+        young = (now - timedelta(seconds=poll_module.CLAIM_STALE_SECONDS - 1)).isoformat()
+        entries = [
+            self._claim("a", claimed_at=old),
+            self._claim("b", claimed_at=young),
+            self._claim("c", claimed_at=old, run_id="run-1"),
+            {**self._claim("d", claimed_at=old), "state": "blocked"},
+            {**self._claim("e", claimed_at=old), "waiting": {"since": old}},
+            {**self._claim("f", claimed_at=old), "state": "reporting"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            passed = self._pass(directory, entries, now)
+            with contextlib.redirect_stderr(io.StringIO()) as log:
+                passed._release_stale_claims()
+            kept = [item["key"][5] for item in passed.state["submissions"]]
+            self.assertEqual(kept, ["b", "c", "d", "e", "f"])
+            row = passed.result["skipped"][0]
+            self.assertEqual(
+                (row["reason"], row["key"], row["host"], row["age_seconds"]),
+                ("claim_released", "poll-" + "a" * 64, "alpha", poll_module.CLAIM_STALE_SECONDS),
+            )
+            self.assertEqual(len(passed.result["skipped"]), 1)
+            self.assertIn('"claim_released"', log.getvalue())
+            saved = json.loads((Path(directory) / "poll.json").read_text())
+            self.assertEqual([item["key"][5] for item in saved["submissions"]], kept)
+
+    def test_a_claim_without_a_stamp_is_stamped_not_released(self):
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=UTC)
+        for stamp in (None, "not a time", "2026-11-28T11:00:00"):
+            entry = self._claim("a")
+            if stamp is not None:
+                entry["claimed_at"] = stamp
+            with tempfile.TemporaryDirectory() as directory:
+                passed = self._pass(directory, [entry], now)
+                passed._release_stale_claims()
+                self.assertEqual(len(passed.state["submissions"]), 1)
+                self.assertEqual(entry["claimed_at"], now.isoformat())
+                self.assertEqual(passed.result["skipped"], [])
+
+    def test_the_release_is_recorded_in_the_diagnostic_journal(self):
+        now = datetime(2026, 11, 28, 12, 0, tzinfo=UTC)
+        old = (now - timedelta(hours=1)).isoformat()
+        with tempfile.TemporaryDirectory() as directory:
+            passed = self._pass(directory, [self._claim("a", claimed_at=old)], now)
+            with contextlib.redirect_stderr(io.StringIO()):
+                passed._release_stale_claims()
+            lines = (Path(directory) / "skip-journal.jsonl").read_text().splitlines()
+            record = json.loads(lines[-1])
+            self.assertEqual(record["reason"], "claim_released")
+            self.assertEqual(record["host"], "alpha")
+            self.assertEqual(record["submission_key"], "poll-" + "a" * 64)
+            self.assertIn("never started a run", record["detail"])
+
+
 class PollTests(unittest.TestCase):
     def setUp(self):
         delay = patch("execution_core.poll._RECHECK_DELAY_SECONDS", 0)

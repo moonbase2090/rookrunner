@@ -945,6 +945,55 @@ class PlacementTests(unittest.TestCase):
         self.assertNotIn("run_id", again["submissions"][0])
         self.assertIn({"reason": "unreachable", "host": "alpha"}, result["skipped"])
 
+    def _stale_claim_setup(self, claimed_at):
+        alpha = self._worker("alpha")
+        beta = self._worker("beta")
+        failing = {"on": False}
+
+        def caller(method, params):
+            if failing["on"]:
+                raise PollError("WORKER_ERROR", "worker ssh call failed")
+            return self._caller(alpha)(method, params)
+
+        self._poll([self._place("alpha", alpha, caller=caller), self._place("beta", beta)])
+        saved = self._saved()
+        self.assertEqual(saved["submissions"][0]["host"], "alpha")
+        saved["submissions"][0].pop("run_id")
+        saved["submissions"][0]["state"] = "claimed"
+        saved["submissions"][0]["pending"] = False
+        if claimed_at is not None:
+            saved["submissions"][0]["claimed_at"] = claimed_at
+        saved["tips"] = {}
+        (self.poll_state / "poll.json").write_text(json.dumps(saved) + "\n")
+        failing["on"] = True
+        self.server.etags["branches"] = "branches-again"
+        return alpha, beta, caller
+
+    def test_a_claim_that_never_got_a_run_is_released_and_placed_again(self):
+        alpha, beta, caller = self._stale_claim_setup("2020-01-01T00:00:00+00:00")
+        result = self._poll([self._place("alpha", alpha, caller=caller), self._place("beta", beta)])
+        released = [item for item in result["skipped"] if item.get("reason") == "claim_released"]
+        self.assertEqual(len(released), 1)
+        self.assertEqual(released[0]["host"], "alpha")
+        self.assertGreater(released[0]["age_seconds"], 600)
+        self.assertEqual(self._runs(beta), 1)
+        again = self._saved()
+        self.assertEqual([item["host"] for item in again["submissions"]], ["beta"])
+        self.assertIn("run_id", again["submissions"][0])
+        self.assertEqual(result["submitted"][0]["host"], "beta")
+
+    def test_a_young_claim_is_left_alone_and_a_new_one_is_stamped(self):
+        alpha, beta, caller = self._stale_claim_setup(None)
+        result = self._poll([self._place("alpha", alpha, caller=caller), self._place("beta", beta)])
+        self.assertFalse(
+            [item for item in result["skipped"] if item.get("reason") == "claim_released"]
+        )
+        self.assertEqual(self._runs(beta), 0)
+        kept = self._saved()["submissions"][0]
+        self.assertEqual(kept["host"], "alpha")
+        self.assertNotIn("run_id", kept)
+        self.assertIsInstance(kept["claimed_at"], str)
+
     def test_a_repository_mismatch_uses_the_next_place(self):
         alpha = self._worker("alpha", origin="https://github.com/other/name.git")
         beta = self._worker("beta")

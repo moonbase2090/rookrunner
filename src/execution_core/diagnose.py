@@ -85,6 +85,8 @@ SKIP_DETAILS = {
     "no_host": "run was not admitted because no worker place had room",
     "snapshot_unreadable": "snapshot could not be read for the final status",
     "not_triggered": "workflow on did not match this event",
+    "pull_request_moved": "pull request moved while the pass ran and will be checked again",
+    "claim_released": "a claim that never started a run was released and will be placed again",
 }
 
 
