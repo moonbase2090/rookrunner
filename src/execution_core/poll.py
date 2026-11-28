@@ -192,6 +192,12 @@ _BASE_COMMIT_REFUSAL = "base_commit does not equal the tested commit"
 # one original submission, and then leaves it blocked for an operator.
 AUTO_RETRY_LIMIT = 3
 SUPERSEDED_TEXT = "superseded: a newer commit is being tested"
+_MERGE_MISMATCH_MESSAGE = "fetched merge commit does not match the listed head"
+# GitHub builds ``refs/pull/N/merge`` when a pull request changes and does not
+# always rebuild it when the base branch moves. A merge of the listed head onto
+# an older base is stale, not wrong, and merging the base into the branch makes
+# GitHub build a new one.
+_MERGE_BEHIND_MESSAGE = "merge ref is behind the base; merge the base into the branch"
 _RECHECK_DELAY_SECONDS = 1.0
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
@@ -1017,6 +1023,15 @@ def _moved_base_merge(clone, parents, head_sha, base_ref):
         return False
     current = _fetch_sha(clone, f"refs/heads/{base_ref}")
     return current is not None and parents[0] == current
+
+
+def _merge_behind_base(clone, parents, base_sha, head_sha):
+    """Return whether a merge is the listed head on a base older than the listed one."""
+
+    if parents is None or parents[1] != head_sha or parents[0] == base_sha:
+        return False
+    result = _git(clone, "merge-base", "--is-ancestor", parents[0], base_sha, check=False)
+    return result.returncode == 0
 
 
 def _digest(value):
@@ -2083,7 +2098,9 @@ class Pass:
             ):
                 self._clear_merge_mismatch(number, head_sha)
                 return merge
-        self._record_merge_mismatch(number, head_sha)
+        self._record_merge_mismatch(
+            number, head_sha, behind=_merge_behind_base(self.clone, parents, base_sha, head_sha)
+        )
         return None
 
     def _reread_pull(self, number):
@@ -2956,7 +2973,7 @@ class Pass:
             del mismatches[key]
         self._checkpoint()
 
-    def _record_merge_mismatch(self, number, head_sha):
+    def _record_merge_mismatch(self, number, head_sha, behind=False):
         """Hold a pull request whose merge ref does not match the listed base and head.
 
         A stale merge ref right after a push is retryable: hold the pull request
@@ -3001,7 +3018,7 @@ class Pass:
             "sha": head_sha,
             "action": "refused",
             "reason": "merge_commit_mismatch",
-            "message": "fetched merge commit does not match the listed head",
+            "message": _MERGE_BEHIND_MESSAGE if behind else _MERGE_MISMATCH_MESSAGE,
         }
         if row not in rows:
             rows.append(row)

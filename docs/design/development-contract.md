@@ -68,6 +68,14 @@ before a run is refused for storage the least recently used idle cache is
 removed. A cache in use is never removed. apt is not cached because its
 directories are written by root.
 
+If the merge ref is still not the expected one after those re-reads and its
+second parent is the head and its first parent is an ancestor of the listed
+base, GitHub built it on an older base and has not rebuilt it. The refusal that
+follows the existing three-pass rule then says `merge ref is behind the base;
+merge the base into the branch`, and merging the base into the branch makes
+GitHub build a new merge ref. Any other mismatch keeps the text `fetched merge
+commit does not match the listed head`.
+
 A claim is written before a job is submitted and gets its run id in the same
 pass. A claim without one is left over from a pass that stopped or a worker that
 never answered. The poller stamps it with `claimed_at` the first time it sees it
