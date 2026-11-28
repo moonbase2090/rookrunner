@@ -68,6 +68,39 @@ before a run is refused for storage the least recently used idle cache is
 removed. A cache in use is never removed. apt is not cached because its
 directories are written by root.
 
+If the merge ref is still not the expected one after those re-reads and its
+second parent is the head and its first parent is an ancestor of the listed
+base, GitHub built it on an older base and has not rebuilt it. The refusal that
+follows the existing three-pass rule then says `merge ref is behind the base;
+merge the base into the branch`, and merging the base into the branch makes
+GitHub build a new merge ref. Any other mismatch keeps the text `fetched merge
+commit does not match the listed head`.
+
+A claim is written before a job is submitted and gets its run id in the same
+pass. A claim without one is left over from a pass that stopped or a worker that
+never answered. The poller stamps it with `claimed_at` the first time it sees it
+without a run id. Once it is ten minutes old (`CLAIM_STALE_SECONDS`), the next
+pass removes it, logs a `claim_released` line with the submission key, host and
+age, and the submit that follows places the job again, possibly on another
+place. Nothing was posted for a claim without a run id, so nothing is posted for
+its release. A submit under the same key returns the run if the worker created
+it. A claim that is blocked, waiting for capacity, or already has a run id is
+never released.
+
+When a status post is refused because the snapshot's base commit is not the
+tested commit, the entry is blocked as before. Each pass then picks at most one
+such entry (unless an operator asked for a retry) and retries it through the
+`--retry-failed` path: the tested commit is checked out again, the successor key
+comes from `retry_submission_key`, the trust gates and placement apply as for any
+submission, and the successor records `retry_attempt`. When the successor is
+submitted the old entry is retired as superseded. When the commit is no longer a
+current pull request head or branch tip the poller posts an error status
+`superseded: a newer commit is being tested` on it and abandons the entry. When
+no place has room the entry stays blocked and is tried again next pass. An
+original submission is retried at most three times, then stays blocked. Success
+is never posted for a run that was not captured at the commit it reports on.
+Every decision writes an `auto_retry` line to stderr.
+
 A pull request can move while a poll pass runs: main advances, or the pull
 request is updated. When the fetched merge ref is not the listed base and head
 (or the head and the base branch's current tip), the poller reads the pull

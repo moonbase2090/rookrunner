@@ -9,6 +9,31 @@ This file does not reconstruct earlier milestones.
 
 ## [0.1.28] - 2026-11-27
 
+- A poll submission blocked because the run's snapshot was not captured at the
+  tested commit (`base_commit does not equal the tested commit`) is now retried
+  by the poller itself, on by default: one entry per pass, at the commit the
+  entry tested, through the same one-key retry as `--retry-failed`, with the
+  current trust gates, and at most three times for one original submission
+  (`retry_attempt`). The old entry is retired as superseded when the successor
+  is submitted. If the commit is no longer a current pull request head or
+  branch tip, the old entry's status becomes an error with the text
+  `superseded: a newer commit is being tested`, never success, and the entry is
+  abandoned. After the third attempt the entry stays blocked for an operator.
+  Each decision logs an `auto_retry` line on stderr with the tested commit and
+  the status commit.
+- A merge ref that GitHub built on an older base than the listed one (the head
+  merged onto an ancestor of the base) and that stays that way through the
+  recheck and three passes is refused with `merge ref is behind the base; merge
+  the base into the branch` instead of the generic mismatch text. Any other
+  mismatch keeps its message. A merge ref that catches up during the recheck
+  passes in the same pass.
+- A poll claim that still has no run id ten minutes after the poller first saw
+  it is released and placed again by the next submit, with nothing posted to
+  GitHub for it. The poller stamps a claim with `claimed_at` the first time it
+  sees it without a run id. A release is logged on stderr as a `claim_released`
+  line, recorded in the pass's skipped list and in the diagnostic journal with
+  the submission key, the host and the claim's age. If the worker did create
+  the run, the submit that follows uses the same key and gets that run back.
 - A worker keeps a package download cache per repository and host, on by
   default (`worker --no-package-cache` turns it off). Jobs share cargo's
   registry, git checkouts and package cache lock files, the pip, uv, npm, pnpm

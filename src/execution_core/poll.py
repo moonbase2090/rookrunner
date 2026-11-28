@@ -168,6 +168,11 @@ from .trigger import (
 # Self-hosted job queue time.
 # https://docs.github.com/en/actions/reference/limits
 QUEUE_LIMIT = timedelta(hours=24)
+# A claim is written just before a job is submitted and gets its run id in the
+# same pass. One that still has none after this long belongs to a pass that
+# died, so it is released and placed again. GitHub itself waits about a minute
+# to assign a runner, so ten minutes leaves room for a slow submit.
+CLAIM_STALE_SECONDS = 600
 # One response page. GitHub's maximum page size is 100.
 # https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
 PAGE_SIZE = 100
@@ -181,6 +186,18 @@ _MERGE_MISMATCH_LIMIT = 3
 # request moved while the pass ran. Re-read it this many times in the same pass,
 # waiting this long, then twice that, and so on, before the mismatch counts.
 _MERGE_RECHECK_LIMIT = 3
+_BASE_COMMIT_REFUSAL = "base_commit does not equal the tested commit"
+# A run whose snapshot was not captured at the tested commit cannot report for
+# it. The poller retries it itself, one entry per pass and this many times for
+# one original submission, and then leaves it blocked for an operator.
+AUTO_RETRY_LIMIT = 3
+SUPERSEDED_TEXT = "superseded: a newer commit is being tested"
+_MERGE_MISMATCH_MESSAGE = "fetched merge commit does not match the listed head"
+# GitHub builds ``refs/pull/N/merge`` when a pull request changes and does not
+# always rebuild it when the base branch moves. A merge of the listed head onto
+# an older base is stale, not wrong, and merging the base into the branch makes
+# GitHub build a new one.
+_MERGE_BEHIND_MESSAGE = "merge ref is behind the base; merge the base into the branch"
 _RECHECK_DELAY_SECONDS = 1.0
 _ZERO = "0" * 40
 _WORKFLOW_ABSENT = "workflow must be tracked or explicitly included"
@@ -1008,6 +1025,15 @@ def _moved_base_merge(clone, parents, head_sha, base_ref):
     return current is not None and parents[0] == current
 
 
+def _merge_behind_base(clone, parents, base_sha, head_sha):
+    """Return whether a merge is the listed head on a base older than the listed one."""
+
+    if parents is None or parents[1] != head_sha or parents[0] == base_sha:
+        return False
+    result = _git(clone, "merge-base", "--is-ancestor", parents[0], base_sha, check=False)
+    return result.returncode == 0
+
+
 def _digest(value):
     if isinstance(value, str) and _IMAGE_DIGEST.fullmatch(value):
         return value
@@ -1250,6 +1276,7 @@ class Pass:
         self.retry_entry = None
         self.retry_key = None
         self.retry_applied = False
+        self.auto_retry = None
         self.allow_untrusted = _allow_untrusted(allow_untrusted)
         self.allow_pr_workflow = _allow_pr_workflow(allow_pr_workflow)
         self.allow_pr_workflow_sha = _allow_pr_workflow_sha(allow_pr_workflow_sha)
@@ -1323,6 +1350,7 @@ class Pass:
             if isinstance(completed, list):
                 completed = {key: {} for key in completed}
             self.completed = self.state["completed"] = completed
+            self._release_stale_claims()
             if self.places is not None:
                 self._note_unknown_hosts()
                 self._connect_claimed()
@@ -1338,12 +1366,12 @@ class Pass:
             else:
                 self._expire_placed()
                 if not self._admit_capacity():
-                    self._prepare_retry()
+                    self._start_retry()
                     self.result["stopped"] = self.budget.stopped
                     self._record_polls()
                     _save_state(self.state_dir / "poll.json", self.state)
                     return self.result
-            self._prepare_retry()
+            self._start_retry()
             self._branches()
             self._pulls()
             self._schedules()
@@ -1352,6 +1380,7 @@ class Pass:
             else:
                 self._post_placed()
             self.result["stopped"] = self.budget.stopped
+            self._finish_auto_retry()
             if self.retry_entry is not None and not self.retry_applied:
                 self._skip({"reason": "retry_not_submitted", "key": self.retry_failed})
             self._record_polls()
@@ -1390,12 +1419,129 @@ class Pass:
         elif not self._claims_this_host(entry):
             raise PollError("INVALID_PARAMS", "retry key belongs to another worker")
         record = self.caller("run.get", {"run_id": entry["run_id"]})
-        if record.get("state") != "failed":
+        refused = self._blocked_on_base_mismatch(entry)
+        if record.get("state") != "failed" and not refused:
             raise PollError("INVALID_PARAMS", "only a failed run can be retried")
         self.retry_entry = entry
         self.retry_key = "poll-" + hashlib.sha256(("retry\0" + entry["key"]).encode()).hexdigest()
-        if not retired:
+        if not retired and not refused:
             self._post_record(entry)
+
+    @staticmethod
+    def _blocked_on_base_mismatch(entry):
+        blocked = entry.get("blocked") if isinstance(entry, dict) else None
+        return (
+            isinstance(blocked, dict)
+            and entry.get("state") == "blocked"
+            and blocked.get("kind") == "STATUS_REFUSED"
+            and blocked.get("message") == _BASE_COMMIT_REFUSAL
+            and blocked.get("unblock") == "retry_or_abandon"
+        )
+
+    def _select_auto_retry(self):
+        """Pick one entry blocked on the base-commit refusal to retry in this pass."""
+
+        if self.retry_failed is not None:
+            return
+        for entry in self.state["submissions"]:
+            if (
+                not self._blocked_on_base_mismatch(entry)
+                or "run_id" not in entry
+                or entry.get("event") not in {"push", "pull_request"}
+            ):
+                continue
+            attempt = entry.get("retry_attempt", 0)
+            if type(attempt) is not int or attempt >= AUTO_RETRY_LIMIT:
+                self._log_auto_retry("limit", entry, attempt)
+                continue
+            if self.places is None and not self._claims_this_host(entry):
+                continue
+            self.retry_failed = entry["key"]
+            self.auto_retry = entry
+            self._log_auto_retry("retry", entry, attempt + 1)
+            return
+
+    def _start_retry(self):
+        """Prepare an operator's retry, or pick an automatic one when none was asked for."""
+
+        self._select_auto_retry()
+        automatic = self.auto_retry
+        try:
+            self._prepare_retry()
+        except PollError as exc:
+            if automatic is None:
+                raise
+            self._log_auto_retry(
+                "unavailable", automatic, automatic.get("retry_attempt", 0) + 1, exc
+            )
+            self.retry_failed = None
+            self.retry_entry = None
+            self.retry_key = None
+            self.auto_retry = None
+
+    def _log_auto_retry(self, outcome, entry, attempt, error=None):
+        """Name the commits of one automatic retry decision on stderr."""
+
+        row = {
+            "outcome": outcome,
+            "key": entry.get("key"),
+            "event": entry.get("event"),
+            "tested_commit": entry.get("tested_commit"),
+            "status_sha": entry.get("status_sha"),
+            "attempt": attempt,
+            "limit": AUTO_RETRY_LIMIT,
+        }
+        if error is not None:
+            row["error"] = str(error)[:200]
+        print(  # noqa: T201  automatic retry record on stderr
+            canonical({"auto_retry": row}), file=sys.stderr, flush=True
+        )
+
+    def _finish_auto_retry(self):
+        """Close the automatic retry of this pass: retire its old entry, or retire it as superseded."""
+
+        entry = self.auto_retry
+        if entry is None or self.budget.stopped:
+            return
+        attempt = entry.get("retry_attempt", 0) + 1
+        if self.retry_applied:
+            entry["superseded"] = True
+            self._retire_submission(entry)
+            self._log_auto_retry("submitted", entry, attempt)
+            return
+        if self._still_current(entry):
+            # No place had room, or the trust gate held the commit back: it stays blocked.
+            self._log_auto_retry("deferred", entry, attempt)
+            return
+        posted = False
+        try:
+            posted, _check = self._post_context(
+                entry["context"],
+                entry["run_id"],
+                entry["status_sha"],
+                "error",
+                SUPERSEDED_TEXT,
+                None,
+            )
+        except (StatusError, PollError, OSError, ValueError) as exc:
+            self._log_auto_retry("superseded_status_failed", entry, attempt, exc)
+        if not posted:
+            return
+        entry["superseded"] = True
+        entry["abandoned"] = True
+        self._retire_submission(entry)
+        self._log_auto_retry("superseded", entry, attempt)
+
+    def _still_current(self, entry):
+        """Return whether the entry's commit is still a current pull request head or branch tip."""
+
+        sha = entry.get("status_sha")
+        if entry.get("event") == "pull_request":
+            pulls = self.state.get("pulls")
+            heads = [item.get("head") for item in pulls.values()] if isinstance(pulls, dict) else []
+            return sha in heads
+        tips = self.state.get("tips")
+        return isinstance(tips, dict) and sha in tips.values()
 
     def _reporting_caller(self, entry):
         if self.places is None:
@@ -1421,7 +1567,12 @@ class Pass:
         entry = self.retry_entry
         if entry is None or key != self.retry_key:
             return {}
-        return {"retry_of": entry["key"], "retry_base": entry.get("retry_base", entry["key"])}
+        attempt = entry.get("retry_attempt", 0)
+        return {
+            "retry_of": entry["key"],
+            "retry_base": entry.get("retry_base", entry["key"]),
+            "retry_attempt": (attempt if type(attempt) is int else 0) + 1,
+        }
 
     def _lock(self):
         path = self.state_dir / "poll.lock"
@@ -1947,7 +2098,9 @@ class Pass:
             ):
                 self._clear_merge_mismatch(number, head_sha)
                 return merge
-        self._record_merge_mismatch(number, head_sha)
+        self._record_merge_mismatch(
+            number, head_sha, behind=_merge_behind_base(self.clone, parents, base_sha, head_sha)
+        )
         return None
 
     def _reread_pull(self, number):
@@ -2820,7 +2973,7 @@ class Pass:
             del mismatches[key]
         self._checkpoint()
 
-    def _record_merge_mismatch(self, number, head_sha):
+    def _record_merge_mismatch(self, number, head_sha, behind=False):
         """Hold a pull request whose merge ref does not match the listed base and head.
 
         A stale merge ref right after a push is retryable: hold the pull request
@@ -2865,7 +3018,7 @@ class Pass:
             "sha": head_sha,
             "action": "refused",
             "reason": "merge_commit_mismatch",
-            "message": "fetched merge commit does not match the listed head",
+            "message": _MERGE_BEHIND_MESSAGE if behind else _MERGE_MISMATCH_MESSAGE,
         }
         if row not in rows:
             rows.append(row)
@@ -3556,6 +3709,60 @@ class Pass:
     def _claims_this_host(self, entry):
         return entry.get("host") == self.ssh_host
 
+    def _release_stale_claims(self):
+        """Release claims that never got a run id, so the next submit places them again.
+
+        A claim has no run id until ``run.submit`` answers, which is the same
+        pass that wrote it. A claim found here with none is left over from a
+        pass that stopped or from a worker that never answered. The first pass
+        that sees one stamps it; a later pass releases it once it is older than
+        ``CLAIM_STALE_SECONDS``. Nothing was posted for it yet, so nothing is
+        posted now. If the worker did create the run, the submit that follows
+        uses the same key and gets that run back.
+        """
+
+        clock = self.clock
+        if not isinstance(clock, datetime) or clock.tzinfo is None:
+            clock = datetime.now(UTC)
+        changed = False
+        for entry in list(self.state["submissions"]):
+            if (
+                entry.get("state") != "claimed"
+                or "run_id" in entry
+                or entry.get("waiting") is not None
+            ):
+                continue
+            stamped = entry.get("claimed_at")
+            try:
+                since = datetime.fromisoformat(stamped) if isinstance(stamped, str) else None
+            except ValueError:
+                since = None
+            if since is None or since.tzinfo is None:
+                entry["claimed_at"] = clock.isoformat()
+                changed = True
+                continue
+            age = (clock - since).total_seconds()
+            if age < CLAIM_STALE_SECONDS:
+                continue
+            self.state["submissions"] = [
+                item for item in self.state["submissions"] if item is not entry
+            ]
+            changed = True
+            row = {
+                "reason": "claim_released",
+                "key": entry.get("key"),
+                "host": entry.get("host") if isinstance(entry.get("host"), str) else None,
+                "event": entry.get("event"),
+                "context": entry.get("context"),
+                "age_seconds": int(age),
+            }
+            self._skip({name: value for name, value in row.items() if value is not None})
+            print(  # noqa: T201  released claim on stderr
+                canonical({"claim_released": row}), file=sys.stderr, flush=True
+            )
+        if changed:
+            self._checkpoint()
+
     def _drop_unstarted(self, entry):
         self.state["submissions"] = [
             item for item in self.state["submissions"] if item is not entry
@@ -3620,10 +3827,7 @@ class Pass:
             kind = getattr(exc, "kind", None) or (
                 "CLIENT_ERROR" if isinstance(exc, OSError | ValueError) else "WORKER_ERROR"
             )
-            if (
-                kind == "STATUS_REFUSED"
-                and str(exc) == "base_commit does not equal the tested commit"
-            ):
+            if kind == "STATUS_REFUSED" and str(exc) == _BASE_COMMIT_REFUSAL:
                 self._block(
                     entry,
                     exc,
@@ -3642,6 +3846,7 @@ class Pass:
             "status_sha",
             "host",
             "retry_base",
+            "retry_attempt",
             "context",
             "tested_commit",
             "superseded",
