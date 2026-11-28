@@ -83,9 +83,21 @@ class StateFormatTests(unittest.TestCase):
 
     def test_existing_state_check_accepts_unmarked_legacy_metadata(self):
         database = sqlite3.connect(":memory:")
+        self.addCleanup(database.close)
         database.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         database.execute("INSERT INTO metadata VALUES ('worker_id', 'legacy')")
+        before = tuple(database.iterdump())
         check_existing_state_format(database)
+        self.assertEqual(tuple(database.iterdump()), before)
+        self.assertEqual(database.total_changes, 1)
+
+        database.execute("INSERT INTO metadata VALUES ('state_format_version', '99')")
+        with self.assertRaisesRegex(ValueError, "STATE_FORMAT_UNSUPPORTED"):
+            check_existing_state_format(database)
+        self.assertEqual(
+            database.execute("SELECT key, value FROM metadata ORDER BY key").fetchall(),
+            [("state_format_version", "99"), ("worker_id", "legacy")],
+        )
 
 
 if __name__ == "__main__":

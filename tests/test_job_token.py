@@ -34,7 +34,6 @@ from execution_core.job_token import (
     resolved_permissions,
 )
 from execution_core.plan import CAPABILITY_VERSION, PlanError, plan_workflow
-from execution_core.protocol import canonical
 from execution_core.run import _JobRuntime, _prepare_job_token, _render_run, _render_secret_or_expr
 from execution_core.status import StatusError
 from execution_core.worker import Worker
@@ -278,10 +277,9 @@ class MintTests(_Home):
         self.assertEqual(request["method"], "POST")
         self.assertTrue(request["path"].endswith(f"/app/installations/{INSTALL}/access_tokens"))
         self.assertEqual(
-            json.loads(request["body"]),
-            {"repositories": ["owner/demo"], "permissions": {"contents": "read"}},
+            request["body"],
+            b'{"permissions":{"contents":"read"},"repositories":["owner/demo"]}',
         )
-        self.assertEqual(canonical(json.loads(request["body"])), request["body"].decode())
 
     def test_the_post_body_stays_checks_and_statuses_without_repositories(self):
         moment = datetime.now(UTC)

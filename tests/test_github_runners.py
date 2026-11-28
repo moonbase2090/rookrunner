@@ -104,7 +104,7 @@ class FlagTests(unittest.TestCase):
             gr.RunnerClient("https://example.invalid", lambda: "t")
 
     def test_flag_one_enables(self):
-        gr.RunnerClient("https://example.invalid", lambda: "t", environ=ON)
+        self.assertTrue(gr.enabled(ON))
 
 
 class SecretTests(unittest.TestCase):
