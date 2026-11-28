@@ -179,6 +179,34 @@ class NamespaceTests(unittest.TestCase):
             (elsewhere / ".git" / "config").symlink_to(elsewhere / "config-real")
             self.assertIsNone(repository_from_clone(elsewhere))
 
+    def test_an_origin_with_two_urls_or_a_url_on_another_remote_gives_no_wrong_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clone = _clone(directory)
+            config = clone / ".git" / "config"
+            base = config.read_text()
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(clone),
+                    "config",
+                    "--add",
+                    "remote.origin.url",
+                    "https://github.com/evil/other.git",
+                ],
+                check=True,
+            )
+            self.assertEqual(config.read_text().count("url ="), 2)
+            self.assertIsNone(repository_from_clone(clone))
+            config.write_text(
+                base + '[remote "upstream"]\n\turl = https://github.com/evil/other.git\n'
+            )
+            self.assertEqual(repository_from_clone(clone), REPOSITORY)
+            config.write_text(base.replace("url =", "URL ="))
+            self.assertEqual(repository_from_clone(clone), REPOSITORY)
+            config.write_text("[core]\n\tbare = false\n")
+            self.assertIsNone(repository_from_clone(clone))
+
     def test_the_image_key_is_the_front_of_a_sha256_digest(self):
         self.assertEqual(image_key("sha256:" + "0123456789abcdef" + "f" * 48), "0123456789abcdef")
         for bad in (None, "abc", "sha256:xyz", "sha256:" + "A" * 64, "sha256:12"):
