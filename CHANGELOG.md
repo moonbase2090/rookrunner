@@ -7,6 +7,12 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A merge ref that GitHub built on an older base than the listed one (the head
+  merged onto an ancestor of the base) and that stays that way through the
+  recheck and three passes is refused with `merge ref is behind the base; merge
+  the base into the branch` instead of the generic mismatch text. Any other
+  mismatch keeps its message. A merge ref that catches up during the recheck
+  passes in the same pass.
 - A poll claim that still has no run id ten minutes after the poller first saw
   it is released and placed again by the next submit, with nothing posted to
   GitHub for it. The poller stamps a claim with `claimed_at` the first time it

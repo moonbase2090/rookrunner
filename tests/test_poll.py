@@ -2563,6 +2563,69 @@ class PollTests(unittest.TestCase):
         self.assertEqual(second["warnings"][0]["sha"], head2)
         self.assertIn("author cannot write to the repository", second["warnings"][0]["message"])
 
+    def test_a_merge_ref_built_on_an_older_base_is_refused_with_an_actionable_message(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        self._publish_merge(9, tip, head, "merge on the old base")
+        (self.seed / "later.txt").write_text("later\n")
+        self._commit_all("later")
+        _git(self.seed, "push", "origin", "main")
+        newer = self._tip()
+        self.assertNotEqual(newer, tip)
+        self.server.pulls[0]["base"]["sha"] = newer
+        message = "merge ref is behind the base; merge the base into the branch"
+        for expected_count in (1, 2):
+            result = self.poll()
+            self.assertEqual(result["skipped"], [{"reason": "merge_commit_mismatch", "number": 9}])
+            self.assertEqual(result["warnings"], [])
+            self.assert_trust_posts(head, [])
+            saved = json.loads((self.state / "poll.json").read_text())
+            self.assertEqual(
+                saved["merge_mismatches"], {"9": {"head": head, "count": expected_count}}
+            )
+        third = self.poll()
+        self.assertEqual(
+            third["warnings"],
+            [
+                {
+                    "number": 9,
+                    "sha": head,
+                    "action": "refused",
+                    "reason": "merge_commit_mismatch",
+                    "message": message,
+                }
+            ],
+        )
+        self.assert_trust_posts(head, [("error", "refused: " + message)])
+        self.assertFalse(any(item.get("event_name") == "pull_request" for item in self.submits))
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_merge_ref_that_catches_up_with_the_base_passes_after_the_recheck(self):
+        def mutate(seed):
+            (seed / "feature-9.txt").write_text("feature\n")
+
+        tip, head = self._open_feature(9, mutate)
+        self._publish_merge(9, tip, head, "merge on the old base")
+        (self.seed / "later.txt").write_text("later\n")
+        self._commit_all("later")
+        _git(self.seed, "push", "origin", "main")
+        newer = self._tip()
+        self.server.pulls[0]["base"]["sha"] = newer
+        refreshed = self._merge_commit(newer, head, "merge on the new base")
+
+        def refresh(_number):
+            _git(self.seed, "push", "--force", "origin", f"{refreshed}:refs/pull/9/merge")
+
+        self.server.on_pull_read = refresh
+        result, lines = self._poll_logged()
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(self.runs(), 1)
+        saved = json.loads((self.state / "poll.json").read_text())
+        self.assertNotIn("9", saved.get("merge_mismatches", {}))
+
     def test_a_merge_on_neither_base_is_refused_and_posts_an_error_status(self):
         def mutate(seed):
             (seed / "feature-9.txt").write_text("feature\n")
