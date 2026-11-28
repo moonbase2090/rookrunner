@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""CHANGELOG records 0.1.27 through 0.1.1 and still has no 0.1.0 section."""
+"""CHANGELOG records 0.1.28 through 0.1.1 and still has no 0.1.0 section."""
 
 import unittest
 from pathlib import Path
@@ -84,10 +84,14 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("A poll can record the pending status it already posted", prose)
 
     def test_current_version_and_its_entries_are_released(self):
-        self.assertIn("The current package version is 0.1.27.", TEXT)
-        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.27]", 1)[0]
-        self.assertNotIn("The package version is 0.1.27.", unreleased)
+        self.assertIn("The current package version is 0.1.28.", TEXT)
+        unreleased = TEXT.split("## [Unreleased]", 1)[1].split("## [0.1.28]", 1)[0]
+        self.assertNotIn("The package version is 0.1.28.", unreleased)
         self.assertNotIn("20-page bound", unreleased)
+        section = TEXT.split("## [0.1.28] - 2026-11-27", 1)[1].split("## [0.1.27]", 1)[0]
+        prose = " ".join(section.split())
+        self.assertIn("The package version is 0.1.28.", prose)
+        self.assertIn("Owned artifact uploads now run with `retention-days` from 1 to 90", prose)
         section = TEXT.split("## [0.1.27] - 2026-11-27", 1)[1].split("## [0.1.26]", 1)[0]
         prose = " ".join(section.split())
         self.assertIn("The package version is 0.1.27.", prose)
