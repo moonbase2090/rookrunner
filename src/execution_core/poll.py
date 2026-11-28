@@ -168,6 +168,11 @@ from .trigger import (
 # Self-hosted job queue time.
 # https://docs.github.com/en/actions/reference/limits
 QUEUE_LIMIT = timedelta(hours=24)
+# A claim is written just before a job is submitted and gets its run id in the
+# same pass. One that still has none after this long belongs to a pass that
+# died, so it is released and placed again. GitHub itself waits about a minute
+# to assign a runner, so ten minutes leaves room for a slow submit.
+CLAIM_STALE_SECONDS = 600
 # One response page. GitHub's maximum page size is 100.
 # https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
 PAGE_SIZE = 100
@@ -1323,6 +1328,7 @@ class Pass:
             if isinstance(completed, list):
                 completed = {key: {} for key in completed}
             self.completed = self.state["completed"] = completed
+            self._release_stale_claims()
             if self.places is not None:
                 self._note_unknown_hosts()
                 self._connect_claimed()
@@ -3555,6 +3561,60 @@ class Pass:
 
     def _claims_this_host(self, entry):
         return entry.get("host") == self.ssh_host
+
+    def _release_stale_claims(self):
+        """Release claims that never got a run id, so the next submit places them again.
+
+        A claim has no run id until ``run.submit`` answers, which is the same
+        pass that wrote it. A claim found here with none is left over from a
+        pass that stopped or from a worker that never answered. The first pass
+        that sees one stamps it; a later pass releases it once it is older than
+        ``CLAIM_STALE_SECONDS``. Nothing was posted for it yet, so nothing is
+        posted now. If the worker did create the run, the submit that follows
+        uses the same key and gets that run back.
+        """
+
+        clock = self.clock
+        if not isinstance(clock, datetime) or clock.tzinfo is None:
+            clock = datetime.now(UTC)
+        changed = False
+        for entry in list(self.state["submissions"]):
+            if (
+                entry.get("state") != "claimed"
+                or "run_id" in entry
+                or entry.get("waiting") is not None
+            ):
+                continue
+            stamped = entry.get("claimed_at")
+            try:
+                since = datetime.fromisoformat(stamped) if isinstance(stamped, str) else None
+            except ValueError:
+                since = None
+            if since is None or since.tzinfo is None:
+                entry["claimed_at"] = clock.isoformat()
+                changed = True
+                continue
+            age = (clock - since).total_seconds()
+            if age < CLAIM_STALE_SECONDS:
+                continue
+            self.state["submissions"] = [
+                item for item in self.state["submissions"] if item is not entry
+            ]
+            changed = True
+            row = {
+                "reason": "claim_released",
+                "key": entry.get("key"),
+                "host": entry.get("host") if isinstance(entry.get("host"), str) else None,
+                "event": entry.get("event"),
+                "context": entry.get("context"),
+                "age_seconds": int(age),
+            }
+            self._skip({name: value for name, value in row.items() if value is not None})
+            print(  # noqa: T201  released claim on stderr
+                canonical({"claim_released": row}), file=sys.stderr, flush=True
+            )
+        if changed:
+            self._checkpoint()
 
     def _drop_unstarted(self, entry):
         self.state["submissions"] = [
