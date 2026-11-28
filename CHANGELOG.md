@@ -26,6 +26,9 @@ This file does not reconstruct earlier milestones.
   it was filled for and is emptied for another, a schedule or dispatch event
   without that id gets none, and every step on the cache tree descends through
   descriptors opened without following links.
+- Owned artifact uploads now run with `retention-days` from 1 to 90. The
+  worker keeps artifacts with the local run. Submission reports the field
+  for unsupported upload inputs and invalid literal values.
 
 ## [0.1.27] - 2026-11-27
 
