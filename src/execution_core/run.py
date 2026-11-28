@@ -385,7 +385,9 @@ class _JobRuntime:
 
     def __init__(self):
         self.env = {}
-        self.paths = []
+        attempt = _ATTEMPT.get()
+        # The install root's bin directory is on PATH from the first step.
+        self.paths = list(attempt.get("cache_paths") or []) if attempt else []
         self.outputs = {}
         self.masks = MaskList()
         self.secret_values = None
@@ -508,6 +510,7 @@ def _soft_defaults():
         "MAKEFLAGS": f"-j{_JOB_CPUS}",
         "RAYON_NUM_THREADS": str(_JOB_CPUS),
     }
+    values.update(attempt.get("cache_env") or {})
     socket_temp = attempt.get("socket_temp")
     if socket_temp:
         values["TMPDIR"] = socket_temp
@@ -674,6 +677,75 @@ def _resolve_image(docker, reference, digest, deadline, pull=True):
     if not matches_id and not matches_repo:
         _setup("image digest will not resolve")
     return digest, _runner_arch(info.get("Os"), info.get("Architecture"))
+
+
+_CARGO_HOME_ROOTS = (
+    "/github",
+    "/workspace",
+    "/run",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/etc",
+    "/opt/node24",
+)
+
+
+def _image_cargo_home(docker, reference, deadline):
+    """Return the image's `CARGO_HOME` when a package cache can mount there.
+
+    The cache is only mounted where the image already says cargo keeps its
+    home. An image without the variable, or with one that points into a
+    directory the engine owns, gets no cache.
+    """
+
+    code, stdout, _stderr = _invoke_within(
+        docker,
+        ["image", "inspect", "--format", "{{json .Config.Env}}", reference],
+        60,
+        deadline,
+    )
+    if code != 0:
+        return None
+    try:
+        env = json.loads(stdout.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    for item in env if isinstance(env, list) else ():
+        if not isinstance(item, str) or not item.startswith("CARGO_HOME="):
+            continue
+        home = item.partition("=")[2].rstrip("/")
+        if (
+            not home.startswith("/")
+            or any(character in home for character in ",\n\r\0")
+            or ".." in home.split("/")
+            or any(home == root or home.startswith(root + "/") for root in _CARGO_HOME_ROOTS)
+        ):
+            return None
+        return home
+    return None
+
+
+def _cache_mounts(docker, reference, deadline, package_cache):
+    """Return mounts, env defaults and PATH prefixes for the package cache.
+
+    A host path the engine cannot pass to `--mount` turns the cache off. The
+    cargo parts mount only where the image says cargo keeps its home.
+    """
+
+    if package_cache is None:
+        return [], {}, []
+    if any(
+        any(character in os.fspath(path) for character in ",\n\r\0")
+        for path in package_cache.host_paths()
+    ):
+        return [], {}, []
+    home = _image_cargo_home(docker, reference, deadline)
+    return (
+        package_cache.mount_args(home),
+        package_cache.env_defaults(),
+        package_cache.path_prefixes(),
+    )
 
 
 def runner_image_readiness(image):
@@ -1637,6 +1709,7 @@ def _create_args(
     passwordless_sudo=False,
     job_privileges=False,
     oidc_host=False,
+    cache_args=(),
 ):
     if network not in _NETWORKS:
         _setup("container network is not accepted")
@@ -1726,6 +1799,7 @@ def _create_args(
                     ),
                 ]
             )
+    args.extend(cache_args)
     args.extend(
         [
             reference,
@@ -2943,6 +3017,7 @@ def run_job(
     job_token=None,
     token_clock=None,
     oidc=None,
+    package_cache=None,
 ):
     """Run `plan` in one container identified by `image`.
 
@@ -2991,6 +3066,14 @@ def run_job(
     Service containers for an enabled job start before its steps and are
     removed before the next job. They do not receive the engine socket
     or that volume.
+    `package_cache` is omitted, or a `package_cache.CacheMount` the worker
+    chose from the stored event and the runner image. Its download caches are
+    mounted at `/github/cache`, and cargo's registry, git checkouts and two
+    package cache lock files go under the image's `CARGO_HOME` when the image
+    sets one. The package managers find them through default environment
+    variables that a workflow may replace, and the install directories are on
+    `PATH` from the first step. Omitted, the job sees neither the mounts nor
+    those defaults.
     """
 
     if network not in _NETWORKS:
@@ -3057,6 +3140,9 @@ def run_job(
             pull=runner_digest is None or digest != runner_digest,
         )
         runner_dirs = _runner_dirs(workspace)
+        cache_args, cache_env, cache_paths = _cache_mounts(
+            docker_bin, reference, deadline, package_cache
+        )
         account = None
         if runner_digest is not None and digest == runner_digest:
             account = runner_dirs["runner-account"]
@@ -3070,6 +3156,8 @@ def run_job(
                 "sha": _commit_sha(manifest),
                 "temp": runner_dirs["runner-temp"],
                 "socket_temp": socket_temp,
+                "cache_env": cache_env,
+                "cache_paths": cache_paths,
                 "uploads": UploadBook(Path(workspace).parent / "uploads.json"),
             }
         )
@@ -3112,6 +3200,7 @@ def run_job(
                 passwordless_sudo if account is not None else False,
                 job_privileges=job_privileges,
                 oidc_host=oidc is not None and network == "bridge",
+                cache_args=cache_args,
             ),
             60,
             deadline,
