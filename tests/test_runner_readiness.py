@@ -135,8 +135,9 @@ class RunnerReadinessTests(unittest.TestCase):
             self.assertLessEqual(kwargs["timeout"], 2)
             raise subprocess.TimeoutExpired(args, kwargs["timeout"])
 
+        worker = self._worker()
         with patch("execution_core.run.subprocess.run", side_effect=timed_out):
-            result = self._describe(self._worker())
+            result = self._describe(worker)
         self.assertIs(result["ready"], False)
         self.assertEqual(result["readiness_error"], "runner image inspection timed out")
 

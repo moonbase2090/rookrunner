@@ -163,27 +163,27 @@ class NamespaceTests(unittest.TestCase):
                 )
                 self.assertEqual(repository_from_clone(clone), name, url)
 
-    def test_reading_the_clone_origin_starts_no_process_and_trusts_only_a_plain_git_directory(self):
+    def test_a_repo_local_insteadof_rule_is_applied_like_the_poller_applies_it(self):
         with tempfile.TemporaryDirectory() as directory:
-            clone = _clone(directory)
-            with patch("subprocess.run", side_effect=AssertionError("no process")):
-                self.assertEqual(repository_from_clone(clone), REPOSITORY)
-            moved = Path(directory) / "moved"
-            shutil.copytree(clone, moved, symlinks=True)
-            (moved / ".git").rename(moved / "real-git")
-            (moved / ".git").write_text("gitdir: real-git\n")
-            self.assertIsNone(repository_from_clone(moved))
-            elsewhere = Path(directory) / "other"
-            shutil.copytree(clone, elsewhere, symlinks=True)
-            (elsewhere / ".git" / "config").rename(elsewhere / "config-real")
-            (elsewhere / ".git" / "config").symlink_to(elsewhere / "config-real")
-            self.assertIsNone(repository_from_clone(elsewhere))
+            clone = _clone(directory, "https://github.com/old/project.git")
+            self.assertEqual(repository_from_clone(clone), "old/project")
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(clone),
+                    "config",
+                    "url.https://github.com/new/.insteadOf",
+                    "https://github.com/old/",
+                ],
+                check=True,
+            )
+            self.assertEqual(repository_from_clone(clone), "new/project")
 
-    def test_an_origin_with_two_urls_or_a_url_on_another_remote_gives_no_wrong_identity(self):
+    def test_an_origin_with_two_fetch_urls_gives_no_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             clone = _clone(directory)
-            config = clone / ".git" / "config"
-            base = config.read_text()
+            self.assertEqual(repository_from_clone(clone), REPOSITORY)
             subprocess.run(
                 [
                     "git",
@@ -196,16 +196,32 @@ class NamespaceTests(unittest.TestCase):
                 ],
                 check=True,
             )
-            self.assertEqual(config.read_text().count("url ="), 2)
             self.assertIsNone(repository_from_clone(clone))
-            config.write_text(
-                base + '[remote "upstream"]\n\turl = https://github.com/evil/other.git\n'
+
+    def test_a_url_on_another_remote_and_a_clone_without_origin_do_not_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clone = _clone(directory, url=None)
+            self.assertIsNone(repository_from_clone(clone))
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(clone),
+                    "remote",
+                    "add",
+                    "upstream",
+                    "https://github.com/evil/other.git",
+                ],
+                check=True,
             )
-            self.assertEqual(repository_from_clone(clone), REPOSITORY)
-            config.write_text(base.replace("url =", "URL ="))
-            self.assertEqual(repository_from_clone(clone), REPOSITORY)
-            config.write_text("[core]\n\tbare = false\n")
             self.assertIsNone(repository_from_clone(clone))
+            self.assertIsNone(repository_from_clone(Path(directory) / "missing"))
+
+    def test_git_environment_variables_do_not_redirect_the_lookup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clone = _clone(directory)
+            with patch.dict(os.environ, {"GIT_DIR": str(Path(directory) / "nowhere")}):
+                self.assertEqual(repository_from_clone(clone), REPOSITORY)
 
     def test_the_image_key_is_the_front_of_a_sha256_digest(self):
         self.assertEqual(image_key("sha256:" + "0123456789abcdef" + "f" * 48), "0123456789abcdef")

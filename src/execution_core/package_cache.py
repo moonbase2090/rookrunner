@@ -30,6 +30,7 @@ import errno
 import os
 import re
 import stat
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -151,43 +152,34 @@ def repository_id(event):
     return _integer(stored.get("id")) if isinstance(stored, dict) else None
 
 
-_SECTION = re.compile(r"^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+\"((?:[^\"\\\\]|\\\\.)*)\")?\s*\]")
-_URL = re.compile(r"^\s*url\s*=\s*(.*?)\s*$", re.IGNORECASE)
-
-
 def repository_from_clone(clone):
     """Return the `owner/name` the clone's `origin` remote names, or None.
 
     The poller builds each event for the repository it polls, and the worker's
     clone is that repository, so the remote is the identity the worker can
-    check an event against when no name was configured. The remote is read
-    from the clone's own git config. A clone whose `.git` is not a plain
-    directory, a config that is a link, or an `origin` with more than one
-    `url` gives no identity: git would fetch from the first, and a worker that
-    cannot tell which one the poller uses declines the cache.
+    check an event against when no name was configured. The lookup is the one
+    the poller makes, `git remote get-url`, so a `url.<base>.insteadOf` rule is
+    applied the same way. An `origin` with more than one fetch url, or none,
+    gives no identity, and the worker then declines the cache.
     """
 
-    config = Path(clone) / ".git" / "config"
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     try:
-        if config.is_symlink() or not config.is_file():
-            return None
-        text = config.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        done = subprocess.run(
+            ["git", "-C", os.fspath(clone), "remote", "get-url", "--all", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
-    urls = []
-    in_origin = False
-    for line in text.splitlines():
-        section = _SECTION.match(line)
-        if section is not None:
-            in_origin = section.group(1).lower() == "remote" and section.group(2) == "origin"
-            continue
-        if in_origin:
-            found = _URL.match(line)
-            if found is not None:
-                urls.append(found.group(1))
-    if len(urls) != 1:
+    urls = [line for line in done.stdout.splitlines() if line.strip()]
+    if done.returncode != 0 or len(urls) != 1:
         return None
-    match = _ORIGIN.match(urls[0].strip().strip('"'))
+    match = _ORIGIN.match(urls[0].strip())
     return match.group(1) if match else None
 
 
