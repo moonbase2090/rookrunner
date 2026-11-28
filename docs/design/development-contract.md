@@ -79,6 +79,20 @@ its release. A submit under the same key returns the run if the worker created
 it. A claim that is blocked, waiting for capacity, or already has a run id is
 never released.
 
+When a status post is refused because the snapshot's base commit is not the
+tested commit, the entry is blocked as before. Each pass then picks at most one
+such entry (unless an operator asked for a retry) and retries it through the
+`--retry-failed` path: the tested commit is checked out again, the successor key
+comes from `retry_submission_key`, the trust gates and placement apply as for any
+submission, and the successor records `retry_attempt`. When the successor is
+submitted the old entry is retired as superseded. When the commit is no longer a
+current pull request head or branch tip the poller posts an error status
+`superseded: a newer commit is being tested` on it and abandons the entry. When
+no place has room the entry stays blocked and is tried again next pass. An
+original submission is retried at most three times, then stays blocked. Success
+is never posted for a run that was not captured at the commit it reports on.
+Every decision writes an `auto_retry` line to stderr.
+
 A pull request can move while a poll pass runs: main advances, or the pull
 request is updated. When the fetched merge ref is not the listed base and head
 (or the head and the base branch's current tip), the poller reads the pull

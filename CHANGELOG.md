@@ -7,6 +7,18 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll submission blocked because the run's snapshot was not captured at the
+  tested commit (`base_commit does not equal the tested commit`) is now retried
+  by the poller itself, on by default: one entry per pass, at the commit the
+  entry tested, through the same one-key retry as `--retry-failed`, with the
+  current trust gates, and at most three times for one original submission
+  (`retry_attempt`). The old entry is retired as superseded when the successor
+  is submitted. If the commit is no longer a current pull request head or
+  branch tip, the old entry's status becomes an error with the text
+  `superseded: a newer commit is being tested`, never success, and the entry is
+  abandoned. After the third attempt the entry stays blocked for an operator.
+  Each decision logs an `auto_retry` line on stderr with the tested commit and
+  the status commit.
 - A poll claim that still has no run id ten minutes after the poller first saw
   it is released and placed again by the next submit, with nothing posted to
   GitHub for it. The poller stamps a claim with `claimed_at` the first time it
