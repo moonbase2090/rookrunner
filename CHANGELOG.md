@@ -9,6 +9,25 @@ This file does not reconstruct earlier milestones.
 
 ## [0.1.28] - 2026-11-27
 
+- A worker keeps a package download cache per repository and host, on by
+  default (`worker --no-package-cache` turns it off). Jobs share cargo's
+  registry, git checkouts and package cache lock files, the pip, uv, npm, pnpm
+  and yarn caches, the Go module cache, and install directories for tools that
+  `cargo install`, `pipx` and `uv tool` put on `PATH`. Build output such as
+  `target/`, `node_modules/` and the Go build cache stays in the job. The worker
+  chooses the cache from the stored event: pushes to the default branch have one,
+  other branches and same-repository pull requests another, and a fork, an
+  untrusted override or any other event has none. Each is also kept per runner
+  image. The cache counts toward the disk budget, is emptied when it passes
+  `--package-cache-max-bytes` (default 4 GiB) while idle, is removed after
+  `--package-cache-max-age-days` (default 14) without use, and is freed before a
+  run is refused for storage. apt is not cached. A ref the operator lists for
+  file-backed secrets, an event without the repository id or default branch, and
+  a worker whose repository cannot be verified from `--github-repository` or the
+  clone's `origin` remote get no cache. The cache is bound to the repository id
+  it was filled for and is emptied for another, a schedule or dispatch event
+  without that id gets none, and every step on the cache tree descends through
+  descriptors opened without following links.
 - Owned artifact uploads now run with `retention-days` from 1 to 90. The
   worker keeps artifacts with the local run. Submission reports the field
   for unsupported upload inputs and invalid literal values.

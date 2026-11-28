@@ -47,6 +47,27 @@ This execution limit is separate from a poll place's `cap`, which bounds queued
 plus running admissions. A place admission cap of two and worker execution cap
 of one still means one running run and one queued run.
 
+A worker also keeps a package download cache in `package-cache/` under its state
+directory, in a directory per trust namespace and per runner image digest. The
+worker picks the namespace from the stored event and the operator's override:
+a push, schedule or dispatch on the default branch is `default-branch`; any
+other push to a branch, and a pull request whose head and base repository ids
+equal the event repository's id, is `branches`; everything else, a fork, an
+untrusted override, another repository, a tag, an unknown event, a ref the operator lists for file-backed secrets, or an event that lacks the repository id (or, for a push, the default branch), has no cache. A worker without a verified repository name (`--github-repository`, else the clone's `origin` remote) uses no cache at all. The cache records the repository id in `package-cache/repository` and removes every cache when another id uses the state directory, unless a cache is in use, which refuses the run's cache instead. Preparing, measuring, pruning and removing a cache all start at the state directory and descend through descriptors opened without following links; a link found in the tree is unlinked or refused and its target is never touched. A schedule or workflow-dispatch event whose stored event lacks the repository id has no cache.
+The job never chooses. One `/github/cache` mount holds the pip, uv, npm, pnpm,
+yarn and Go module caches and the install directories; cargo's registry, git
+checkouts and the two lock files that cargo takes before it touches the registry
+are mounted under the image's `CARGO_HOME` when the image sets one, so concurrent
+jobs serialize on cargo's own lock. The mounted directories are mode 0700 and
+owned by the worker user. Default variables point each package manager at its
+directory and a workflow's `env` replaces them. The copy modes `UV_LINK_MODE`
+and the pnpm import method keep a job from changing cache bytes through a
+hardlink. The state total includes the cache. An idle cache over the byte limit
+is emptied before use, an idle cache unused for the maximum age is removed, and
+before a run is refused for storage the least recently used idle cache is
+removed. A cache in use is never removed. apt is not cached because its
+directories are written by root.
+
 A pull request can move while a poll pass runs: main advances, or the pull
 request is updated. When the fetched merge ref is not the listed base and head
 (or the head and the base branch's current tip), the poller reads the pull

@@ -1114,6 +1114,29 @@ def main():
             "It does not add other capabilities."
         ),
     )
+    worker.add_argument(
+        "--no-package-cache",
+        action="store_true",
+        help=(
+            "turn the shared cargo package cache off. On by default: trusted jobs of "
+            "this repository share a registry, git checkouts, cargo's lock files and "
+            "an install root kept under the state directory. Forks, untrusted "
+            "overrides and other repositories never use it."
+        ),
+    )
+    worker.add_argument(
+        "--package-cache-max-age-days",
+        type=int,
+        default=None,
+        help="remove a package cache namespace nobody used for this many days (default 14)",
+    )
+    worker.add_argument(
+        "--package-cache-max-bytes",
+        type=int,
+        default=None,
+        help="empty a package cache namespace larger than this before a job uses it "
+        "(default 4*1024**3)",
+    )
     plan = commands.add_parser(
         "storage-plan",
         help="report bytes a finished-folder prune would free; nothing is deleted",
@@ -1637,6 +1660,13 @@ def main():
                 oidc_issuer=args.oidc_issuer,
                 oidc_pull_request=args.oidc_pull_request,
                 finished_folder_count=args.finished_folder_count,
+                package_cache=not args.no_package_cache,
+                package_cache_max_age=(
+                    None
+                    if args.package_cache_max_age_days is None
+                    else args.package_cache_max_age_days * 24 * 60 * 60
+                ),
+                package_cache_max_bytes=args.package_cache_max_bytes,
             )
             return
         if args.command == "describe":

@@ -67,6 +67,27 @@ room. To execute two runs simultaneously on that place, start its worker with
 `--cap 2` and give the place an admission cap of at least two. Preparation and
 state updates remain serialized; container execution overlaps.
 
+## Package caches
+
+A worker keeps a package download cache under its state directory, so it is
+per host and per repository. It is on by default; `worker --no-package-cache`
+turns it off. Trusted jobs share cargo's registry, git checkouts and package
+cache lock files (under the image's `CARGO_HOME`), the pip, uv, npm, pnpm and
+yarn caches, the Go module cache, and install directories for `cargo install`,
+`pipx` and `uv tool`, which are on `PATH` from the first step. The package
+managers find them through default variables a workflow can replace in its own
+`env`. Build output (`target/`, `node_modules/`, the Go build cache) is not
+cached. apt is not cached.
+
+The worker decides from the stored event, not from the job: a push to the
+default branch uses one cache, and other branches and same-repository pull
+requests use another. A fork, an untrusted override, a different repository or
+any other event gets no cache and writes nothing to one. So does a run on a ref the operator lists for file-backed secrets, and any run when the worker cannot verify its repository: the name comes from `--github-repository` or the clone's `origin` remote, and the event must carry the repository id (and, for a push, the default branch). A schedule or dispatch event gets a cache only when it carries that id. The cache remembers the repository id it was filled for and empties itself when a different repository uses the state directory. Every step walks the cache tree through directory descriptors opened without following links, so a link planted in it is unlinked, never followed. Each cache is also
+kept per runner image. It counts toward the disk budget, is emptied while idle
+once it passes `--package-cache-max-bytes` (default 4 GiB), is removed after
+`--package-cache-max-age-days` (default 14) without use, and is freed before a
+run is refused for storage.
+
 ## Stuck submissions
 
 A poll submission stays active until a final commit status is recorded.
