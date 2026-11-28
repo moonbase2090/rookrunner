@@ -7,6 +7,13 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A poll claim that still has no run id ten minutes after the poller first saw
+  it is released and placed again by the next submit, with nothing posted to
+  GitHub for it. The poller stamps a claim with `claimed_at` the first time it
+  sees it without a run id. A release is logged on stderr as a `claim_released`
+  line, recorded in the pass's skipped list and in the diagnostic journal with
+  the submission key, the host and the claim's age. If the worker did create
+  the run, the submit that follows uses the same key and gets that run back.
 - A worker keeps a package download cache per repository and host, on by
   default (`worker --no-package-cache` turns it off). Jobs share cargo's
   registry, git checkouts and package cache lock files, the pip, uv, npm, pnpm

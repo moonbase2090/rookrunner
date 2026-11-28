@@ -68,6 +68,17 @@ before a run is refused for storage the least recently used idle cache is
 removed. A cache in use is never removed. apt is not cached because its
 directories are written by root.
 
+A claim is written before a job is submitted and gets its run id in the same
+pass. A claim without one is left over from a pass that stopped or a worker that
+never answered. The poller stamps it with `claimed_at` the first time it sees it
+without a run id. Once it is ten minutes old (`CLAIM_STALE_SECONDS`), the next
+pass removes it, logs a `claim_released` line with the submission key, host and
+age, and the submit that follows places the job again, possibly on another
+place. Nothing was posted for a claim without a run id, so nothing is posted for
+its release. A submit under the same key returns the run if the worker created
+it. A claim that is blocked, waiting for capacity, or already has a run id is
+never released.
+
 A pull request can move while a poll pass runs: main advances, or the pull
 request is updated. When the fetched merge ref is not the listed base and head
 (or the head and the base branch's current tip), the poller reads the pull
