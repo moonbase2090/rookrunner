@@ -1,11 +1,13 @@
 # Changelog
 
 The format is Keep a Changelog. Versions follow semantic versioning.
-The current package version is 0.1.28. A published release section
+The current package version is 0.1.29. A published release section
 names the wheel and tarball hashes once those files are published.
 This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
+
+## [0.1.29] - 2026-11-28
 
 - The automatic retry of a base-commit refusal decides whether a commit is
   still current from the pull requests and branches the pass just listed, not
@@ -13,6 +15,9 @@ This file does not reconstruct earlier milestones.
   branch that was deleted or moved, now ends in the superseded error status
   instead of staying deferred. When the pass did not list them, the entry stays
   deferred.
+
+- The package version is 0.1.29. A wheel and a source tarball can be built
+  from this tree. This change does not create a tag.
 
 ## [0.1.28] - 2026-11-27
 
