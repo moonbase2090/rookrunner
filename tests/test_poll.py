@@ -1380,13 +1380,150 @@ class PollTests(unittest.TestCase):
             self.assertEqual(entry["blocked"]["kind"], "STATUS_REFUSED")
             self.assertEqual(entry["blocked"]["unblock"], "retry_or_abandon")
 
+            # The automatic retry has used its whole allowance, so the entry
+            # stays blocked for an operator as it always did.
+            held = json.loads((self.state / "poll.json").read_text())
+            held["submissions"][0]["retry_attempt"] = poll_module.AUTO_RETRY_LIMIT
+            (self.state / "poll.json").write_text(canonical(held))
             second = self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
             self.assertEqual(second["blocked"], [])
             self.assertEqual(status_calls, [submitted])
+            self.assertEqual(self.runs(), 1)
             unchanged = json.loads((self.state / "poll.json").read_text())["submissions"][0]
             self.assertEqual(unchanged["blocked"], entry["blocked"])
         finally:
             self.caller = original
+
+    def _block_on_base_mismatch(self):
+        tip = self._tip()
+        self.server.branches = [{"name": "main", "commit": {"sha": tip}}]
+        submitted = self.poll()["submitted"][0]["run_id"]
+        record = self.worker.get(submitted)
+        snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+        manifest_path = snapshot / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["base_commit"] = "0" * 40
+        encoded = canonical(manifest).encode()
+        manifest_path.write_bytes(encoded)
+        record["input"]["digest"] = hashlib.sha256(encoded).hexdigest()
+        record["state"] = "succeeded"
+        record["exit_code"] = 0
+        with self.worker.guard, self.worker.db:
+            self.worker.save(record)
+        first = self.poll(clock=datetime(2026, 11, 22, 13, 0, tzinfo=UTC))
+        entry = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+        self.assertEqual(first["blocked"], [entry["key"]])
+        return tip, submitted, entry
+
+    def _status_posts(self):
+        found = []
+        for post in self.posts():
+            path = post["path"].split("?", 1)[0]
+            if "/statuses/" not in path:
+                continue
+            body = json.loads(post["body"])
+            found.append(
+                {
+                    "sha": path.rsplit("/", 1)[-1],
+                    "state": body.get("state"),
+                    "description": body.get("description"),
+                }
+            )
+        return found
+
+    def _auto_lines(self, log):
+        return [
+            json.loads(line)["auto_retry"]
+            for line in log.getvalue().splitlines()
+            if line.startswith('{"auto_retry"')
+        ]
+
+    def test_a_base_commit_refusal_is_retried_on_its_own_at_the_same_commit(self):
+        tip, first_run, entry = self._block_on_base_mismatch()
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            second = self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
+        self.assertEqual(len(second["submitted"]), 1)
+        self.assertNotEqual(second["submitted"][0]["run_id"], first_run)
+        self.assertEqual(self.runs(), 2)
+        saved = json.loads((self.state / "poll.json").read_text())
+        successor = saved["submissions"][0]
+        self.assertEqual(len(saved["submissions"]), 1)
+        self.assertEqual(successor["retry_of"], entry["key"])
+        self.assertEqual(successor["retry_attempt"], 1)
+        self.assertEqual(successor["tested_commit"], entry["tested_commit"])
+        retired = saved["completed"][entry["key"]]
+        self.assertIs(retired["superseded"], True)
+        self.assertNotIn("abandoned", retired)
+        lines = self._auto_lines(log)
+        self.assertEqual([item["outcome"] for item in lines], ["retry", "submitted"])
+        for item in lines:
+            self.assertEqual(item["tested_commit"], entry["tested_commit"])
+            self.assertEqual(item["status_sha"], entry["status_sha"])
+            self.assertEqual((item["attempt"], item["limit"]), (1, poll_module.AUTO_RETRY_LIMIT))
+        # Nothing was posted as a success for the commit that was not tested.
+        self.assertFalse([post for post in self._status_posts() if post["state"] == "success"])
+
+    def test_a_retry_that_is_refused_again_is_retried_until_the_limit_and_then_left_blocked(self):
+        _tip, _first_run, entry = self._block_on_base_mismatch()
+        for attempt in range(1, poll_module.AUTO_RETRY_LIMIT + 1):
+            log = io.StringIO()
+            with contextlib.redirect_stderr(log):
+                self.poll(clock=datetime(2026, 11, 22, 13, 5 * attempt, tzinfo=UTC))
+            saved = json.loads((self.state / "poll.json").read_text())
+            current = saved["submissions"][0]
+            self.assertEqual(current["retry_attempt"], attempt)
+            self.assertEqual(self.runs(), 1 + attempt)
+            record = self.worker.get(current["run_id"])
+            snapshot = self.state / "snapshots" / record["input"]["snapshot_id"]
+            manifest = json.loads((snapshot / "manifest.json").read_text())
+            manifest["base_commit"] = "0" * 40
+            encoded = canonical(manifest).encode()
+            (snapshot / "manifest.json").write_bytes(encoded)
+            record["input"]["digest"] = hashlib.sha256(encoded).hexdigest()
+            record["state"] = "succeeded"
+            record["exit_code"] = 0
+            with self.worker.guard, self.worker.db:
+                self.worker.save(record)
+            self.poll(clock=datetime(2026, 11, 22, 13, 5 * attempt + 2, tzinfo=UTC))
+            blocked = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+            self.assertEqual(blocked["state"], "blocked")
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            self.poll(clock=datetime(2026, 11, 22, 14, 30, tzinfo=UTC))
+        self.assertEqual(self.runs(), 1 + poll_module.AUTO_RETRY_LIMIT)
+        self.assertEqual([item["outcome"] for item in self._auto_lines(log)], ["limit"])
+        still = json.loads((self.state / "poll.json").read_text())["submissions"][0]
+        self.assertEqual(still["state"], "blocked")
+        self.assertEqual(still["retry_attempt"], poll_module.AUTO_RETRY_LIMIT)
+
+    def test_a_base_commit_refusal_for_a_commit_that_was_replaced_is_retired_as_superseded(self):
+        tip, first_run, entry = self._block_on_base_mismatch()
+        (self.seed / "newer.txt").write_text("newer\n")
+        self._commit_all("newer")
+        _git(self.seed, "push", "origin", "main")
+        newer = self._tip()
+        self.assertNotEqual(newer, tip)
+        self.server.branches = [{"name": "main", "commit": {"sha": newer}}]
+        self.server.etags["branches"] = "branches-newer"
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            second = self.poll(clock=datetime(2026, 11, 22, 13, 5, tzinfo=UTC))
+        saved = json.loads((self.state / "poll.json").read_text())
+        retired = saved["completed"][entry["key"]]
+        self.assertIs(retired["superseded"], True)
+        self.assertIs(retired["abandoned"], True)
+        self.assertEqual(retired["state"], "abandoned")
+        old = [post for post in self._status_posts() if post["sha"] == entry["status_sha"]]
+        self.assertEqual(old[-1]["state"], "error")
+        self.assertEqual(old[-1]["description"], poll_module.SUPERSEDED_TEXT)
+        self.assertFalse([post for post in old if post["state"] == "success"])
+        # The newer commit gets its own run through the normal loop.
+        self.assertEqual(len(second["submitted"]), 1)
+        self.assertEqual(self.runs(), 2)
+        self.assertEqual(
+            [item["outcome"] for item in self._auto_lines(log)], ["retry", "superseded"]
+        )
 
     def test_app_reporting_retires_an_unreadable_terminal_snapshot_once(self):
         tip = self._tip()
