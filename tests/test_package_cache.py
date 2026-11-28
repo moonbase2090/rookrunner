@@ -756,8 +756,12 @@ jobs:
           import fcntl, os, time
           handle = open(os.environ["CARGO_HOME"] + "/.package-cache", "a")
           fcntl.flock(handle, fcntl.LOCK_EX)
-          open(os.environ["GITHUB_WORKSPACE"] + "/held", "w").write("1")
-          time.sleep(8)
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          open(workspace + "/held", "w").write("1")
+          for _ in range(600):
+              if os.path.exists(workspace + "/release"):
+                  break
+              time.sleep(0.2)
           PY
 """
 _LOCK_TRY = """\
@@ -948,6 +952,8 @@ class JobCacheTests(unittest.TestCase):
                 time.sleep(0.2)
             tried, workspace = self._job(_LOCK_TRY, mount=mount)
         finally:
+            for held in started.glob("**/held"):
+                (held.parent / "release").write_text("1")
             thread.join()
         self.assertEqual(tried["status"], "succeeded", tried)
         self.assertEqual((workspace / "answer").read_text(), "blocked")
