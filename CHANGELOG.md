@@ -7,6 +7,12 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- A merge ref that GitHub built on an older base than the listed one (the head
+  merged onto an ancestor of the base) and that stays that way through the
+  recheck and three passes is refused with `merge ref is behind the base; merge
+  the base into the branch` instead of the generic mismatch text. Any other
+  mismatch keeps its message. A merge ref that catches up during the recheck
+  passes in the same pass.
 - A worker keeps a package download cache per repository and host, on by
   default (`worker --no-package-cache` turns it off). Jobs share cargo's
   registry, git checkouts and package cache lock files, the pip, uv, npm, pnpm
