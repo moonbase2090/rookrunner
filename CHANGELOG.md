@@ -7,6 +7,10 @@ This file does not reconstruct earlier milestones.
 
 ## [Unreleased]
 
+- Owned artifact uploads now run with `retention-days` from 1 to 90. The
+  worker keeps artifacts with the local run. Submission reports the field
+  for unsupported upload inputs and invalid literal values.
+
 ## [0.1.27] - 2026-11-27
 
 - When the merge ref of a pull request does not match the base and head the

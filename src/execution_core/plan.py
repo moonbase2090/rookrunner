@@ -243,27 +243,9 @@ _UPLOAD_FILE_KEYS = {
     "overwrite",
     "retention-days",
 }
-# The worker keeps artifacts in its own state and does not expire them early;
-# retention-days is accepted and recorded, and it is not enforced by the worker.
-_UPLOAD_RETENTION_MAX_DAYS = 90
-
-
-def _retention_message(field):
-    return f"{field}: retention-days must be an integer from 1 to {_UPLOAD_RETENTION_MAX_DAYS}"
-
-
 _UPLOAD_BOOL_KEYS = {"include-hidden-files", "archive", "overwrite"}
 _UPLOAD_NO_FILES = {"warn", "error", "ignore"}
-_SARIF_KEYS = {"sarif_file"}
-_SARIF_REJECTED = {
-    "token",
-    "checkout_path",
-    "ref",
-    "sha",
-    "matrix",
-    "category",
-    "wait-for-processing",
-}
+_UPLOAD_KEYS = {"files": _UPLOAD_FILE_KEYS, "sarif": {"sarif_file"}}
 _REJECTED_USES = (
     "actions/download-artifact",
     "github/codeql-action/init",
@@ -279,6 +261,45 @@ def owned_upload_kind(text):
     if isinstance(text, str) and _SARIF_SHA.fullmatch(text):
         return "sarif"
     return None
+
+
+def upload_retention_days(text, field):
+    """Return canonical decimal days within the supported 1 to 90 range."""
+    digits = text.lstrip("0")
+    if not re.fullmatch(r"[0-9]{1,2}", digits) or int(digits) > 90:
+        _invalid(f"{field}: retention-days must be an integer from 1 to 90", field)
+    return digits
+
+
+def check_upload_keys(kind, inputs, field):
+    """Check the same input names in a workflow and in its stored plan."""
+    if not isinstance(inputs, dict):
+        _invalid(f"{field} must be a mapping", field)
+    for key in inputs:
+        if key not in _UPLOAD_KEYS[kind]:
+            _unsupported(_join(field, key))
+    required = "sarif_file" if kind == "sarif" else "path"
+    if required not in inputs:
+        name = _join(field, required)
+        _invalid(f"{name} is required", name)
+
+
+def upload_input_value(key, value, field):
+    """Validate a plan value, preserving expressions for step execution."""
+    if key in _UPLOAD_BOOL_KEYS:
+        if type(value) is not bool:
+            _invalid(f"{field} must be a boolean", field)
+        if key == "overwrite" and value:
+            _unsupported(field)
+    else:
+        if not isinstance(value, str) or "\0" in value:
+            _invalid(f"{field} must be a string without NUL", field)
+        if "${{" not in value:
+            if key == "retention-days":
+                return upload_retention_days(value, field)
+            if key == "if-no-files-found" and value not in _UPLOAD_NO_FILES:
+                _invalid(f"{field}: if-no-files-found is not accepted", field)
+    return value
 
 
 def _rejected_remote_uses(text):
@@ -1783,39 +1804,25 @@ class _Planner:
 
     def _upload_with(self, body, step_field, kind):
         path = _join(step_field, "with")
-        required = "sarif_file" if kind == "sarif" else "path"
-        required_field = _join(path, required)
-        if "with" not in body:
-            _invalid(f"{required_field} is required", required_field)
-        items = self._mapping(body["with"][1], path, allow_uses=True, forbid=False)
-        allowed = _SARIF_KEYS if kind == "sarif" else _UPLOAD_FILE_KEYS
-        rejected = _SARIF_REJECTED if kind == "sarif" else set()
+        items = (
+            self._mapping(body["with"][1], path, allow_uses=True, forbid=False)
+            if "with" in body
+            else {}
+        )
+        check_upload_keys(kind, items, path)
         accepted = {}
-        for key, (_, value) in items.items():
+        for key, (_, node) in items.items():
             field = _join(path, key)
-            if key in rejected or key not in allowed:
-                _unsupported(field)
             if key in _UPLOAD_BOOL_KEYS:
-                flag = self._bool_scalar(value, field)
-                if key == "overwrite" and flag is True:
-                    _unsupported(field)
-                accepted[key] = flag
+                value = self._bool_scalar(node, field)
+            elif key == "retention-days" and isinstance(node, ScalarNode) and node.tag == INT_TAG:
+                self._enter(node, field)
+                accepted[key] = upload_retention_days(node.value, field)
                 continue
-            if key == "retention-days" and isinstance(value, ScalarNode) and value.value.isdigit():
-                days = int(value.value)
-                if not 1 <= days <= _UPLOAD_RETENTION_MAX_DAYS:
-                    _invalid(_retention_message(field), field)
-                accepted[key] = str(days)
-                continue
-            text = self._string_scalar(value, field)
-            self._check_expression(text, field, check_step_secret_value)
-            if key == "if-no-files-found" and "${{" not in text and text not in _UPLOAD_NO_FILES:
-                _invalid(f"{field}: if-no-files-found is not accepted", field)
-            if key == "retention-days" and "${{" not in text:
-                _invalid(_retention_message(field), field)
-            accepted[key] = text
-        if required not in accepted:
-            _invalid(f"{required_field} is required", required_field)
+            else:
+                value = self._string_scalar(node, field)
+                self._check_expression(value, field, check_step_secret_value)
+            accepted[key] = upload_input_value(key, value, field)
         return accepted
 
     def _uses_relative(self, text, field):

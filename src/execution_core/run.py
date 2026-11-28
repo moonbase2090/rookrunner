@@ -307,6 +307,10 @@ from .plan import (
     DEFAULT_JOB_TIMEOUT_MINUTES,
     MAX_JOB_TIMEOUT_MINUTES,
     MAX_STEP_TIMEOUT_MINUTES,
+    PlanError,
+    check_upload_keys,
+    upload_input_value,
+    upload_retention_days,
     owned_checkout_uses,
     owned_upload_kind,
 )
@@ -933,33 +937,12 @@ def _accept_upload(step):
         if key in step:
             _setup("plan is not accepted")
     raw = step.get("with")
-    if not isinstance(raw, dict):
-        _setup("plan is not accepted")
-    if kind == "files":
-        allowed = {
-            "name",
-            "path",
-            "if-no-files-found",
-            "include-hidden-files",
-            "archive",
-            "overwrite",
-        }
-        if "path" not in raw or not isinstance(raw["path"], str) or "\0" in raw["path"]:
-            _setup("plan is not accepted")
+    try:
+        check_upload_keys(kind, raw, "with")
         for key, value in raw.items():
-            if key not in allowed:
-                _setup("plan is not accepted")
-            if key in {"include-hidden-files", "archive", "overwrite"}:
-                if type(value) is not bool or (key == "overwrite" and value is True):
-                    _setup("plan is not accepted")
-            elif not isinstance(value, str) or "\0" in value:
-                _setup("plan is not accepted")
-    elif (
-        set(raw) != {"sarif_file"}
-        or not isinstance(raw["sarif_file"], str)
-        or "\0" in raw["sarif_file"]
-    ):
-        _setup("plan is not accepted")
+            upload_input_value(key, value, f"with.{key}")
+    except PlanError as exc:
+        _setup(str(exc))
     _env_layer(step.get("env"))
     for key in ("id", "name", "shell", "working_directory", "if"):
         value = step.get(key)
@@ -4151,6 +4134,10 @@ def _run_upload(step, workspace, values, job_id, runtime=None):
                 rendered[key] = value
             else:
                 _setup("plan is not accepted")
+        if "retention-days" in rendered:
+            upload_retention_days(rendered["retention-days"], "with.retention-days")
+    except PlanError as exc:
+        return _upload_failure(step, job_id, f"{exc}\n")
     except ExprError as exc:
         return _step_result(step, "failed", None, "", "", str(exc)[:512], job_id)
     label = job_id if isinstance(job_id, str) else ""

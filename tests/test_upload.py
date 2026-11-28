@@ -386,7 +386,7 @@ class PlanUploadTests(unittest.TestCase):
         self.assertEqual(step["with"]["retention-days"], "7")
 
     def test_retention_days_must_be_an_integer_from_one_to_ninety(self):
-        for value in ("0", "91", "soon", "-1"):
+        for value in ("0", "91", "soon", "-1", "'²'", "9" * 5000):
             workflow = _workflow(
                 UPLOAD,
                 "          name: coverage\n          path: coverage.txt\n"
@@ -451,6 +451,22 @@ class RunUploadTests(unittest.TestCase):
             "env": {},
             "with": body,
         }
+
+    def test_retention_expression_validates_the_rendered_value_before_recording_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "app.txt").write_text("build")
+            for days, status in (("90", "succeeded"), ("91", "failed")):
+                book = UploadBook()
+                expression = "${{ '" + days + "' }}"
+                step = self.files_step(path="app.txt", **{"retention-days": expression})
+                result = self.run_step(workspace, step, book)
+                self.assertEqual(result["status"], status)
+                if status == "failed":
+                    self.assertIn("retention-days", result["stderr"])
+                    self.assertEqual(book.records, [])
+                else:
+                    self.assertEqual(book.records, [{"name": "artifact", "paths": ["app.txt"]}])
 
     def test_records_files_without_a_zip_or_a_process(self):
         with tempfile.TemporaryDirectory() as directory:
